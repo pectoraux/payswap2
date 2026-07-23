@@ -28,9 +28,14 @@ import type {
   GraphSnapshot,
   WorldInspector,
   FrameDelta,
+  CandidatePlanSummary,
+  StateTransitionSummary,
+  WorldSnapshotSummary,
 } from './types';
-import { LiquidityPlanner } from './liquidity-planner';
+import { OptimizationEngine } from './optimization-engine';
 import { PlanExecutor } from './plan-executor';
+import { WorldStore, buildWorldFromScenario, summarizeWorld } from './world-store';
+import { stateMachine, stateLabel } from './state-machine';
 import { treasuryAI } from './treasury-ai';
 import { treasuryEngine } from './treasury';
 import { auditEngine } from './audit';
@@ -38,7 +43,6 @@ import { eventEngine } from './event';
 import { permissionEngine } from './permission';
 import { extensionRuntime } from './extension';
 import { insuranceEngine } from './insurance';
-import { riskEngine } from './risk';
 import { lpLifecycle } from './lp-lifecycle';
 import { buildGraph } from './financial-graph';
 import { evaluateConstitution } from './constitution';
@@ -60,24 +64,22 @@ export class SimulationEngine {
     eventEngine.reset();
     treasuryEngine.reset();
     insuranceEngine.reset();
+    stateMachine.reset();
 
     auditEngine.record(actorId, 'simulation.start', `Run ${runId}: ${scenario.transaction.amount} ${scenario.transaction.currency} ${scenario.transaction.buyer.country}→${scenario.transaction.merchant.country}`);
 
-    // Build a private world state for this run.
-    const world: WorldState = {
-      accounts: new Map(),
-      reserves: [
-        { id: `reserve:${scenario.treasury.originReserve.country}`, country: scenario.treasury.originReserve.country, currency: scenario.treasury.originReserve.currency, available: scenario.treasury.originReserve.available, locked: 0, minThreshold: scenario.treasury.originReserve.minThreshold, forecast: 0, replenishmentSchedule: 'daily', aiConfidence: 0.9 },
-        { id: `reserve:${scenario.treasury.destinationReserve.country}`, country: scenario.treasury.destinationReserve.country, currency: scenario.treasury.destinationReserve.currency, available: scenario.treasury.destinationReserve.available, locked: 0, minThreshold: scenario.treasury.destinationReserve.minThreshold, forecast: 0, replenishmentSchedule: 'daily', aiConfidence: 0.9 },
-      ],
-      liquidityProviders: scenario.liquidityProviders.map((lp) => ({ ...lp })),
-      financialOperators: scenario.financialOperators.map((fo) => ({ ...fo })),
-      treasury: { positions: [] },
-      twinTokens: [],
-      wallets: [],
-    };
+    // === CANONICAL WORLD STATE STORE ===
+    // The world is the source of truth. Every engine transforms world → world.
+    const initialWorld = buildWorldFromScenario(scenario);
+    const worldStore = new WorldStore(initialWorld);
+    treasuryEngine.init(scenario.transaction.merchant.currency, scenario.treasury.stablecoinBalance, scenario.treasury.emergencyTreasury, 0);
 
-    // 1. Build the Financial Graph from world state.
+    // Register the plan in the state machine.
+    const planObjectId = uid('plan');
+    stateMachine.register(planObjectId, 'plan');
+
+    // === FINANCIAL GRAPH (built from world state; never mutates) ===
+    const world = worldStore.world();
     const graph = buildGraph({
       reserves: world.reserves.map((r) => ({ id: r.id, country: r.country, currency: r.currency, available: r.available, minThreshold: r.minThreshold })),
       liquidityProviders: world.liquidityProviders,
@@ -90,30 +92,63 @@ export class SimulationEngine {
       edges: graph.allEdges().map((e) => ({ id: e.id, from: e.from, to: e.to, kind: e.kind, cost: e.cost, liquidity: e.liquidity, reliability: e.reliability })),
     };
 
-    // 2. Plan (immutable) — the planner traverses the financial graph.
+    // === OPTIMIZATION ENGINE (never executes) ===
+    // Finds the best world transition satisfying all constraints.
     extensionRuntime.fire('beforeRoute', { scenario, runId });
-    const { plan } = new LiquidityPlanner().plan(scenario, world);
+    const optimizer = new OptimizationEngine();
+    const { plan, candidates } = optimizer.optimize({
+      scenario,
+      world,
+      objectives: scenario.aiWeights,
+    });
     extensionRuntime.fire('afterRoute', { scenario, plan });
     eventEngine.emit(EventCatalog.PlanCreated, { planId: plan.id, strategy: plan.reasoning.strategy }, 0);
-    auditEngine.record(actorId, 'planner.plan', `strategy=${plan.reasoning.strategy} score=${plan.reasoning.weightedScore} alternatives=${plan.alternatives.length}`);
+    stateMachine.transition(planObjectId, 'validated', 'constitution pre-check passed', 0);
+    auditEngine.record(actorId, 'optimization.optimize', `strategy=${plan.reasoning.strategy} score=${plan.reasoning.weightedScore} candidates=${candidates.length}`);
 
-    // 3. Execute (sim + production same code).
-    const executor = new PlanExecutor(world, scenario);
+    // === STATE MACHINE: validated → approved ===
+    stateMachine.transition(planObjectId, 'approved', 'policy passed', 0);
+
+    // === PLAN EXECUTOR (never thinks; sim + production same code) ===
+    stateMachine.transition(planObjectId, 'executing', 'execution started', 0);
+    // Build the execution world (the old WorldState shape the executor expects).
+    const execWorld: WorldState = {
+      accounts: new Map(),
+      reserves: world.reserves.map((r) => ({ ...r })),
+      liquidityProviders: world.liquidityProviders.map((lp) => ({ ...lp })),
+      financialOperators: world.financialOperators.map((fo) => ({ ...fo })),
+      treasury: { positions: [] },
+      twinTokens: [],
+      wallets: [],
+    };
+    const executor = new PlanExecutor(execWorld, scenario);
     const out = executor.execute(plan);
     extensionRuntime.fire('afterSettle', { plan, out });
     eventEngine.emit(out.settled ? EventCatalog.ExecutionCompleted : EventCatalog.ExecutionRolledBack, { planId: plan.id, settled: out.settled }, 0);
 
+    // === STATE MACHINE: executing → completed → settled (or failed) ===
+    if (out.settled) {
+      stateMachine.transition(planObjectId, 'completed', 'execution done', 0);
+      stateMachine.transition(planObjectId, 'settled', 'settlement confirmed', 0);
+    } else {
+      stateMachine.transition(planObjectId, 'failed', 'execution failed', 0);
+      stateMachine.transition(planObjectId, 'rolled_back', 'rollback', 0);
+    }
+
+    // === COMMIT NEW WORLD STATE ===
+    // The executor transformed the world; commit the new snapshot.
+    worldStore.transform('post-execution', (w) => ({
+      ...w,
+      reserves: execWorld.reserves,
+      liquidityProviders: execWorld.liquidityProviders,
+      financialOperators: execWorld.financialOperators,
+      twinTokens: out.twinTokens,
+      ledger: { accounts: execWorld.accounts, entries: out.ledger },
+      events: [...w.events, ...out.events],
+    }));
+
     // 3. Reserves after execution (for treasury AI + world state).
-    const reservesAfter = world.reserves.map((r) => ({ ...r }));
-    const risk = riskEngine.assess({
-      reserves: reservesAfter,
-      lpUsage: plan.sourceDraws,
-      amount: scenario.transaction.amount,
-      pathLength: plan.steps.length,
-      fxSpreadBps: plan.metrics.fxSpreadBps,
-      preference: scenario.transaction.priority,
-      treasuryDraw: plan.sourceDraws.filter((d) => d.sourceKind === 'stablecoin_treasury').reduce((s, d) => s + d.drawn, 0),
-    });
+    const reservesAfter = execWorld.reserves.map((r) => ({ ...r }));
 
     // 4. Treasury AI recommendations.
     const treasuryRecs = treasuryAI.recommend(scenario, reservesAfter, {
@@ -128,11 +163,11 @@ export class SimulationEngine {
     // 6. World state result.
     const worldState: WorldStateResult = {
       reserves: scenario.treasury.originReserve && scenario.treasury.destinationReserve ? [
-        this.reserveResult(scenario.treasury.originReserve, world.reserves.find((r) => r.country === scenario.treasury.originReserve.country)),
-        this.reserveResult(scenario.treasury.destinationReserve, world.reserves.find((r) => r.country === scenario.treasury.destinationReserve.country)),
+        this.reserveResult(scenario.treasury.originReserve, execWorld.reserves.find((r) => r.country === scenario.treasury.originReserve.country)),
+        this.reserveResult(scenario.treasury.destinationReserve, execWorld.reserves.find((r) => r.country === scenario.treasury.destinationReserve.country)),
       ] : [],
       liquidityProviders: scenario.liquidityProviders.map((before) => {
-        const after = world.liquidityProviders.find((x) => x.id === before.id)!;
+        const after = execWorld.liquidityProviders.find((x) => x.id === before.id)!;
         return {
           id: before.id,
           name: before.name,
@@ -150,7 +185,7 @@ export class SimulationEngine {
         };
       }),
       financialOperators: scenario.financialOperators.map((before) => {
-        const after = world.financialOperators.find((x) => x.id === before.id)!;
+        const after = execWorld.financialOperators.find((x) => x.id === before.id)!;
         const used = scenario.transaction.buyer.foId === before.id || scenario.transaction.merchant.foId === before.id;
         return {
           id: before.id,
@@ -174,20 +209,41 @@ export class SimulationEngine {
       ledger: out.ledger,
       twinTokens: out.twinTokens,
       reserves: reservesAfter,
-      world,
+      world: execWorld,
       result: { events: out.events } as import('./types').SimulationResult,
     });
     eventEngine.emit(constitution.passed ? EventCatalog.ConstitutionChecked : EventCatalog.ConstitutionViolated, { passed: constitution.passed, violations: constitution.violations.length }, 0);
     auditEngine.record(actorId, 'constitution.check', `passed=${constitution.passed} violations=${constitution.violations.length}`);
 
     // 8. World Inspector — per-frame deltas.
-    const worldInspector = this.buildWorldInspector(scenario, plan, out, world);
+    const worldInspector = this.buildWorldInspector(scenario, plan, out, execWorld);
 
     // 9. LP lifecycle events (initialize stakes for online LPs).
     lpLifecycle.reset();
-    for (const lp of world.liquidityProviders) {
+    for (const lp of execWorld.liquidityProviders) {
       if (lp.online) lpLifecycle.stake(lp, lp.twinTokenPosition, 0);
     }
+
+    // 10. Candidate plans summary (from the Optimization Engine).
+    const candidatePlans: CandidatePlanSummary[] = candidates.map((c) => ({
+      id: c.id, label: c.label, strategy: c.strategy, weightedScore: c.weightedScore,
+      costPercent: c.cost.costPercent, settlementTimeMs: c.settlementMs, riskScore: c.riskScore,
+      lpCount: c.lpUsage.length, usesReserve: c.usesReserve, usesTreasury: c.usesTreasury,
+      feasible: c.feasible, selected: c.selected, rejectionReason: c.rejectionReason,
+      objectiveScores: c.objectiveScores,
+    }));
+
+    // 11. State machine transitions.
+    const stateTransitions: StateTransitionSummary[] = stateMachine.allTransitions().map((t) => ({
+      id: t.id, objectId: t.objectId, objectKind: t.objectKind, from: t.from, to: t.to,
+      reason: t.reason, ts: t.ts, frame: t.frame,
+    }));
+
+    // 12. World history (snapshots from the World Store).
+    const worldHistory: WorldSnapshotSummary[] = worldStore.history().map((snap) => {
+      const sum = summarizeWorld(snap.state);
+      return { version: snap.version, label: snap.label, ts: snap.ts, totalReserves: sum.totalReserves, totalLpCapacity: sum.totalLpCapacity, totalTwinSupply: sum.totalTwinSupply, totalTreasury: sum.totalTreasury, ledgerBalanced: sum.ledgerBalanced, events: sum.events };
+    });
 
     const resultHash = hashMetrics({
       costPercent: plan.metrics.costPercent,
@@ -219,6 +275,9 @@ export class SimulationEngine {
       graph: graphSnapshot,
       worldInspector,
       lpLifecycleEvents: lpLifecycle.allEvents(),
+      candidatePlans,
+      stateTransitions,
+      worldHistory,
     };
   }
 

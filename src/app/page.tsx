@@ -15,7 +15,11 @@ import { ConstitutionPanel } from '@/components/simulator/constitution-panel';
 import { FinancialGraphPanel } from '@/components/simulator/financial-graph';
 import { WorldInspectorPanel } from '@/components/simulator/world-inspector';
 import { LPLifecyclePanel } from '@/components/simulator/lp-lifecycle';
+import { OptimizationPanel } from '@/components/simulator/optimization-panel';
+import { StateMachinePanel } from '@/components/simulator/state-machine-panel';
 import { ThemeToggle } from '@/components/simulator/theme-toggle';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -24,7 +28,7 @@ import {
   defaultScenario, libraryScenarios,
   type SimulationScenario, type SimulationResult, type EngineHealth, type SavedScenario, type CurrencyCode,
 } from '@/kernel';
-import { Layers, GitBranch, Server, AlertCircle, Database } from 'lucide-react';
+import { Layers, GitBranch, Server, AlertCircle, Database, Globe, Cpu, Clock, BookOpen, Network, Shield } from 'lucide-react';
 
 interface SimMeta {
   scenario: SimulationScenario;
@@ -42,6 +46,7 @@ export default function Home() {
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<SavedScenario[]>([]);
+  const [activeTab, setActiveTab] = useState('optimization');
   const [saving, setSaving] = useState(false);
   const [regressing, setRegressing] = useState(false);
   const [regressResults, setRegressResults] = useState<{ scenarioId: string; name: string; passed: boolean; drift: { costPercent: number; settlementTimeMs: number; riskScore: number } }[] | null>(null);
@@ -159,12 +164,12 @@ export default function Home() {
                 <span className="text-sm font-bold tracking-tight">PaySwap</span>
                 <Badge variant="secondary" className="h-4 px-1 text-[9px] font-mono">v{meta?.kernelVersion ?? '0.2.0'}</Badge>
               </div>
-              <span className="text-[10px] text-muted-foreground">Financial Operating System</span>
+              <span className="text-[10px] text-muted-foreground">Financial Control Plane</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="hidden gap-1 sm:flex"><GitBranch className="h-3 w-3 text-emerald-500" /> Milestone 1</Badge>
-            <Badge className="gap-1 bg-emerald-600 hover:bg-emerald-600 text-white"><Server className="h-3 w-3" /><span className="hidden sm:inline">{meta?.engines.length ?? 26} engines</span><span className="sm:hidden">{meta?.engines.length ?? 26}</span></Badge>
+            <Badge className="gap-1 bg-emerald-600 hover:bg-emerald-600 text-white"><Server className="h-3 w-3" /><span className="hidden sm:inline">{meta?.engines.length ?? 28} engines</span><span className="sm:hidden">{meta?.engines.length ?? 28}</span></Badge>
             <ThemeToggle />
           </div>
         </div>
@@ -172,11 +177,11 @@ export default function Home() {
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
         <div className="mb-6">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Financial Operating System</h1>
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Financial Control Center</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Every payment, loan, treasury rebalance, insurance payout, reserve refill, LP withdrawal and stablecoin
-            conversion is a <span className="font-medium text-foreground">state transition through the global liquidity
-            graph</span>. The Constitution guarantees financial integrity. Simulation and production execute identically.
+            Six synchronized views of the entire financial system. The <span className="font-medium text-foreground">World State</span> is the
+            source of truth; the <span className="font-medium text-foreground">Optimization Engine</span> finds the best world transition;
+            the <span className="font-medium text-foreground">State Machine</span> governs every object's lifecycle. The executor never thinks.
           </p>
         </div>
 
@@ -215,34 +220,73 @@ export default function Home() {
           </div>
 
           {/* Right: results */}
-          <div className="space-y-6">
+          <div className="space-y-4">
             {initialLoading && !result ? (
               <div className="space-y-6"><Skeleton className="h-40 w-full" /><Skeleton className="h-96 w-full" /><Skeleton className="h-48 w-full" /></div>
             ) : result ? (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="space-y-6">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="space-y-4">
                 <MetricsPanel metrics={result.plan.metrics} currency={result.scenario.transaction.currency} settled={result.settled} />
-                <ConstitutionPanel constitution={result.constitution} />
-                {result.amendments.length > 0 && <AmendmentsPanel amendments={result.amendments} />}
-                <div className="grid gap-6 xl:grid-cols-2">
-                  <ExecutionGraph plan={result.plan} />
-                  <AIReasoningView reasoning={result.plan.reasoning} />
-                </div>
-                <div className="grid gap-6 xl:grid-cols-2">
-                  <FinancialGraphPanel graph={result.graph} />
-                  <AlternativesPanel alternatives={result.plan.alternatives} />
-                </div>
-                <ReplayStepper key={result.runId} replay={result.replay} currency={result.scenario.transaction.currency} />
-                <div className="grid gap-6 xl:grid-cols-2">
-                  <WorldInspectorPanel inspector={result.worldInspector} currency={result.scenario.transaction.currency} />
-                  <WorldStatePanel world={result.worldState} currency={result.scenario.transaction.currency} />
-                </div>
-                <div className="grid gap-6 xl:grid-cols-2">
-                  <div className="space-y-6">
-                    <TreasuryAIPanel recommendations={result.treasuryRecommendations} />
+
+                {/* 6-view Financial Control Center */}
+                <Tabs value={activeTab} onValueChange={setActiveTab}>
+                  <TabsList className="grid w-full grid-cols-3 lg:grid-cols-6 h-auto">
+                    <TabsTrigger value="world" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Globe className="h-3 w-3" />World</TabsTrigger>
+                    <TabsTrigger value="optimization" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Cpu className="h-3 w-3" />Optimization</TabsTrigger>
+                    <TabsTrigger value="execution" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Clock className="h-3 w-3" />Execution</TabsTrigger>
+                    <TabsTrigger value="accounting" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><BookOpen className="h-3 w-3" />Accounting</TabsTrigger>
+                    <TabsTrigger value="infrastructure" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Network className="h-3 w-3" />Infra</TabsTrigger>
+                    <TabsTrigger value="governance" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Shield className="h-3 w-3" />Governance</TabsTrigger>
+                  </TabsList>
+
+                  {/* 1. World State */}
+                  <TabsContent value="world" className="space-y-4 mt-4">
+                    <FinancialGraphPanel graph={result.graph} />
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <WorldStatePanel world={result.worldState} currency={result.scenario.transaction.currency} />
+                      <WorldInspectorPanel inspector={result.worldInspector} currency={result.scenario.transaction.currency} />
+                    </div>
+                  </TabsContent>
+
+                  {/* 2. Optimization */}
+                  <TabsContent value="optimization" className="space-y-4 mt-4">
+                    <OptimizationPanel candidates={result.candidatePlans} />
+                    <AIReasoningView reasoning={result.plan.reasoning} />
+                    <AlternativesPanel alternatives={result.plan.alternatives} />
+                  </TabsContent>
+
+                  {/* 3. Execution Timeline */}
+                  <TabsContent value="execution" className="space-y-4 mt-4">
+                    <StateMachinePanel transitions={result.stateTransitions} />
+                    {result.amendments.length > 0 && <AmendmentsPanel amendments={result.amendments} />}
+                    <ExecutionGraph plan={result.plan} />
+                    <ReplayStepper key={result.runId} replay={result.replay} currency={result.scenario.transaction.currency} />
+                  </TabsContent>
+
+                  {/* 4. Accounting */}
+                  <TabsContent value="accounting" className="space-y-4 mt-4">
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <WorldStatePanel world={result.worldState} currency={result.scenario.transaction.currency} />
+                      <TreasuryAIPanel recommendations={result.treasuryRecommendations} />
+                    </div>
+                    <ConstitutionPanel constitution={result.constitution} />
+                  </TabsContent>
+
+                  {/* 5. Infrastructure */}
+                  <TabsContent value="infrastructure" className="space-y-4 mt-4">
+                    <FinancialGraphPanel graph={result.graph} />
                     <LPLifecyclePanel events={result.lpLifecycleEvents} />
-                  </div>
-                  {meta && <EnginesPanel engines={meta.engines} />}
-                </div>
+                    {meta && <EnginesPanel engines={meta.engines} />}
+                  </TabsContent>
+
+                  {/* 6. Governance */}
+                  <TabsContent value="governance" className="space-y-4 mt-4">
+                    <ConstitutionPanel constitution={result.constitution} />
+                    {result.insuranceClaims.length > 0 && (
+                      <Card><CardHeader><CardTitle className="text-base">Insurance Claims</CardTitle></CardHeader><CardContent>{result.insuranceClaims.map((c) => <div key={c.id} className="text-xs">{c.id}: {c.status} — {c.reason}</div>)}</CardContent></Card>
+                    )}
+                    {meta && <EnginesPanel engines={meta.engines} />}
+                  </TabsContent>
+                </Tabs>
               </motion.div>
             ) : null}
           </div>
@@ -252,8 +296,8 @@ export default function Home() {
       <footer className="mt-auto border-t bg-background/80 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-1 px-4 py-3 text-center sm:flex-row sm:text-left">
           <p className="text-[11px] text-muted-foreground">
-            <span className="font-semibold text-foreground">PaySwap Kernel</span> · Financial Operating System ·
-            26 engines · financial graph · constitution · production = simulation
+            <span className="font-semibold text-foreground">PaySwap</span> · Financial Control Plane ·
+            28 engines · world store · optimization · state machine · constitution · production = simulation
           </p>
           <p className="font-mono text-[10px] text-muted-foreground">
             {result ? `run ${result.runId.slice(0, 16)} · ${result.resultHash} · ${result.settled ? 'settled' : 'blocked'} · ${result.constitution.passed ? 'constitution ✓' : 'constitution ✗'}` : 'no run yet'}

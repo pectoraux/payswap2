@@ -702,6 +702,61 @@ export interface SimulationResult {
   graph: GraphSnapshot;
   worldInspector: WorldInspector;
   lpLifecycleEvents: LPLifecycleEvent[];
+  candidatePlans: CandidatePlanSummary[];
+  stateTransitions: StateTransitionSummary[];
+  worldHistory: WorldSnapshotSummary[];
+}
+
+/* ========================================================================== */
+/* Optimization Engine — candidate plans                                      */
+/* ========================================================================== */
+
+export interface CandidatePlanSummary {
+  id: string;
+  label: string;
+  strategy: string;
+  weightedScore: number;
+  costPercent: number;
+  settlementTimeMs: number;
+  riskScore: number;
+  lpCount: number;
+  usesReserve: boolean;
+  usesTreasury: boolean;
+  feasible: boolean;
+  selected: boolean;
+  rejectionReason?: string;
+  objectiveScores: ObjectiveScore[];
+}
+
+/* ========================================================================== */
+/* State Machine — transitions                                                */
+/* ========================================================================== */
+
+export interface StateTransitionSummary {
+  id: string;
+  objectId: string;
+  objectKind: string;
+  from: string;
+  to: string;
+  reason: string;
+  ts: number;
+  frame?: number;
+}
+
+/* ========================================================================== */
+/* World Store — snapshots                                                    */
+/* ========================================================================== */
+
+export interface WorldSnapshotSummary {
+  version: number;
+  label: string;
+  ts: number;
+  totalReserves: number;
+  totalLpCapacity: number;
+  totalTwinSupply: number;
+  totalTreasury: number;
+  ledgerBalanced: boolean;
+  events: number;
 }
 
 /* ========================================================================== */

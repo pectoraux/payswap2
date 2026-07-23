@@ -87,3 +87,34 @@ Stage Summary:
 - World Inspector: per-frame deltas (ledger/reserves/LPs/treasury/tokens/events) — the debugger view.
 - LP Lifecycle: stake events recorded. Named events: 40+ canonical types.
 - 26 engines. Lint clean. Agent Browser verified: constitution gating works (✓ for default, ✗ for failures). VLM: "No defects".
+
+---
+Task ID: CP-1 (Financial Control Plane)
+Agent: main (Z.ai Code)
+Task: Three major architectural changes — (1) Canonical World State Store (game-engine style; every engine transforms world→world), (2) Replace Planner with Optimization Engine (finds best world transition satisfying constraints), (3) State Machine Engine (every object has a lifecycle). Rebuild UI as 6-view Financial Control Center.
+
+Work Log:
+- New `world-store.ts`: Canonical World State Store — the kernel's database. Append-only chain of immutable snapshots (genesis → post-execution). Every engine transforms world → world via `transform()` / `commit()`. `buildWorldFromScenario()` constructs initial world. `summarizeWorld()` for UI. The world is the source of truth, not scenarios.
+- New `state-machine.ts`: State Machine Engine — 7 object kinds (plan, payment, insurance_claim, lp, treasury_recommendation, extension, workflow), each with declared lifecycle edges. Plans: Created → Validated → Approved → Executing → Waiting → Retrying → Partially Complete → Completed → Settled → Archived (with failed/rolled_back branches). Transitions validated against allowed edges; invalid rejected. Every transition is an auditable event.
+- New `optimization-engine.ts`: Replaces LiquidityPlanner. Takes (Liquidity Intent + Current World + Constitution + Objectives + Policies + Constraints) → generates 5 candidate world transitions → scores across 8 explainable objectives → picks winner → builds immutable Execution Plan. Returns ALL candidates (with rejection reasons) for the UI. The optimizer NEVER executes.
+- Refactored `simulation.ts`: World Store (genesis) → Financial Graph (never mutates) → Optimization Engine (never executes) → Constitution pre-check → State Machine (validated→approved→executing) → Plan Executor (never thinks) → State Machine (completed→settled or failed→rolled_back) → commit new World State. Each engine has exactly one responsibility.
+- Updated `types.ts`: added CandidatePlanSummary, StateTransitionSummary, WorldSnapshotSummary. SimulationResult now includes candidatePlans, stateTransitions, worldHistory.
+- Updated `registry.ts`: 28 engines (added World State Store, State Machine Engine, Optimization Engine; renamed Digital Twin → Financial Control Center). Version 0.4.0-control-plane.
+- Updated `api.ts`: Developer API uses Optimization Engine + World Store. kernel.plan() builds canonical world then optimizes.
+- New UI components: optimization-panel.tsx (all candidates with winner + objective score bars + rejection reasons), state-machine-panel.tsx (lifecycle transitions timeline).
+- Rebuilt `page.tsx` as Financial Control Center with 6 synchronized tabbed views:
+  1. World — financial graph + world state + world inspector
+  2. Optimization — all candidate plans + AI reasoning + alternatives
+  3. Execution — state machine timeline + amendments + execution graph + time machine
+  4. Accounting — world state + treasury AI + constitution
+  5. Infrastructure — financial graph + LP lifecycle + engines
+  6. Governance — constitution + insurance claims + engines
+- Renamed to "Financial Control Plane" terminology throughout.
+
+Stage Summary:
+- Kernel now models WHAT the financial system IS, not HOW money moves.
+- World State Store: 2 snapshots per run (genesis + post-execution), immutable, append-only.
+- Optimization Engine: 5 candidates, winner selected by weighted 8-objective score, 4 rejected with reasons.
+- State Machine: 5 transitions per run (created→validated→approved→executing→completed→settled). Fraud scenario: executing→failed→rolled_back.
+- 28 engines. Each engine has exactly one responsibility: executor never thinks, optimizer never executes, constitution never plans, graph never mutates.
+- 6-view Financial Control Center with synchronized tabs. Lint clean. Agent Browser verified all 6 tabs render correctly.

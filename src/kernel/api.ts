@@ -27,9 +27,10 @@ import type {
   Treasury,
   ReplayFrame,
 } from './types';
-import { LiquidityPlanner } from './liquidity-planner';
+import { OptimizationEngine } from './optimization-engine';
 import { PlanExecutor } from './plan-executor';
 import { SimulationEngine } from './simulation';
+import { WorldStore, buildWorldFromScenario, type WorldState as CanonicalWorldState } from './world-store';
 import { treasuryEngine } from './treasury';
 import { insuranceEngine } from './insurance';
 import { buildGraph, FinancialGraph } from './financial-graph';
@@ -84,12 +85,13 @@ export function intentToScenario(intent: LiquidityIntent, world: { reserves: imp
 }
 
 class KernelAPI {
-  private planner = new LiquidityPlanner();
+  private optimizer = new OptimizationEngine();
   private sim = new SimulationEngine();
 
   /** Plan a liquidity movement from a Liquidity Intent. */
   plan(scenario: SimulationScenario, world: { reserves: import('./types').Reserve[]; liquidityProviders: import('./types').LiquidityProvider[]; financialOperators: import('./types').FinancialOperator[] }): LiquidityExecutionPlan {
-    return this.planner.plan(scenario, world).plan;
+    const canonicalWorld = buildWorldFromScenario(scenario);
+    return this.optimizer.optimize({ scenario, world: canonicalWorld, objectives: scenario.aiWeights }).plan;
   }
 
   /** Run a full Digital Twin simulation. */
