@@ -4,9 +4,11 @@ import { db } from '@/lib/db';
 import {
   simulationEngine,
   defaultScenario,
+  libraryScenarios,
   COUNTRY_OPTIONS,
   ENGINES,
   KERNEL_VERSION,
+  FO_META,
   type SimulationScenario,
   type SimulationResult,
   type AIDecision,
@@ -15,79 +17,72 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** GET /api/simulate — returns the default scenario + simulator metadata. */
+/** GET /api/simulate — default scenario + simulator metadata + library scenarios. */
 export async function GET() {
   return NextResponse.json({
     scenario: defaultScenario(),
     countryOptions: COUNTRY_OPTIONS,
     engines: ENGINES,
     kernelVersion: KERNEL_VERSION,
+    foMeta: FO_META,
+    libraryScenarios: libraryScenarios().map((s) => ({ scenario: s.scenario, category: s.category })),
   });
 }
 
-/** POST /api/simulate — runs a scenario through the kernel and returns the result. */
+/** POST /api/simulate — run a scenario through the kernel Digital Twin. */
 export async function POST(req: NextRequest) {
   let scenario: SimulationScenario;
   try {
     const body = await req.json();
     scenario = body?.scenario as SimulationScenario;
-    if (!scenario || !scenario.buyer || !scenario.merchant) {
-      scenario = defaultScenario();
-    }
+    if (!scenario || !scenario.transaction) scenario = defaultScenario();
   } catch {
     scenario = defaultScenario();
   }
 
-  // 1. Run the kernel simulation (deterministic, in-memory).
+  // 1. Run the Digital Twin (deterministic, in-memory).
   const result: SimulationResult = simulationEngine.run(scenario);
 
   // 2. Enhance the AI narrative with an LLM (best-effort; falls back cleanly).
   try {
     const narrative = await generateLLMNarrative(result);
     if (narrative) {
-      result.reasoning.narrative = narrative;
-      result.reasoning.llmPowered = true;
+      result.plan.reasoning.narrative = narrative;
+      result.plan.reasoning.llmPowered = true;
     }
   } catch (err) {
-    // Keep the deterministic fallback narrative; flag that LLM was unavailable.
     console.error('[simulate] LLM narrative failed:', err);
   }
 
-  // 3. Persist the run (fire-and-forget; failures don't break the response).
-  persistRun(result).catch((err) => {
-    console.error('[simulate] persist failed:', err);
-  });
+  // 3. Persist (fire-and-forget).
+  persistRun(result).catch((err) => console.error('[simulate] persist failed:', err));
 
   return NextResponse.json(result);
 }
 
-/**
- * Ask the kernel's AI Agent to narrate the settlement decision in natural
- * language. Uses the deterministic reasoning as structured context.
- */
 async function generateLLMNarrative(result: SimulationResult): Promise<string | null> {
   const zai = await ZAI.create();
-  const decisions = result.reasoning.decisions
+  const decisions = result.plan.reasoning.decisions
     .map((d: AIDecision) => `- ${d.step}: ${d.rationale}`)
     .join('\n');
+  const objectives = result.plan.reasoning.objectiveScores
+    .map((s) => `${s.objective}=${s.score} (${s.rationale})`)
+    .join('; ');
 
   const system =
-    'You are the PaySwap Kernel AI Agent. You explain cross-border payment routing decisions in clear, concise, technical prose for a payments engineer. Be specific about liquidity, reserves, risk and cost. 2-3 sentences. No bullet points, no markdown, no preamble.';
+    'You are the PaySwap Kernel AI Agent — a Global Liquidity Operating System. You explain liquidity movement decisions in clear, technical prose for a payments engineer. Be specific about liquidity sources, reserves, treasury, risk and cost. 2-3 sentences. No bullet points, no markdown, no preamble.';
 
-  const user = `Scenario: ${result.scenario.buyer.country} (${result.scenario.buyer.method}) pays ${result.scenario.amount} ${result.scenario.currency} to a merchant in ${result.scenario.merchant.country}. Preference: ${result.scenario.preference}.
+  const user = `Scenario: ${result.scenario.transaction.buyer.country} (${result.scenario.transaction.buyer.method}) moves ${result.scenario.transaction.amount} ${result.scenario.transaction.currency} to ${result.scenario.transaction.merchant.country}. Priority: ${result.scenario.transaction.priority}.
 
-Routing decisions:
+Decisions:
 ${decisions}
 
-Metrics:
-- Settlement time: ${result.metrics.settlementTimeLabel}
-- Blended cost: ${result.metrics.costPercent}% (${result.metrics.totalFees} ${result.scenario.currency})
-- Risk score: ${result.metrics.riskScore} (${result.metrics.riskLabel})
-- Confidence: ${result.metrics.confidence}%
-- LPs used: ${result.plan.lpUsage.map((u) => `LP${u.lpId} (${u.drawn} @ ${u.rate}%${u.exhausted ? ', exhausted' : ''})`).join(', ') || 'none'}
-- Twin token: ${result.plan.twinTokenSymbol}
+Objective scores: ${objectives}
 
-Explain in 2-3 sentences why the kernel chose this path and why it is safe to settle autonomously.`;
+Metrics: cost ${result.plan.metrics.costPercent}% (${result.plan.metrics.totalFees} ${result.scenario.transaction.currency}), time ${result.plan.metrics.settlementTimeLabel}, risk ${result.plan.metrics.riskScore} (${result.plan.metrics.riskLabel}), confidence ${result.plan.metrics.confidence}%.
+Amendments: ${result.amendments.length}. Insurance claims: ${result.insuranceClaims.length}.
+
+Explain in 2-3 sentences why the planner chose this liquidity path and whether it is safe to settle autonomously.`;
 
   const completion = await zai.chat.completions.create({
     messages: [
@@ -101,22 +96,27 @@ Explain in 2-3 sentences why the kernel chose this path and why it is safe to se
   return text && text.length > 0 ? text : null;
 }
 
-/** Persist the run and its ledger/twin/audit records to the kernel store. */
 async function persistRun(result: SimulationResult): Promise<void> {
   await db.simulationRun.create({
     data: {
       runId: result.runId,
       kernelVersion: result.kernelVersion,
+      scenarioName: result.scenario.name,
       scenario: JSON.stringify(result.scenario),
       result: JSON.stringify(result),
-      amount: result.scenario.amount,
-      currency: result.scenario.currency,
-      preference: result.scenario.preference,
-      buyerCountry: result.scenario.buyer.country,
-      merchantCountry: result.scenario.merchant.country,
-      riskScore: result.metrics.riskScore,
-      costPercent: result.metrics.costPercent,
-      settlementMs: result.metrics.settlementTimeMs,
+      resultHash: result.resultHash,
+      amount: result.scenario.transaction.amount,
+      currency: result.scenario.transaction.currency,
+      priority: result.scenario.transaction.priority,
+      buyerCountry: result.scenario.transaction.buyer.country,
+      merchantCountry: result.scenario.transaction.merchant.country,
+      costPercent: result.plan.metrics.costPercent,
+      settlementMs: result.plan.metrics.settlementTimeMs,
+      riskScore: result.plan.metrics.riskScore,
+      confidence: result.plan.metrics.confidence,
+      settled: result.settled,
+      amendments: result.amendments.length,
+      failures: result.scenario.failures.length,
     },
   });
 
@@ -151,6 +151,20 @@ async function persistRun(result: SimulationResult): Promise<void> {
         mintedAtFrame: t.mintedAtFrame,
         burnedAtFrame: t.burnedAtFrame,
         memo: t.memo,
+      })),
+    });
+  }
+
+  if (result.amendments.length > 0) {
+    await db.planAmendmentRecord.createMany({
+      data: result.amendments.map((a) => ({
+        runId: result.runId,
+        failureType: a.triggeredBy.type,
+        failureLabel: a.triggeredBy.label,
+        reason: a.reason,
+        recoveryStrategy: a.recoveryStrategy,
+        insertedAtFrame: a.insertedAtFrame,
+        stepCount: a.steps.length,
       })),
     });
   }

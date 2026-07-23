@@ -11,32 +11,34 @@ datasource db {
 }
 
 // ---------------------------------------------------------------------------
-// PaySwap Kernel — Milestone 1 persistence
+// PaySwap Kernel — Global Liquidity OS persistence
 // ---------------------------------------------------------------------------
-// The kernel runs simulations in-memory for determinism, but persists every
-// run (input + output), ledger entry, twin token, event and audit record so
-// that history is queryable, replayable and auditable. This is the only
-// schema the kernel owns — services and products layer their own schemas on
-// top in later milestones.
 
 model SimulationRun {
-  id           String   @id @default(cuid())
-  runId        String   @unique
-  kernelVersion String
-  scenario     String   // JSON-encoded SimulationScenario
-  result       String   // JSON-encoded SimulationResult
-  amount       Float
-  currency     String
-  preference   String
-  buyerCountry String
+  id              String   @id @default(cuid())
+  runId           String   @unique
+  kernelVersion   String
+  scenarioName    String
+  scenario        String   // JSON-encoded SimulationScenario
+  result          String   // JSON-encoded SimulationResult
+  resultHash      String
+  amount          Float
+  currency        String
+  priority        String
+  buyerCountry    String
   merchantCountry String
-  riskScore    Float
-  costPercent  Float
-  settlementMs Int
-  createdAt    DateTime @default(now())
+  costPercent     Float
+  settlementMs    Int
+  riskScore       Float
+  confidence      Float
+  settled         Boolean  @default(false)
+  amendments      Int      @default(0)
+  failures        Int      @default(0)
+  createdAt       DateTime @default(now())
 
   @@index([createdAt])
   @@index([buyerCountry, merchantCountry])
+  @@index([resultHash])
 }
 
 model LedgerEntryRecord {
@@ -76,6 +78,20 @@ model TwinTokenRecord {
   @@index([symbol])
 }
 
+model PlanAmendmentRecord {
+  id              String   @id @default(cuid())
+  runId           String
+  failureType     String
+  failureLabel    String
+  reason          String
+  recoveryStrategy String
+  insertedAtFrame Int
+  stepCount       Int
+  createdAt       DateTime @default(now())
+
+  @@index([runId])
+}
+
 model AuditLog {
   id        String   @id @default(cuid())
   runId     String
@@ -88,7 +104,26 @@ model AuditLog {
   @@index([action])
 }
 
-// Retained from scaffold — harmless, available for later auth milestones.
+model SavedScenarioRecord {
+  id              String   @id @default(cuid())
+  scenarioId      String   @unique
+  name            String
+  description     String
+  category        String
+  scenario        String   // JSON-encoded SimulationScenario
+  baselineHash    String
+  baselineCost    Float
+  baselineTime    Int
+  baselineRisk    Float
+  baselineConf    Float
+  lastRunAt       DateTime?
+  lastRunPassed   Boolean?
+  createdAt       DateTime @default(now())
+
+  @@index([category])
+  @@index([name])
+}
+
 model User {
   id        String   @id @default(cuid())
   email     String   @unique

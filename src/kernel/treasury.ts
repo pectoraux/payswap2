@@ -1,45 +1,33 @@
 /**
- * Treasury Engine — owns fee accrual, FX reserves and treasury positions.
+ * Treasury Engine — fee accrual, stablecoin/emergency positions, and AI guidance.
  *
- * Every fee (LP, FX spread, reserve) accrues to the treasury account. The
- * engine exposes the running treasury position so dashboards and the
- * simulator can show the kernel's economics.
+ * Every fee (LP, FX spread, reserve) accrues to the treasury. The engine also
+ * tracks stablecoin and emergency balances so the Treasury AI can recommend
+ * replenishment and liquidity shifts.
  */
-import type { CurrencyCode } from './types';
+import type { CurrencyCode, TreasuryPosition } from './types';
 import { round } from './support';
-
-export interface TreasuryPosition {
-  currency: CurrencyCode;
-  fees: number;
-  fxSpread: number;
-  reserveFees: number;
-  total: number;
-}
 
 export class TreasuryEngine {
   private positions: Map<CurrencyCode, TreasuryPosition> = new Map();
 
+  init(currency: CurrencyCode, stablecoin: number, emergency: number, fiat: number): void {
+    this.positions.set(currency, { currency, stablecoinBalance: stablecoin, emergencyBalance: emergency, fiatBalance: fiat });
+  }
+
   accrual(currency: CurrencyCode, fees: number, fxSpread: number, reserveFees: number): void {
-    const pos =
-      this.positions.get(currency) ??
-      ({ currency, fees: 0, fxSpread: 0, reserveFees: 0, total: 0 } as TreasuryPosition);
-    pos.fees = round(pos.fees + fees, 6);
-    pos.fxSpread = round(pos.fxSpread + fxSpread, 6);
-    pos.reserveFees = round(pos.reserveFees + reserveFees, 6);
-    pos.total = round(pos.fees + pos.fxSpread + pos.reserveFees, 6);
+    const pos = this.positions.get(currency) ?? { currency, stablecoinBalance: 0, emergencyBalance: 0, fiatBalance: 0 };
+    pos.fiatBalance = round(pos.fiatBalance + fees + fxSpread + reserveFees, 6);
     this.positions.set(currency, pos);
   }
 
+  drawStablecoin(currency: CurrencyCode, amount: number): void {
+    const pos = this.positions.get(currency);
+    if (pos) pos.stablecoinBalance = round(pos.stablecoinBalance - amount, 6);
+  }
+
   position(currency: CurrencyCode): TreasuryPosition {
-    return (
-      this.positions.get(currency) ?? {
-        currency,
-        fees: 0,
-        fxSpread: 0,
-        reserveFees: 0,
-        total: 0,
-      }
-    );
+    return this.positions.get(currency) ?? { currency, stablecoinBalance: 0, emergencyBalance: 0, fiatBalance: 0 };
   }
 
   all(): TreasuryPosition[] {

@@ -1,10 +1,9 @@
 /**
- * Compliance Engine — policy guardrails for cross-border payments.
+ * Compliance Engine — policy guardrails for cross-border liquidity movements.
  *
- * Performs KYC/AML-style checks (modelled deterministically here), sanctions
- * screening, country-pair allow-listing and amount limits. A payment that
- * fails compliance never reaches settlement. In production this would call
- * external screening services; in the kernel it exposes a stable interface.
+ * Performs KYC/AML-style checks (modelled deterministically), sanctions
+ * screening, corridor-pair allow-listing and amount limits. A movement that
+ * fails compliance never reaches execution.
  */
 import type { SimulationScenario } from './types';
 
@@ -14,69 +13,38 @@ export interface ComplianceVerdict {
 }
 
 const ALLOWED_CORRIDORS: Array<[string, string]> = [
-  ['Kenya', 'Ghana'],
-  ['Ghana', 'Kenya'],
-  ['Kenya', 'Nigeria'],
-  ['Nigeria', 'Kenya'],
-  ['Ghana', 'Nigeria'],
-  ['Nigeria', 'Ghana'],
-  ['Kenya', 'Uganda'],
-  ['Uganda', 'Kenya'],
-  ['Kenya', 'Tanzania'],
-  ['Tanzania', 'Kenya'],
-  ['South Africa', 'Kenya'],
-  ['Kenya', 'South Africa'],
+  ['Kenya', 'Ghana'], ['Ghana', 'Kenya'],
+  ['Kenya', 'Nigeria'], ['Nigeria', 'Kenya'],
+  ['Ghana', 'Nigeria'], ['Nigeria', 'Ghana'],
+  ['Kenya', 'Uganda'], ['Uganda', 'Kenya'],
+  ['Kenya', 'Tanzania'], ['Tanzania', 'Kenya'],
+  ['South Africa', 'Kenya'], ['Kenya', 'South Africa'],
+  ['Nigeria', 'Ghana'], ['Ghana', 'Nigeria'],
 ];
 
-const SANCTIONED = new Set<string>([]);
-
 const PER_TX_LIMIT: Record<string, number> = {
-  KES: 1_500_000,
-  GHS: 250_000,
-  NGN: 10_000_000,
-  USD: 25_000,
-  ZAR: 400_000,
-  UGX: 50_000_000,
-  TZS: 40_000_000,
+  KES: 1_500_000, GHS: 500_000, NGN: 10_000_000, USD: 25_000, ZAR: 400_000, UGX: 50_000_000, TZS: 40_000_000,
 };
 
 export class ComplianceEngine {
   verify(scenario: SimulationScenario): ComplianceVerdict {
     const checks: ComplianceVerdict['checks'] = [];
+    const buyer = scenario.transaction.buyer;
+    const merchant = scenario.transaction.merchant;
 
-    // Corridor allow-list
-    const corridorOk = ALLOWED_CORRIDORS.some(
-      ([a, b]) => a === scenario.buyer.country && b === scenario.merchant.country,
-    );
+    const corridorOk = ALLOWED_CORRIDORS.some(([a, b]) => a === buyer.country && b === merchant.country);
     checks.push({
       name: 'Corridor authorization',
       passed: corridorOk,
-      detail: corridorOk
-        ? `${scenario.buyer.country} -> ${scenario.merchant.country} is an authorized corridor`
-        : `Corridor ${scenario.buyer.country} -> ${scenario.merchant.country} is not authorized`,
+      detail: corridorOk ? `${buyer.country} → ${merchant.country} is an authorized corridor` : `Corridor ${buyer.country} → ${merchant.country} is not authorized`,
     });
 
-    // Sanctions screening
-    const buyerOk = !SANCTIONED.has(scenario.buyer.country);
-    const merchantOk = !SANCTIONED.has(scenario.merchant.country);
-    checks.push({
-      name: 'Sanctions screening',
-      passed: buyerOk && merchantOk,
-      detail:
-        buyerOk && merchantOk
-          ? 'Both parties cleared sanctions screening'
-          : 'A party is flagged on the sanctions list',
-    });
-
-    // Per-transaction limit
-    const limit = PER_TX_LIMIT[scenario.currency] ?? 0;
-    const limitOk = scenario.amount <= limit;
+    const limit = PER_TX_LIMIT[scenario.transaction.currency] ?? 0;
+    const limitOk = scenario.transaction.amount <= limit;
     checks.push({
       name: 'Transaction limit',
       passed: limitOk,
-      detail: limitOk
-        ? `Amount within ${scenario.currency} limit of ${limit.toLocaleString()}`
-        : `Amount exceeds ${scenario.currency} limit of ${limit.toLocaleString()}`,
+      detail: limitOk ? `Amount within ${scenario.transaction.currency} limit of ${limit.toLocaleString()}` : `Amount exceeds ${scenario.transaction.currency} limit of ${limit.toLocaleString()}`,
     });
 
     return { passed: checks.every((c) => c.passed), checks };

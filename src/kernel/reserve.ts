@@ -1,19 +1,18 @@
 /**
- * Reserve Engine — manages per-country PaySwap reserves.
+ * Reserve Engine — manages per-country PaySwap reserves as infrastructure.
  *
- * Each country has a reserve denominated in its local currency. The reserve
- * holds the float that funds outgoing payments and absorbs incoming payments.
- * A minimum threshold protects solvency: drawing below it raises risk and may
- * trigger liquidity sourcing. All reserve mutations are mirrored as ledger
- * entries by the Settlement Engine.
+ * Reserves expose available + locked liquidity, a forecast, replenishment
+ * schedule and AI confidence. A minimum threshold protects solvency. The
+ * planner decides whether to consume reserves or preserve them based on the
+ * reserve policy; all mutations mirror as ledger entries via the executor.
  */
-import type { ReserveConfig, CurrencyCode, WorldState } from './types';
+import type { Reserve, CurrencyCode, WorldState } from './types';
 import { eventEngine } from './event';
 
 export interface ReserveMutation {
   country: string;
   currency: CurrencyCode;
-  delta: number; // +credit / -debit
+  delta: number;
   reason: string;
   frame: number;
 }
@@ -21,50 +20,31 @@ export interface ReserveMutation {
 export class ReserveEngine {
   constructor(private world: WorldState) {}
 
-  find(country: string): ReserveConfig | undefined {
+  find(country: string): Reserve | undefined {
     return this.world.reserves.find((r) => r.country === country);
   }
 
-  ensure(country: string, currency: CurrencyCode, balance: number, minThreshold: number): ReserveConfig {
+  ensure(country: string, currency: CurrencyCode, available: number, minThreshold: number): Reserve {
     let r = this.find(country);
     if (!r) {
-      r = { country, currency, balance, minThreshold };
+      r = { id: `reserve:${country}`, country, currency, available, locked: 0, minThreshold, forecast: 0, replenishmentSchedule: 'daily', aiConfidence: 0.9 };
       this.world.reserves.push(r);
     }
     return r;
   }
 
-  /** Returns true if a debit of `amount` would keep the reserve above threshold. */
-  canDebit(reserve: ReserveConfig, amount: number): boolean {
-    return reserve.balance - amount >= reserve.minThreshold;
+  canDebit(reserve: Reserve, amount: number): boolean {
+    return reserve.available - amount >= reserve.minThreshold;
   }
 
-  mutate(m: ReserveMutation): ReserveConfig {
+  mutate(m: ReserveMutation): Reserve {
     const reserve = this.ensure(m.country, m.currency, 0, 0);
-    reserve.balance = Math.round((reserve.balance + m.delta) * 1e6) / 1e6;
-    eventEngine.emit(
-      'reserve.mutated',
-      {
-        country: m.country,
-        currency: m.currency,
-        delta: m.delta,
-        balanceAfter: reserve.balance,
-        reason: m.reason,
-        frame: m.frame,
-      },
-      m.frame,
-    );
+    reserve.available = Math.round((reserve.available + m.delta) * 1e6) / 1e6;
+    eventEngine.emit('reserve.mutated', { country: m.country, delta: m.delta, balanceAfter: reserve.available, reason: m.reason, frame: m.frame }, m.frame);
     return reserve;
   }
 
-  /** Utilization of the reserve relative to its threshold headroom. */
-  utilization(reserve: ReserveConfig): number {
-    const headroom = reserve.balance - reserve.minThreshold;
-    if (headroom <= 0) return 100;
-    return 0; // utilization is computed against draw-downs by the simulator
-  }
-
-  healthy(reserve: ReserveConfig): boolean {
-    return reserve.balance >= reserve.minThreshold;
+  healthy(reserve: Reserve): boolean {
+    return reserve.available >= reserve.minThreshold;
   }
 }
