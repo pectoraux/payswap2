@@ -1,0 +1,98 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// PaySwap Kernel — Milestone 1 persistence
+// ---------------------------------------------------------------------------
+// The kernel runs simulations in-memory for determinism, but persists every
+// run (input + output), ledger entry, twin token, event and audit record so
+// that history is queryable, replayable and auditable. This is the only
+// schema the kernel owns — services and products layer their own schemas on
+// top in later milestones.
+
+model SimulationRun {
+  id           String   @id @default(cuid())
+  runId        String   @unique
+  kernelVersion String
+  scenario     String   // JSON-encoded SimulationScenario
+  result       String   // JSON-encoded SimulationResult
+  amount       Float
+  currency     String
+  preference   String
+  buyerCountry String
+  merchantCountry String
+  riskScore    Float
+  costPercent  Float
+  settlementMs Int
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([buyerCountry, merchantCountry])
+}
+
+model LedgerEntryRecord {
+  id            String   @id @default(cuid())
+  runId         String
+  txId          String
+  accountId     String
+  accountLabel  String
+  accountType   String
+  currency      String
+  debit         Float    @default(0)
+  credit        Float    @default(0)
+  balanceAfter  Float
+  memo          String
+  frame         Int
+  ts            DateTime @default(now())
+
+  @@index([runId])
+  @@index([accountId])
+}
+
+model TwinTokenRecord {
+  id            String   @id @default(cuid())
+  runId         String
+  symbol        String
+  amount        Float
+  currency      String
+  fromCountry   String
+  toCountry     String
+  status        String
+  mintedAtFrame Int
+  burnedAtFrame Int?
+  memo          String
+  createdAt     DateTime @default(now())
+
+  @@index([runId])
+  @@index([symbol])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  runId     String
+  actor     String
+  action    String
+  detail    String
+  ts        DateTime @default(now())
+
+  @@index([runId])
+  @@index([action])
+}
+
+// Retained from scaffold — harmless, available for later auth milestones.
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
