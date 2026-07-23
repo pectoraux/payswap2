@@ -698,6 +698,10 @@ export interface SimulationResult {
   engines: EngineHealth[];
   resultHash: string; // for regression comparison
   settled: boolean;
+  constitution: ConstitutionVerdict;
+  graph: GraphSnapshot;
+  worldInspector: WorldInspector;
+  lpLifecycleEvents: LPLifecycleEvent[];
 }
 
 /* ========================================================================== */
@@ -730,3 +734,86 @@ export interface RegressionResult {
   current: SavedScenario['baselineMetrics'];
   drift: { costPercent: number; settlementTimeMs: number; riskScore: number };
 }
+
+/* ========================================================================== */
+/* Kernel Constitution (non-overridable invariants)                          */
+/* ========================================================================== */
+
+export interface ConstitutionCheck {
+  invariant: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface ConstitutionVerdict {
+  passed: boolean;
+  violations: { invariant: string; detail: string; severity: 'block' | 'warn' }[];
+  checks: ConstitutionCheck[];
+}
+
+/* ========================================================================== */
+/* Financial Graph snapshot (for the UI)                                      */
+/* ========================================================================== */
+
+export interface GraphSnapshot {
+  nodes: { id: string; type: string; label: string; country?: string; currency?: CurrencyCode; balance: number; online: boolean }[];
+  edges: { id: string; from: string; to: string; kind: string; cost: number; liquidity: number; reliability: number }[];
+}
+
+/* ========================================================================== */
+/* World Inspector — per-frame deltas                                         */
+/* ========================================================================== */
+
+export interface FrameDelta {
+  frame: number;
+  ledger: { account: string; debit: number; credit: number; balanceAfter: number }[];
+  reserves: { country: string; availableAfter: number; delta: number }[];
+  liquidityProviders: { lpId: string; remainingAfter: number; delta: number }[];
+  treasury: { currency: CurrencyCode; fiatAfter: number; stablecoinAfter: number }[];
+  twinTokens: { symbol: string; status: string }[];
+  events: { type: string; frame: number }[];
+}
+
+export interface WorldInspector {
+  deltas: FrameDelta[];
+  before: { reserves: { country: string; available: number }[]; liquidityProviders: { lpId: string; remaining: number }[] };
+  after: { reserves: { country: string; available: number }[]; liquidityProviders: { lpId: string; remaining: number }[] };
+}
+
+/* ========================================================================== */
+/* Liquidity Intent (extension API)                                           */
+/* ========================================================================== */
+
+export interface LiquidityIntent {
+  amount: number;
+  currency: CurrencyCode;
+  origin: { country: string; currency: CurrencyCode; method: string };
+  destination: { country: string; currency: CurrencyCode; method: string };
+  objective: RoutingPriority;
+  policy?: Partial<SimulationScenario['policies']>;
+  aiWeights?: Partial<OptimizationWeights>;
+  failures?: FailureInjection[];
+}
+
+/* ========================================================================== */
+/* LP Lifecycle                                                               */
+/* ========================================================================== */
+
+export type LPLifecycleState = 'active' | 'manual' | 'inactive' | 'suspended';
+
+export interface LPStake {
+  lpId: string;
+  twinTokenAmount: number;
+  stakedAt: number;
+  slashingHistory: { amount: number; reason: string; ts: number }[];
+}
+
+export interface LPLifecycleEvent {
+  id: string;
+  lpId: string;
+  action: 'mint' | 'stake' | 'trade' | 'withdraw' | 'restake' | 'suspend' | 'reactivate' | 'slash';
+  amount?: number;
+  ts: number;
+  detail: string;
+}
+

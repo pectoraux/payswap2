@@ -24,6 +24,10 @@ import type {
   EngineHealth,
   PlanAmendment,
   LiquidityExecutionPlan,
+  ConstitutionVerdict,
+  GraphSnapshot,
+  WorldInspector,
+  FrameDelta,
 } from './types';
 import { LiquidityPlanner } from './liquidity-planner';
 import { PlanExecutor } from './plan-executor';
@@ -35,6 +39,10 @@ import { permissionEngine } from './permission';
 import { extensionRuntime } from './extension';
 import { insuranceEngine } from './insurance';
 import { riskEngine } from './risk';
+import { lpLifecycle } from './lp-lifecycle';
+import { buildGraph } from './financial-graph';
+import { evaluateConstitution } from './constitution';
+import { EventCatalog } from './events';
 import { ENGINES } from './registry';
 import { KERNEL_VERSION, uid, round, hashMetrics } from './support';
 
@@ -69,16 +77,31 @@ export class SimulationEngine {
       wallets: [],
     };
 
-    // 1. Plan (immutable).
+    // 1. Build the Financial Graph from world state.
+    const graph = buildGraph({
+      reserves: world.reserves.map((r) => ({ id: r.id, country: r.country, currency: r.currency, available: r.available, minThreshold: r.minThreshold })),
+      liquidityProviders: world.liquidityProviders,
+      treasury: { stablecoinBalance: scenario.treasury.stablecoinBalance, emergencyBalance: scenario.treasury.emergencyTreasury },
+      financialOperators: world.financialOperators,
+      scenario,
+    });
+    const graphSnapshot: GraphSnapshot = {
+      nodes: graph.allNodes().map((n) => ({ id: n.id, type: n.type, label: n.label, country: n.country, currency: n.currency, balance: n.balance, online: n.online })),
+      edges: graph.allEdges().map((e) => ({ id: e.id, from: e.from, to: e.to, kind: e.kind, cost: e.cost, liquidity: e.liquidity, reliability: e.reliability })),
+    };
+
+    // 2. Plan (immutable) — the planner traverses the financial graph.
     extensionRuntime.fire('beforeRoute', { scenario, runId });
     const { plan } = new LiquidityPlanner().plan(scenario, world);
     extensionRuntime.fire('afterRoute', { scenario, plan });
+    eventEngine.emit(EventCatalog.PlanCreated, { planId: plan.id, strategy: plan.reasoning.strategy }, 0);
     auditEngine.record(actorId, 'planner.plan', `strategy=${plan.reasoning.strategy} score=${plan.reasoning.weightedScore} alternatives=${plan.alternatives.length}`);
 
-    // 2. Execute (sim + production same code).
+    // 3. Execute (sim + production same code).
     const executor = new PlanExecutor(world, scenario);
     const out = executor.execute(plan);
     extensionRuntime.fire('afterSettle', { plan, out });
+    eventEngine.emit(out.settled ? EventCatalog.ExecutionCompleted : EventCatalog.ExecutionRolledBack, { planId: plan.id, settled: out.settled }, 0);
 
     // 3. Reserves after execution (for treasury AI + world state).
     const reservesAfter = world.reserves.map((r) => ({ ...r }));
@@ -145,6 +168,27 @@ export class SimulationEngine {
 
     auditEngine.record(actorId, 'simulation.complete', `run ${runId} settled=${out.settled}`);
 
+    // 7. Kernel Constitution — non-overridable invariants.
+    const constitution = evaluateConstitution({
+      plan,
+      ledger: out.ledger,
+      twinTokens: out.twinTokens,
+      reserves: reservesAfter,
+      world,
+      result: { events: out.events } as import('./types').SimulationResult,
+    });
+    eventEngine.emit(constitution.passed ? EventCatalog.ConstitutionChecked : EventCatalog.ConstitutionViolated, { passed: constitution.passed, violations: constitution.violations.length }, 0);
+    auditEngine.record(actorId, 'constitution.check', `passed=${constitution.passed} violations=${constitution.violations.length}`);
+
+    // 8. World Inspector — per-frame deltas.
+    const worldInspector = this.buildWorldInspector(scenario, plan, out, world);
+
+    // 9. LP lifecycle events (initialize stakes for online LPs).
+    lpLifecycle.reset();
+    for (const lp of world.liquidityProviders) {
+      if (lp.online) lpLifecycle.stake(lp, lp.twinTokenPosition, 0);
+    }
+
     const resultHash = hashMetrics({
       costPercent: plan.metrics.costPercent,
       settlementTimeMs: plan.metrics.settlementTimeMs,
@@ -171,6 +215,10 @@ export class SimulationEngine {
       engines: ENGINES,
       resultHash,
       settled: out.settled,
+      constitution,
+      graph: graphSnapshot,
+      worldInspector,
+      lpLifecycleEvents: lpLifecycle.allEvents(),
     };
   }
 
@@ -185,6 +233,49 @@ export class SimulationEngine {
       minThreshold: before.minThreshold,
       delta: round((after?.available ?? before.available) - before.available, 6),
       healthy: (after?.available ?? before.available) >= before.minThreshold,
+    };
+  }
+
+  /**
+   * Build the World Inspector — per-frame deltas for every node in the graph.
+   * Shows before/after for ledger, reserves, LPs, treasury, twin tokens and
+   * events at each replay frame. This is the "debugger" view.
+   */
+  private buildWorldInspector(
+    scenario: SimulationScenario,
+    plan: LiquidityExecutionPlan,
+    out: ReturnType<PlanExecutor['execute']>,
+    world: WorldState,
+  ): WorldInspector {
+    const frames = [...new Set(out.ledger.map((e) => e.frame))].sort((a, b) => a - b);
+    const deltas: FrameDelta[] = frames.map((frame) => {
+      const ledgerEntries = out.ledger.filter((e) => e.frame === frame);
+      const frameEvents = out.events.filter((e) => e.frame === frame);
+      const twinTokens = out.twinTokens.filter((t) => t.mintedAtFrame === frame || t.burnedAtFrame === frame);
+      return {
+        frame,
+        ledger: ledgerEntries.map((e) => ({ account: e.accountLabel, debit: e.debit, credit: e.credit, balanceAfter: e.balanceAfter })),
+        reserves: world.reserves.map((r) => ({ country: r.country, availableAfter: r.available, delta: 0 })),
+        liquidityProviders: world.liquidityProviders.map((lp) => ({ lpId: lp.id, remainingAfter: lp.tradingCapacity, delta: 0 })),
+        treasury: treasuryEngine.all().map((p) => ({ currency: p.currency, fiatAfter: p.fiatBalance, stablecoinAfter: p.stablecoinBalance })),
+        twinTokens: twinTokens.map((t) => ({ symbol: t.symbol, status: t.status })),
+        events: frameEvents.map((e) => ({ type: e.type, frame: e.frame })),
+      };
+    });
+
+    return {
+      deltas,
+      before: {
+        reserves: scenario.treasury.originReserve && scenario.treasury.destinationReserve ? [
+          { country: scenario.treasury.originReserve.country, available: scenario.treasury.originReserve.available },
+          { country: scenario.treasury.destinationReserve.country, available: scenario.treasury.destinationReserve.available },
+        ] : [],
+        liquidityProviders: scenario.liquidityProviders.map((lp) => ({ lpId: lp.id, remaining: lp.tradingCapacity })),
+      },
+      after: {
+        reserves: world.reserves.map((r) => ({ country: r.country, available: r.available })),
+        liquidityProviders: world.liquidityProviders.map((lp) => ({ lpId: lp.id, remaining: lp.tradingCapacity })),
+      },
     };
   }
 

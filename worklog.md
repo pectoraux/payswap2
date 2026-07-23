@@ -62,3 +62,28 @@ Stage Summary:
 - Digital Twin: scenario builder + execution graph + alternatives + Time Machine + world state + treasury AI + 23-engine registry.
 - Scenario Library: save/load/regress (continuous verification). LLM-powered AI narrative.
 - All 5 definition-of-done criteria met.
+
+---
+Task ID: FOS-1 (Financial Operating System)
+Agent: main (Z.ai Code)
+Task: Evolve kernel from Global Liquidity OS to full Financial Operating System. Add Financial Graph (nodes + weighted edges), Kernel Constitution (non-overridable invariants), Developer API facade (kernel.plan/simulate/execute/replay/validate/graph), named event catalog (event sourcing), LP lifecycle (stake/withdraw/restake/suspend/slash), smart contract interfaces, World Inspector with per-frame deltas.
+
+Work Log:
+- New `financial-graph.ts`: GraphNode (wallet/reserve/lp/treasury/stablecoin/fo/insurance_pool) + GraphEdge (9 weighted properties: cost, latency, reliability, liquidity, trust, settlement, carbon, impact, compliance). buildGraph() constructs the graph from world state. findPaths() traverses via DFS. mixPaths() enables composable source mixing (40% reserve + 35% LP + 25% treasury).
+- New `constitution.ts`: 10 non-overridable invariants — ledger balanced, twin token backed, no negative balances, reserve threshold, manual settlement requires insurance, fallback path, event emission, no double spend, no duplicate settlement, LP capacity respected. evaluateConstitution() gates every plan. The financial equivalent of ACID guarantees.
+- New `api.ts`: Developer API facade — kernel.plan(), kernel.simulate(), kernel.execute(), kernel.replay(), kernel.validate(), kernel.world(), kernel.treasury(), kernel.insurance(), kernel.graph(). Plus LiquidityIntent (extensions request, never execute) + intentToScenario().
+- New `events.ts`: Named event catalog (event sourcing) — 40+ canonical event types (PlanCreated, ReserveDebited, LPSelected, Minted, Burned, ManualSettlementStarted, InsuranceOpened, ConstitutionChecked, LPSuspended, etc.). EVENT_LABELS for human display.
+- New `lp-lifecycle.ts`: LP lifecycle engine (stake/withdraw/restake/suspend/reactivate/slash) + smart contract interfaces (TwinTokenContract, LiquidityPoolContract, TreasuryContract, InsuranceContract, GovernanceContract). Routing stays off-chain; settlement proofs go on-chain.
+- Updated `simulation.ts`: builds financial graph, evaluates constitution post-execution, builds World Inspector (per-frame deltas for ledger/reserves/LPs/treasury/twinTokens/events), initializes LP lifecycle stakes, emits named events (PlanCreated, ExecutionCompleted, ConstitutionChecked).
+- Updated `types.ts`: added ConstitutionVerdict, GraphSnapshot, WorldInspector, FrameDelta, LiquidityIntent, LPStake, LPLifecycleEvent. SimulationResult now includes constitution, graph, worldInspector, lpLifecycleEvents.
+- Updated `registry.ts`: 26 engines (added Financial Graph, Kernel Constitution, LP Lifecycle, Developer API). Version 0.3.0-financial-os.
+- New UI components: constitution-panel.tsx (10 invariant checks with pass/fail), financial-graph.tsx (nodes grouped by type + weighted edges), world-inspector.tsx (per-frame deltas with before/after), lp-lifecycle.tsx (stake/withdraw/restake events).
+- Updated page.tsx: Constitution panel below metrics, Financial Graph + Alternatives side-by-side, World Inspector + World State side-by-side, LP Lifecycle + Treasury AI side-by-side. Title "Financial Operating System". Footer shows constitution status.
+
+Stage Summary:
+- Kernel is now a Financial Operating System. Every operation = state transition through global liquidity graph.
+- Kernel Constitution: 10 non-overridable invariants gate every plan. Default scenario: ALL PASSED (10/10). Reserve-exhaustion scenario: VIOLATED (catches negative balance + threshold breach).
+- Financial Graph: 13 nodes + 17 edges. Developer API: kernel.graph() returns traversable graph.
+- World Inspector: per-frame deltas (ledger/reserves/LPs/treasury/tokens/events) — the debugger view.
+- LP Lifecycle: stake events recorded. Named events: 40+ canonical types.
+- 26 engines. Lint clean. Agent Browser verified: constitution gating works (✓ for default, ✗ for failures). VLM: "No defects".

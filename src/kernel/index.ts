@@ -32,6 +32,13 @@ export { WorkflowEngine, workflowEngine, manualSettlementSteps, insuranceClaimSt
 export { ExtensionRuntime, extensionRuntime } from './extension';
 export { TransactionEngine } from './transaction';
 export { ScenarioLibrary } from './scenario-library';
+export { FinancialGraph, buildGraph } from './financial-graph';
+export { CONSTITUTION, evaluateConstitution } from './constitution';
+export { kernel, intentToScenario } from './api';
+export type { LiquidityIntent } from './api';
+export { EventCatalog, EVENT_LABELS } from './events';
+export { lpLifecycle, LPLifecycleEngine } from './lp-lifecycle';
+export type { TwinTokenContract, LiquidityPoolContract, TreasuryContract, InsuranceContract, GovernanceContract } from './lp-lifecycle';
 
 import type { SimulationScenario, LiquidityProvider, FinancialOperator, FailureInjection } from './types';
 import { uid } from './support';
