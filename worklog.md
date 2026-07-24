@@ -166,3 +166,32 @@ Stage Summary:
 - 6 Runtime Services consolidate 29 engines: World Runtime (5), Financial Solver (3), Execution Runtime (5), Governance Runtime (8), Intelligence Runtime (4), Developer Runtime (4).
 - Constitution (immutable, 43 rules) separated from Organization Policy (configurable: reserveThreshold, treasuryStrategy, lpPreference, riskAppetite, carbonObjective, communityWeight).
 - Lint clean. Agent Browser verified: Entity Registry (14 entities), DAG (9 nodes, 9 layers), Runtime Services (6 services). No errors.
+
+---
+Task ID: V1-0 (PaySwap Runtime v1.0 — Stable Architecture)
+Agent: main (Z.ai Code)
+Task: Final restructuring — kernel becomes a deterministic financial state machine for converging the global financial world toward valid target states. The solver becomes generic (doesn't know finance — queries capabilities). Everything is converge(intent). Event-sourced world. 5 runtime services.
+
+Work Log:
+- New `capabilities.ts`: Capabilities as first-class. 18 capabilities (canTransfer, canReceive, canStake, canWithdraw, canBridge, canMint, canBurn, canSwap, canCredit, canDebit, canSettle, canVote, canConvert, canRefund, canBorrow, canLend, canInsure, canClaim). entitiesWithCapability() — the solver's primary query interface. CapabilityRegistry for plugin extensibility.
+- New `transition.ts`: Transition as the atomic execution unit. { fromState, toState, entity, command, capability, preconditions, postconditions, rollback, events }. buildTransitionsForDelta() + verifyPreconditions/Postconditions. Replay is just re-applying transitions in order.
+- New `solver.ts`: Generic Constraint Solver — DOES NOT KNOW FINANCE. It queries the capability graph: "who canBridge? who canDebit?" and the graph answers. 5 candidate generators (pureBridge, reserveBridge, fastest, diversified, treasury) all generic. converge(intent) → candidates → score → winner. Never hardcodes "if LP exists" or "if reserve exists".
+- New `event-sourced-world.ts`: Event-sourced world — events are truth, snapshots are cache. createEventSourcedWorld(), appendEvent(), appendTransition(), currentWorld() (rebuilds from events or uses cache), rewindTo() (Time Machine), diffWorlds(). Like Kafka/EventStoreDB/Axon/Temporal.
+- Updated `api.ts`: kernel.converge(intent) is THE single entry point. Takes ConvergenceIntent (currentWorld + desiredWorld + constraints + objectives + policies) → SolverOutput.
+- Updated `entity.ts`: Expanded EntityCapabilities to include all 18 capabilities. LPs now have canBridge, treasury has canSwap + canMint + canBurn.
+- Updated `simulation.ts`: calls generic ConstraintSolver.converge(), produces transitions, event-sources the world, surfaces 18 capabilities, 5 solver candidates, event log.
+- Updated `types.ts`: added SolverCandidateSummary, TransitionSummary, EventLogEntry. SimulationResult now includes solverCandidates, transitions, capabilities, eventLog.
+- Updated `registry.ts`: 5 Runtime Services (World, Constraint, Solver, Execution, Developer). Version 1.0.0-stable.
+- New UI: solver-panel.tsx (Constraint Solver with 5 candidates + winner + rejection reasons; TransitionsPanel showing atomic transitions with capability/command/from→to).
+- Updated page.tsx: title "PaySwap Runtime v1.0", subtitle about state convergence + generic solver. Optimization tab shows Solver + Transitions panels.
+
+Stage Summary:
+- Architecture is STABLE (v1.0). No more architectural layers.
+- Generic solver: 5 candidates, winner selected by capability queries (not hardcoded finance). 2 atomic transitions (debit reserve 20,000 + bridge LP2 5,000).
+- Capabilities: 18 first-class capabilities. Solver asks "who canBridge?" — graph answers.
+- Event-sourced world: events are truth, snapshots are cache. 2 events in log.
+- 5 Runtime Services: World (6 engines), Constraint (7), Solver (4), Execution (6), Developer (6).
+- kernel.converge(intent) is the single developer API.
+- 43 constitution rules, 10 reasoning capabilities, 9 state machines — all preserved.
+- Lint clean. Agent Browser verified: Solver panel (5 candidates, WINNER), Transitions panel, v1.0 title. No errors.
+- NEXT: Prove the architecture by implementing real financial workflows (payments, loans, LP ops, insurance, treasury, governance) as converge(intent) calls.

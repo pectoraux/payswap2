@@ -66,6 +66,14 @@ export interface EntityCapabilities {
   canVote?: boolean;
   canBridge?: boolean;
   canConvert?: boolean;
+  canSwap?: boolean;
+  canTransfer?: boolean;
+  canReceive?: boolean;
+  canRefund?: boolean;
+  canBorrow?: boolean;
+  canLend?: boolean;
+  canInsure?: boolean;
+  canClaim?: boolean;
   manualOnly?: boolean;
 }
 
@@ -167,7 +175,7 @@ export function entitiesFromScenario(scenario: import('./types').SimulationScena
       country: lp.country,
       currency: lp.currency,
       balance: lp.tradingCapacity,
-      capabilities: { canStake: true, canTrade: true, canWithdraw: true, canSettle: !lp.manualOnly, manualOnly: lp.manualOnly },
+      capabilities: { canStake: true, canTrade: true, canWithdraw: true, canBridge: true, canSettle: !lp.manualOnly, manualOnly: lp.manualOnly },
       policies: { feeBps: lp.tradingFees * 100, riskCap: lp.riskProfile },
       attributes: {
         sourceKind: lp.sourceKind,
@@ -188,7 +196,7 @@ export function entitiesFromScenario(scenario: import('./types').SimulationScena
     state: 'active',
     currency: scenario.transaction.merchant.currency,
     balance: scenario.treasury.stablecoinBalance,
-    capabilities: { canDebit: true, canCredit: true, canConvert: true },
+    capabilities: { canDebit: true, canCredit: true, canConvert: true, canSwap: true, canMint: true, canBurn: true },
     attributes: { emergencyBalance: scenario.treasury.emergencyTreasury },
   }));
 

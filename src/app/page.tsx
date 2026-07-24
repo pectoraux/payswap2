@@ -18,6 +18,7 @@ import { LPLifecyclePanel } from '@/components/simulator/lp-lifecycle';
 import { OptimizationPanel } from '@/components/simulator/optimization-panel';
 import { StateMachinePanel } from '@/components/simulator/state-machine-panel';
 import { ReasoningPanel } from '@/components/simulator/reasoning-panel';
+import { SolverPanel, TransitionsPanel } from '@/components/simulator/solver-panel';
 import { ExecutionGraphDAG } from '@/components/simulator/execution-graph-dag';
 import { EntityRegistry } from '@/components/simulator/entity-registry';
 import { RuntimeServicesPanel } from '@/components/simulator/runtime-services';
@@ -181,12 +182,11 @@ export default function Home() {
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
         <div className="mb-6">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PaySwap Runtime</h1>
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PaySwap Runtime <span className="text-emerald-600 text-lg">v1.0</span></h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            A deterministic financial runtime. Every object is an <span className="font-medium text-foreground">Entity</span>;
-            every change is a <span className="font-medium text-foreground">Command</span>; the solver produces an
-            <span className="font-medium text-foreground"> Execution Graph DAG</span>. 6 runtime services consolidate 29 engines.
-            The runtime transforms one immutable financial world into another — nothing more.
+            A deterministic financial state machine whose only responsibility is
+            <span className="font-medium text-foreground"> converging the global financial world toward valid target states</span>.
+            The solver never knows finance — it queries capabilities. Everything financial lives in the data model.
           </p>
         </div>
 
@@ -255,6 +255,8 @@ export default function Home() {
 
                   {/* 2. Optimization */}
                   <TabsContent value="optimization" className="space-y-4 mt-4">
+                    <SolverPanel candidates={result.solverCandidates} />
+                    <TransitionsPanel transitions={result.transitions} />
                     <OptimizationPanel candidates={result.candidatePlans} />
                     <AIReasoningView reasoning={result.plan.reasoning} />
                     <AlternativesPanel alternatives={result.plan.alternatives} />
@@ -305,8 +307,8 @@ export default function Home() {
       <footer className="mt-auto border-t bg-background/80 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-1 px-4 py-3 text-center sm:flex-row sm:text-left">
           <p className="text-[11px] text-muted-foreground">
-            <span className="font-semibold text-foreground">PaySwap Runtime</span> ·
-            6 services · 29 engines · entity model · command pattern · execution DAG · 43 constitution rules · production = simulation
+            <span className="font-semibold text-foreground">PaySwap Runtime v1.0</span> ·
+            5 services · generic solver · capabilities · event-sourced · transitions · 43 constitution rules · production = simulation
           </p>
           <p className="font-mono text-[10px] text-muted-foreground">
             {result ? `run ${result.runId.slice(0, 16)} · ${result.resultHash} · ${result.settled ? 'settled' : 'blocked'} · ${result.constitution.passed ? 'constitution ✓' : 'constitution ✗'}` : 'no run yet'}

@@ -62,14 +62,14 @@ export const ENGINES: EngineHealth[] = [
 export const ENGINE_COUNT = ENGINES.length;
 
 /**
- * The 6 Runtime Services — consolidated grouping of the 29 engines.
- * This reduces apparent complexity while preserving rich internal behavior.
+ * The 5 Runtime Services — the final consolidated architecture.
+ * Everything financial lives in the data model (entities + capabilities),
+ * not in the runtime. The runtime itself stays very small.
  */
 export const RUNTIME_SERVICES: { name: string; owns: string; status: 'online' | 'degraded' | 'offline'; engineCount: number }[] = [
-  { name: 'World Runtime', owns: 'World state, entities, events, snapshots', status: 'online', engineCount: 5 },
-  { name: 'Financial Solver', owns: 'Optimization, graph search, objective scoring', status: 'online', engineCount: 3 },
-  { name: 'Execution Runtime', owns: 'Execution graph, state machines, replay', status: 'online', engineCount: 5 },
-  { name: 'Governance Runtime', owns: 'Constitution, policies, permissions, audit', status: 'online', engineCount: 8 },
-  { name: 'Intelligence Runtime', owns: 'Deterministic reasoning, forecasting, LLM narratives', status: 'online', engineCount: 4 },
-  { name: 'Developer Runtime', owns: 'Intent API, extensions, SDKs, webhooks', status: 'online', engineCount: 4 },
+  { name: 'World Runtime', owns: 'Event store, entities, snapshots, graph', status: 'online', engineCount: 6 },
+  { name: 'Constraint Runtime', owns: 'Constitution, organization policies, permissions', status: 'online', engineCount: 7 },
+  { name: 'Solver Runtime', owns: 'Generic constraint solver, graph search, reasoning', status: 'online', engineCount: 4 },
+  { name: 'Execution Runtime', owns: 'DAG execution, state machines, retries, compensation, replay', status: 'online', engineCount: 6 },
+  { name: 'Developer Runtime', owns: 'Intents, extensions, SDK, APIs, capabilities registry', status: 'online', engineCount: 6 },
 ];

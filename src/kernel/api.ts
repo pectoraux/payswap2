@@ -32,12 +32,17 @@ import { OptimizationEngine } from './optimization-engine';
 import { PlanExecutor } from './plan-executor';
 import { SimulationEngine } from './simulation';
 import { WorldStore, buildWorldFromScenario, type WorldState as CanonicalWorldState } from './world-store';
+import { createEventSourcedWorld, appendTransition, currentWorld, type EventSourcedWorld } from './event-sourced-world';
+import { entitiesFromScenario, type Entity } from './entity';
+import { ConstraintSolver, type ConvergenceIntent, type SolverOutput } from './solver';
+import { capabilityRegistry } from './capabilities';
 import { treasuryEngine } from './treasury';
 import { insuranceEngine } from './insurance';
 import { buildGraph, FinancialGraph } from './financial-graph';
 import { evaluateConstitution, type ConstitutionVerdict, type InvariantContext } from './constitution';
 import { eventEngine } from './event';
 import { auditEngine } from './audit';
+import { uid } from './support';
 
 /** A Liquidity Intent — the universal input for world-state convergence. */
 export interface LiquidityIntent {
@@ -184,7 +189,19 @@ export class IntentBuilder {
 
 class KernelAPI {
   private optimizer = new OptimizationEngine();
+  private solver = new ConstraintSolver();
   private sim = new SimulationEngine();
+
+  /**
+   * converge(intent) — THE single entry point.
+   *
+   * Given the current world and desired world deltas, find the best sequence
+   * of valid state transitions. The solver queries capabilities — it never
+   * hardcodes finance. This is the universal API for every financial operation.
+   */
+  converge(intent: ConvergenceIntent): SolverOutput {
+    return this.solver.converge(intent);
+  }
 
   /** The intent builder — developers use this. */
   intent(world: { reserves: SimulationScenario['treasury']; liquidityProviders: LiquidityProvider[]; financialOperators: FinancialOperator[] }): IntentBuilder {

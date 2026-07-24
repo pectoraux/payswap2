@@ -711,6 +711,50 @@ export interface SimulationResult {
   entities: EntitySummary[];
   organizationPolicy: OrganizationPolicy;
   runtimeServices: RuntimeServiceSummary[];
+  solverCandidates: SolverCandidateSummary[];
+  transitions: TransitionSummary[];
+  capabilities: string[];
+  eventLog: EventLogEntry[];
+}
+
+export interface SolverCandidateSummary {
+  id: string;
+  label: string;
+  transitionCount: number;
+  totalCost: number;
+  totalLatencyMs: number;
+  riskScore: number;
+  confidence: number;
+  weightedScore: number;
+  feasible: boolean;
+  selected: boolean;
+  rejectionReason?: string;
+  sourceCount: number;
+  usesReserve: boolean;
+  usesTreasury: boolean;
+}
+
+export interface TransitionSummary {
+  id: string;
+  entityId: string;
+  entityType: string;
+  command: string;
+  capability: string;
+  fromState: string;
+  toState: string;
+  amount?: number;
+  currency?: string;
+  status: string;
+  frame?: number;
+}
+
+export interface EventLogEntry {
+  id: string;
+  type: string;
+  ts: number;
+  frame: number;
+  entityId: string;
+  transitionId?: string;
 }
 
 export interface RuntimeServiceSummary {

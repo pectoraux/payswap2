@@ -49,11 +49,14 @@ import { buildGraph } from './financial-graph';
 import { evaluateConstitution } from './constitution';
 import { EventCatalog } from './events';
 import { ENGINES, RUNTIME_SERVICES } from './registry';
-import { KERNEL_VERSION, uid, round, hashMetrics } from './support';
-import type { ReasoningResultSummary, ExecutionGraphSummary, EntitySummary, OrganizationPolicy, RuntimeServiceSummary } from './types';
+import { KERNEL_VERSION, uid, round, hashMetrics, PRIORITY_WEIGHTS } from './support';
+import type { ReasoningResultSummary, ExecutionGraphSummary, EntitySummary, OrganizationPolicy, RuntimeServiceSummary, SolverCandidateSummary, TransitionSummary, EventLogEntry } from './types';
 import { entitiesFromScenario } from './entity';
 import { buildExecutionGraph, topologicalOrder } from './execution-graph';
 import { Commands } from './command';
+import { ConstraintSolver } from './solver';
+import { capabilityRegistry, ALL_CAPABILITIES } from './capabilities';
+import { createEventSourcedWorld, appendTransition, currentWorld, type EventSourcedWorld } from './event-sourced-world';
 
 export interface SimulationOptions {
   actorId?: string;
@@ -307,8 +310,48 @@ export class SimulationEngine {
       reservePolicy: scenario.policies.reservePolicy,
     };
 
-    // 16. Runtime Services (6 consolidated services).
+    // 16. Runtime Services (5 consolidated services).
     const runtimeServices: RuntimeServiceSummary[] = RUNTIME_SERVICES;
+
+    // 17. Generic Constraint Solver — converges world via capability queries.
+    const allEntities = entitiesFromScenario(scenario);
+    const solver = new ConstraintSolver();
+    const amount = scenario.transaction.amount;
+    const cur = scenario.transaction.merchant.currency;
+    const solverOutput = solver.converge({
+      currentWorld: { entities: allEntities },
+      desiredWorld: {
+        deltas: [
+          { entityId: 'wallet:buyer', amount: -amount, command: 'TransferLiquidity', capability: 'canTransfer', fromState: 'active', toState: 'active' },
+          { entityId: 'wallet:merchant', amount: amount, command: 'TransferLiquidity', capability: 'canReceive', fromState: 'active', toState: 'active' },
+        ],
+      },
+      constraints: { maxCostPercent: 5, maxRiskScore: 0.6, maxSettlementMs: 300000 },
+      objectives: { ...PRIORITY_WEIGHTS[scenario.transaction.priority], ...scenario.aiWeights },
+      policies: { reservePolicy: scenario.policies.reservePolicy, maxLpShare: scenario.policies.maxLpShare, requireInsurance: scenario.policies.requireInsurance },
+    });
+
+    const solverCandidates: SolverCandidateSummary[] = solverOutput.candidates.map((c) => ({
+      id: c.id, label: c.label, transitionCount: c.transitions.length, totalCost: round(c.totalCost, 6),
+      totalLatencyMs: c.totalLatencyMs, riskScore: c.riskScore, confidence: c.confidence,
+      weightedScore: c.weightedScore, feasible: c.feasible, selected: c.selected,
+      rejectionReason: c.rejectionReason, sourceCount: c.sourceCount, usesReserve: c.usesReserve, usesTreasury: c.usesTreasury,
+    }));
+
+    const transitions: TransitionSummary[] = solverOutput.transitions.map((t, i) => ({
+      id: t.id, entityId: t.entityId, entityType: t.entityType, command: t.command, capability: t.capability,
+      fromState: t.fromState, toState: t.toState, amount: t.amount, currency: t.currency, status: 'applied', frame: i + 1,
+    }));
+
+    // 18. Event-sourced world — events are truth, snapshots are cache.
+    const esWorld = createEventSourcedWorld(allEntities);
+    solverOutput.transitions.forEach((t, i) => appendTransition(esWorld, t, i + 1));
+    const eventLog: EventLogEntry[] = esWorld.events.map((e) => ({
+      id: e.id, type: e.type, ts: e.ts, frame: e.frame, entityId: e.entityId, transitionId: e.transitionId,
+    }));
+
+    // 19. Capabilities (the solver queried these — they're first-class).
+    const capabilities = ALL_CAPABILITIES;
 
     const resultHash = hashMetrics({
       costPercent: plan.metrics.costPercent,
@@ -349,6 +392,10 @@ export class SimulationEngine {
       entities,
       organizationPolicy,
       runtimeServices,
+      solverCandidates,
+      transitions,
+      capabilities,
+      eventLog,
     };
   }
 
