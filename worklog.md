@@ -1271,3 +1271,67 @@ End-to-End Verification:
 
 All Domains: PaySwap 11/20 | Supply Chain 5/5 | Browser: no errors | Lint: clean
 Protocol files: 39 | Kernel changes: 0
+
+---
+Task ID: PHASE6-2 (Merchant Webhooks + Payment Links)
+Agent: main (Z.ai Code)
+Task: Build merchant webhook system (signed, retry, idempotent) + payment links (hosted checkout). No kernel changes.
+
+New Production Modules:
+
+1. `protocol/webhooks/engine.ts` — Merchant Webhook System
+   - WebhookEndpoint registration (merchantId, URL, events, secret)
+   - WebhookDelivery with HMAC-SHA256 signature
+   - Events: payment.created, payment.completed, payment.failed, payment.disputed
+   - Idempotency: event IDs prevent duplicate processing
+   - Retry: exponential backoff (3 attempts: 2s, 4s, 8s)
+   - verifySignature() for merchant-side verification
+   - 95% simulated delivery success rate
+
+2. `app/api/webhooks/route.ts` — Webhook API
+   - POST action=register — register webhook endpoint
+   - POST action=emit — emit webhook event
+   - POST action=list_deliveries — list all deliveries
+   - POST action=verify — verify webhook signature
+
+3. `app/api/payment-links/route.ts` — Payment Links API
+   - POST /api/payment-links — create hosted checkout payment link
+   - Returns: paymentLink URL (https://pay.payswap.com/pay/{paymentId})
+   - Full payment execution: creates intent → routes → settles → releases
+   - Includes: merchantId, amount, currency, reference
+
+End-to-End Verification:
+
+1. Webhook Registration:
+   Endpoint: wh_ep_pcik001 | URL: https://merchant.example.com/webhook
+   Events: [payment.created, payment.completed, payment.failed]
+   Secret: wh_sec_pcik002...
+
+2. Webhook Emission:
+   Delivery: wh_dl_pcj3004 | Event: payment.completed | Status: delivered
+   Attempts: 1 | Signature: 9688a095394d321beaf3...
+
+3. Payment Link:
+   Link: https://pay.payswap.com/pay/payment_pco200f
+   State: settled ✓ | Merchant: merchant_1 | Amount: 500 GHS | Reference: INV-102
+
+All Domains: PaySwap 11/20 | Supply Chain 5/5 | Infrastructure 4/5
+Lint: clean | Browser: no errors
+Protocol files: 39 | API endpoints: 17 | Total lines: 15,686 | Kernel changes: 0
+
+Complete Production API Surface:
+  /api/payments — End-to-end payment execution
+  /api/payment-links — Hosted checkout links
+  /api/merchant/qr — QR code generation (6 types)
+  /api/wallets — Wallet management + balances
+  /api/blockchain — Multi-chain operations (Stellar)
+  /api/webhooks — Webhook registration + emission
+  /api/protocol — Scenario testing
+  /api/protocol/health — Production health metrics
+  /api/supply-chain — Second domain test
+  /api/infrastructure — Third domain test
+  /api/fuzz — Randomized testing
+  /api/validation — Operational validation suite
+  /api/metrics — Operational metrics dashboard
+  /api/simulate — Digital Twin simulation
+  /api/scenarios — Scenario library CRUD

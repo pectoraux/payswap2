@@ -60,6 +60,10 @@ export type { QRPayload, QRCode, QRType } from './qr/qr-service';
 export { BlockchainAdapterRegistry, blockchainRegistry } from './blockchains/adapter';
 export type { BlockchainAdapter } from './blockchains/adapter';
 export { StellarAdapter, stellarAdapter } from './blockchains/stellar/adapter';
+
+// Webhooks
+export { webhookEngine, WebhookEngine } from './webhooks/engine';
+export type { WebhookEndpoint, WebhookDelivery } from './webhooks/engine';
 export { createFiatProof, computeConfidence, effectiveLiquidity } from './economics/fiat-proof';
 export { createAttestation, ATTESTATION_LABELS } from './economics/attestation';
 export type { Attestation, AttestationKind } from './economics/attestation';
