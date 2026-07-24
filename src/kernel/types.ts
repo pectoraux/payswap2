@@ -832,6 +832,7 @@ export interface RuntimeServiceSummary {
   name: string;
   owns: string;
   status: 'online' | 'degraded' | 'offline';
+  layer: 'kernel' | 'protocol' | 'apps';
   engineCount: number;
 }
 

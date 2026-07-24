@@ -62,14 +62,26 @@ export const ENGINES: EngineHealth[] = [
 export const ENGINE_COUNT = ENGINES.length;
 
 /**
- * The 5 Runtime Services — the final consolidated architecture.
- * Everything financial lives in the data model (entities + capabilities),
- * not in the runtime. The runtime itself stays very small.
+ * The 3-Layer Architecture:
+ *
+ *   Kernel:     Planner, Executor, Event Store, Projection Engine
+ *   Protocol:   PaySwap (LP, Escrow, Treasury, Disputes, Auctions, Governance)
+ *   Apps:       Merchant Portal, LP Portal, Wallet, Explorer, Digital Twin
  */
-export const RUNTIME_SERVICES: { name: string; owns: string; status: 'online' | 'degraded' | 'offline'; engineCount: number }[] = [
-  { name: 'World Runtime', owns: 'Event store, entities, snapshots, graph', status: 'online', engineCount: 6 },
-  { name: 'Constraint Runtime', owns: 'Constitution, organization policies, permissions', status: 'online', engineCount: 7 },
-  { name: 'Solver Runtime', owns: 'Generic constraint solver, graph search, reasoning', status: 'online', engineCount: 4 },
-  { name: 'Execution Runtime', owns: 'DAG execution, state machines, retries, compensation, replay', status: 'online', engineCount: 6 },
-  { name: 'Developer Runtime', owns: 'Intents, extensions, SDK, APIs, capabilities registry', status: 'online', engineCount: 6 },
+export const RUNTIME_SERVICES: { name: string; owns: string; status: 'online' | 'degraded' | 'offline'; layer: 'kernel' | 'protocol' | 'apps'; engineCount: number }[] = [
+  // Kernel Layer
+  { name: 'Planner', owns: 'Convergence planning, capability search, strategy', status: 'online', layer: 'kernel', engineCount: 2 },
+  { name: 'Executor', owns: 'Execution plan, state machines, replay, compensation', status: 'online', layer: 'kernel', engineCount: 3 },
+  { name: 'Event Store', owns: 'Event sourcing, world state, snapshots', status: 'online', layer: 'kernel', engineCount: 2 },
+  { name: 'Projection Engine', owns: 'Reputation, exposure, capacity, risk — all derived from events', status: 'online', layer: 'kernel', engineCount: 1 },
+  // Protocol Layer (PaySwap)
+  { name: 'Protocol: Escrow', owns: 'Settlement escrow, frozen tokens, release/slash', status: 'online', layer: 'protocol', engineCount: 2 },
+  { name: 'Protocol: LP', owns: 'LP registry, exposure, reputation, lifecycle', status: 'online', layer: 'protocol', engineCount: 3 },
+  { name: 'Protocol: Treasury', owns: 'Reserve management, stablecoin, rebalancing', status: 'online', layer: 'protocol', engineCount: 2 },
+  { name: 'Protocol: Disputes', owns: 'Evidence, voting, adjudication, slashing', status: 'online', layer: 'protocol', engineCount: 2 },
+  { name: 'Protocol: Settlement', owns: 'Auctions, net settlement, manual settlement', status: 'online', layer: 'protocol', engineCount: 3 },
+  { name: 'Protocol: Governance', owns: 'Constitution, policies, permissions, audit', status: 'online', layer: 'protocol', engineCount: 4 },
+  // Apps Layer
+  { name: 'Apps: Digital Twin', owns: 'Simulation, replay, fuzzing, scenario library', status: 'online', layer: 'apps', engineCount: 2 },
+  { name: 'Apps: Developer API', owns: 'Intent API, extensions, SDK, webhooks', status: 'online', layer: 'apps', engineCount: 2 },
 ];

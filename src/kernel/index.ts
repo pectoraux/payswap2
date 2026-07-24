@@ -41,6 +41,8 @@ export { ResourceReservation, resourceReservation } from './resource-reservation
 export type { Reservation, ReservationState, ResourceCapacity } from './resource-reservation';
 export { ConfidenceService, confidenceService } from './confidence-service';
 export type { ConfidenceQuery, ConfidenceResult } from './confidence-service';
+export { ProjectionEngine, projectionEngine, reputationProjection, exposureProjection, settlementRateProjection, riskProjection, capacityProjection } from './projection-engine';
+export type { Projection, WorldEvent as ProjectionEvent } from './projection-engine';
 export { PlanExecutor } from './plan-executor';
 export { LedgerEngine } from './ledger';
 export { ReserveEngine } from './reserve';

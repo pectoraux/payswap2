@@ -550,3 +550,56 @@ Verification:
 - Architecture Reduction Report produced (ARCHITECTURE-REDUCTION-REPORT.md)
 
 The architecture is now the smallest it can be while still modeling the complete PaySwap protocol. 8 primitives, 49 kernel files, 11,407 lines. No more architectural evolution — the next phase is operational: production connectors, real protocol behavior, exhaustive testing.
+
+---
+Task ID: V2.0 (Kernel Frozen — Final Adjustments)
+Agent: main (Z.ai Code)
+Task: Final adjustments before declaring kernel frozen. (1) Unhide Evidence — confidence carries derivedFrom references. (2) Projection Engine — all derived values are event projections. (3) Collapse to 3 layers: Kernel / Protocol / Apps.
+
+Work Log:
+- Updated `confidence-service.ts`: ConfidenceResult now includes `derivedFrom: string[]` (evidence IDs) and `derivedFromSources: string[]` (human-readable sources). The planner sees BOTH confidence AND evidence references — explainability preserved. "Why was LP2 selected?" → "Because confidence=0.92 derived from: Open Banking proof, settlement history, merchant acknowledgement."
+- New `kernel/projection-engine.ts`: Projection Engine — everything derived is a projection. 5 built-in projections: reputationProjection, exposureProjection, settlementRateProjection, riskProjection, capacityProjection. All compute by folding events. No mutable derived values in storage. ProjectionEngine.projectAll(events, entityId) returns all projections for an entity.
+- Updated `kernel/registry.ts`: Collapsed from 5 runtime services to 3 layers:
+  - Kernel: Planner, Executor, Event Store, Projection Engine (4 services)
+  - Protocol: Escrow, LP, Treasury, Disputes, Settlement, Governance (6 services)
+  - Apps: Digital Twin, Developer API (2 services)
+- Updated `kernel/types.ts`: RuntimeServiceSummary now includes `layer: 'kernel' | 'protocol' | 'apps'`.
+- Updated version to 2.0.0-frozen.
+
+The 8 Frozen Primitives (FINAL — no more will be added or removed):
+1. Entity — objects in the world
+2. Capability — what an entity can do (retained: planner needs discoverable capabilities)
+3. Evidence — immutable supporting facts (visible to planner via confidence + derivedFrom)
+4. Proposal — bilateral lifecycle → obligation (merges Claim + Commitment)
+5. Obligation — outstanding responsibilities (owns settlement rights)
+6. Command — requested changes
+7. Transition — planned atomic state change (separate from Event: planned vs completed)
+8. Event — immutable historical record (source of truth)
+
+The 3-Layer Architecture:
+  Kernel:     Planner, Executor, Event Store, Projection Engine
+  Protocol:   PaySwap (LP, Escrow, Treasury, Disputes, Auctions, Governance)
+  Apps:       Merchant Portal, LP Portal, Wallet, Explorer, Digital Twin
+
+Key Design Decisions (final):
+- Evidence NOT hidden from planner: confidence includes derivedFrom evidence references for explainability
+- Transition NOT merged with Event: Transition=planned action, Event=completed action
+- Capability NOT removed: planner needs discoverable capabilities (user's caution was correct)
+- Claim+Commitment merged into Proposal: one bilateral lifecycle, not two
+- Exposure Lease replaced by generic Resource Reservation
+- All derived values are projections: reputation, exposure, capacity, risk — fold(events)
+
+Verification:
+- Lint clean
+- 11/20 protocol scenarios pass (SAME distribution — zero regression across all versions)
+- 100 fuzz iterations: 61% pass, 80% convergence, 1 deterministic failure
+- Agent Browser: no errors
+- Version 2.0.0-frozen
+- Kernel files: 50 | Protocol files: 13 | Total: 11,581 lines | Primitives: 8 | Layers: 3
+
+THE KERNEL IS FROZEN. The next milestone is operational:
+1. Property-based testing (10,000 random worlds)
+2. Replay determinism
+3. Fault injection
+4. Performance (planning latency, convergence rate, event throughput)
+5. Production adapters (Open Banking, blockchain, PSPs)

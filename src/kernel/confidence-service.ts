@@ -33,6 +33,8 @@ export interface ConfidenceResult {
   evidenceCount: number;
   bestSource: string | null;
   explanation: string;
+  derivedFrom: string[];        // evidence IDs — for explainability
+  derivedFromSources: string[]; // evidence sources — human-readable
 }
 
 export class ConfidenceService {
@@ -68,13 +70,15 @@ export class ConfidenceService {
     );
 
     if (relevant.length === 0) {
-      return { confidence: 0, effectiveCapacity: 0, evidenceCount: 0, bestSource: null, explanation: 'No valid evidence' };
+      return { confidence: 0, effectiveCapacity: 0, evidenceCount: 0, bestSource: null, explanation: 'No valid evidence', derivedFrom: [], derivedFromSources: [] };
     }
 
     // Compute confidence for each evidence item, factoring in connector health
     let bestConfidence = 0;
     let bestAmount = 0;
     let bestSource: string | null = null;
+    const derivedFrom: string[] = [];
+    const derivedFromSources: string[] = [];
 
     // Get entity reputation from event projection
     const entityEvents = this.events.filter((e) => e.entityId === entityId || e.payload.entityId === entityId);
@@ -84,6 +88,9 @@ export class ConfidenceService {
       const baseConfidence = computeEvidenceConfidence(ev, now);
       const connectorHealth = this.connectorHealth.get(ev.source) ?? 1.0;
       const adjustedConfidence = baseConfidence * connectorHealth;
+
+      derivedFrom.push(ev.id);
+      derivedFromSources.push(ev.source);
 
       if (adjustedConfidence > bestConfidence) {
         bestConfidence = adjustedConfidence;
@@ -101,6 +108,8 @@ export class ConfidenceService {
       evidenceCount: relevant.length,
       bestSource,
       explanation: `${bestSource} (${bestConfidence.toFixed(2)} confidence, ${relevant.length} evidence, rep ${reputation.toFixed(2)}, connector ${(this.connectorHealth.get(bestSource ?? '') ?? 1).toFixed(2)})`,
+      derivedFrom,
+      derivedFromSources,
     };
   }
 
