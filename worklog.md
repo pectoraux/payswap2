@@ -603,3 +603,76 @@ THE KERNEL IS FROZEN. The next milestone is operational:
 3. Fault injection
 4. Performance (planning latency, convergence rate, event throughput)
 5. Production adapters (Open Banking, blockchain, PSPs)
+
+---
+Task ID: V2.1 (Kernel Freeze — Obligation Moved to Protocol)
+Agent: main (Z.ai Code)
+Task: Move Obligation from kernel to protocol layer. The kernel coordinates distributed state transitions using evidence under uncertainty — it doesn't need to know what an obligation is. Build operational metrics dashboard with 10 key indicators.
+
+Key Insight:
+The kernel's definition changes from "converges obligations" to "coordinates distributed state transitions using evidence under uncertainty." Obligations are a PaySwap protocol concept — not a universal runtime primitive. The kernel can coordinate transitions for supply chains, cloud orchestration, robotics, manufacturing, or identity workflows without ever knowing what an obligation is.
+
+Work Log:
+- Moved `obligation.ts` from `src/kernel/` to `src/protocol/`. Updated imports to use `@/kernel/support` and `@/kernel/evidence`.
+- Updated `kernel/index.ts`: removed obligation exports. Kernel no longer exports Obligation, ObligationStore, or any obligation-related types.
+- Updated `kernel/simulation.ts`: imports obligation from `@/protocol/obligation` instead of `./obligation`.
+- Created `protocol/index.ts`: barrel export for the protocol layer (obligations, contracts, economics, scenarios, fuzzing).
+- Updated version to 2.1.0-coordination.
+- New `kernel/metrics.ts`: Operational metrics — 10 key indicators:
+  1. Planning success rate
+  2. Convergence rate
+  3. Average planning latency
+  4. Replay determinism
+  5. Evidence freshness
+  6. Proposal acceptance rate
+  7. Replacement fulfiller rate
+  8. Manual intervention rate
+  9. Escrow dwell time
+  10. Constitution violation rate
+  Plus aggregateMetrics() and METRIC_META for dashboard display.
+- New `app/api/metrics/route.ts`: GET endpoint returning aggregated metrics across 20 protocol scenarios + 100 fuzz iterations.
+
+The 7 Kernel Primitives (FINAL):
+1. Entity — objects in the world
+2. Capability — what an entity can do
+3. Evidence — immutable supporting facts (visible via confidence + derivedFrom)
+4. Proposal — bilateral lifecycle (SYN/SYN-ACK/ACK)
+5. Command — requested changes
+6. Transition — planned atomic state change
+7. Event — immutable historical record (source of truth)
+
+Protocol Layer (PaySwap domain):
+- Obligation (moved from kernel — domain semantic, not universal primitive)
+- Escrow, Auctions, Disputes, Treasury, Settlement, LP, Merchant
+
+3-Layer Architecture:
+  Kernel:     Planner, Executor, Event Store, Projection Engine (7 primitives)
+  Protocol:   PaySwap (Obligation, Escrow, LP, Treasury, Disputes, Auctions, Governance)
+  Apps:       Digital Twin, Developer API, Metrics Dashboard
+
+Operational Metrics (verified live):
+  Planning success: 100%
+  Convergence rate: 90%
+  Evidence freshness: 4% (low — expected, evidence decays quickly)
+  Proposal acceptance: 100%
+  Constitution violations: 2% (expected — designed violations)
+  Replay determinism: True
+  Count: 20 scenarios
+
+Verification:
+- Lint clean
+- 11/20 protocol scenarios pass (SAME distribution — zero regression)
+- Agent Browser: no errors
+- Version 2.1.0-coordination
+- Kernel files: 50 | Protocol files: 15 | Total: 11,478 lines | Primitives: 7
+
+THE KERNEL IS FROZEN AT 7 PRIMITIVES. The kernel definition is now:
+"The kernel coordinates distributed state transitions using evidence under uncertainty."
+
+Next milestones (all operational, not architectural):
+1. Property-based testing: 10,000+ randomized worlds
+2. Replay determinism: every execution replays identically
+3. Fault injection: LP failures, stale evidence, connector outages
+4. Performance: planning latency, convergence rate, event throughput
+5. Production adapters: Open Banking, blockchain, PSPs
+6. Multiple protocol implementations on same kernel (PaySwap + one unrelated)

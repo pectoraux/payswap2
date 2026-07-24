@@ -33,8 +33,6 @@ export { createEventSourcedWorld, appendEvent, appendTransition, currentWorld, r
 export type { EventSourcedWorld, WorldEvent } from './event-sourced-world';
 export { createEvidence, computeEvidenceConfidence, effectiveLiquidityFromEvidence, expireEvidence, revokeEvidence, validEvidenceFor, EvidenceStore, evidenceStore, EvidenceGraph, evidenceGraph } from './evidence';
 export type { Evidence, EvidenceType, EvidenceSource, VerificationLevel, EvidenceCitation, EvidenceNode } from './evidence';
-export { obligation, transitionObligation, transferFulfiller, isOverdue, isActive, ObligationStore, obligationStore, OBLIGATION_LABELS } from './obligation';
-export type { Obligation, ObligationType, ObligationState, ObligationPriority } from './obligation';
 export { proposal, accept as acceptProposal, reject as rejectProposal, activate as activateProposal, complete as completeProposal, expire as expireProposal, withdraw as withdrawProposal, breach as breachProposal, canActivate, isExpired as isProposalExpired, isActive as isProposalActive, ProposalStore, proposalStore, PROPOSAL_LABELS } from './proposal';
 export type { Proposal, ProposalType, ProposalState } from './proposal';
 export { ResourceReservation, resourceReservation } from './resource-reservation';

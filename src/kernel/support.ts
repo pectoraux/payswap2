@@ -4,7 +4,7 @@
  */
 import type { CurrencyCode, CurrencyMeta, Country, FinancialOperatorType, OptimizationWeights, RoutingPriority } from './types';
 
-export const KERNEL_VERSION = '2.0.0-frozen';
+export const KERNEL_VERSION = '2.1.0-coordination';
 
 export const CURRENCIES: Record<CurrencyCode, CurrencyMeta> = {
   KES: { code: 'KES', symbol: 'KSh', name: 'Kenyan Shilling', decimals: 2, countries: ['Kenya'] },
