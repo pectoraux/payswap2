@@ -1,22 +1,17 @@
 /**
- * PaySwap Runtime — Constraint Solver (generic).
+ * PaySwap Runtime — Convergence Planner.
  *
- * The solver does NOT know finance. It knows only:
- *   - World Graph (entities + capabilities + edges)
- *   - State Machines
- *   - Policies
- *   - Objectives
+ * The planner does NOT know finance. It knows only:
+ *   - Entities + Capabilities
+ *   - Evidence + Claims
  *   - Constraints
  *
- * It never hardcodes "if reserve exists" or "if LP exists". It asks the graph:
- * "who canBridge? who canDebit? who canCredit?" and the graph answers based on
- * declared capabilities. This is what makes the runtime general-purpose.
+ * PLANNING vs STRATEGY are separated:
+ *   Planner answers: "Can this converge?" (feasibility)
+ *   Strategy answers: "Which path do we prefer?" (cost, speed, fraud risk, etc.)
  *
- * Input:  Intent (currentWorld + desiredWorld + constraints + objectives + policies)
- * Output: Execution Graph (DAG of Transitions)
- *
- * The solver produces candidates by searching the capability graph, scores
- * them against objectives, and returns the winner + rejected alternatives.
+ * Input:  Intent (currentWorld + desiredWorld + constraints + strategy)
+ * Output: Execution Plan (DAG of Transitions) — a proof of convergence
  */
 import type { Entity } from './entity';
 import type { Capability } from './capabilities';
@@ -36,7 +31,8 @@ export interface ConvergenceIntent {
   policies: { reservePolicy: string; maxLpShare: number; requireInsurance: boolean };
 }
 
-export interface SolverCandidate {
+/** A proof of convergence — demonstrates the world can reach the desired state. */
+export interface ConvergencePlan {
   id: string;
   label: string;
   transitions: Transition[];
@@ -54,19 +50,32 @@ export interface SolverCandidate {
   usesTreasury: boolean;
 }
 
-export interface SolverOutput {
-  transitions: Transition[];       // the winner's transitions
-  candidates: SolverCandidate[];   // all candidates (winner + rejected)
-  winner: SolverCandidate;
+/** Strategy — determines which convergent plan is preferred. */
+export interface Strategy {
+  objectives: OptimizationWeights;
+  minConfidence: number;
+  maxCost: number;
+  maxLatencyMs: number;
 }
 
-export class ConstraintSolver {
+export interface PlannerOutput {
+  transitions: Transition[];       // the winner's transitions
+  plans: ConvergencePlan[];        // all plans (winner + rejected)
+  winner: ConvergencePlan;
+}
+
+/**
+ * Convergence Planner — determines whether convergence is possible.
+ * Strategy — determines which convergent plan is preferred.
+ * These are separate concerns: changing business goals never changes the planner.
+ */
+export class ConvergencePlanner {
   /**
    * Converge: given the current world and desired deltas, find the best
    * sequence of valid state transitions. The solver queries capabilities — it
    * never hardcodes entity types.
    */
-  converge(intent: ConvergenceIntent): SolverOutput {
+  converge(intent: ConvergenceIntent): PlannerOutput {
     const { currentWorld, desiredWorld, objectives } = intent;
     const entities = currentWorld.entities;
     const evidence = currentWorld.evidence ?? [];
@@ -76,32 +85,32 @@ export class ConstraintSolver {
     // confidence to bridge the gap. It queries: who canBridge? What evidence
     // do we have for their liquidity?
 
-    const candidates: SolverCandidate[] = [];
+    const plans: ConvergencePlan[] = [];
 
     const bridgeEntities = entitiesWithCapability(entities, 'canBridge');
     const debitEntities = entitiesWithCapability(entities, 'canDebit');
     const creditEntities = entitiesWithCapability(entities, 'canCredit');
 
     // Candidate A: Pure bridge (evidence-weighted, cheapest first)
-    candidates.push(this.candidatePureBridge(entities, evidence, desiredWorld.deltas, bridgeEntities, objectives, 'Pure bridge (evidence-weighted)'));
+    plans.push(this.candidatePureBridge(entities, evidence, desiredWorld.deltas, bridgeEntities, objectives, 'Pure bridge (evidence-weighted)'));
 
     // Candidate B: Reserve + bridge
-    candidates.push(this.candidateReserveBridge(entities, evidence, desiredWorld.deltas, debitEntities, bridgeEntities, objectives, 'Reserve debit + bridge'));
+    plans.push(this.candidateReserveBridge(entities, evidence, desiredWorld.deltas, debitEntities, bridgeEntities, objectives, 'Reserve debit + bridge'));
 
     // Candidate C: Fastest (highest confidence bridge first)
-    candidates.push(this.candidateFastest(entities, evidence, desiredWorld.deltas, bridgeEntities, objectives, 'Fastest (highest confidence)'));
+    plans.push(this.candidateFastest(entities, evidence, desiredWorld.deltas, bridgeEntities, objectives, 'Fastest (highest confidence)'));
 
     // Candidate D: Diversified
-    candidates.push(this.candidateDiversified(entities, evidence, desiredWorld.deltas, bridgeEntities, objectives, 'Diversified bridges'));
+    plans.push(this.candidateDiversified(entities, evidence, desiredWorld.deltas, bridgeEntities, objectives, 'Diversified bridges'));
 
     // Candidate E: Treasury swap
     const swapEntities = entitiesWithCapability(entities, 'canSwap');
     if (swapEntities.length > 0) {
-      candidates.push(this.candidateTreasury(entities, evidence, desiredWorld.deltas, swapEntities, bridgeEntities, objectives, 'Treasury swap'));
+      plans.push(this.candidateTreasury(entities, evidence, desiredWorld.deltas, swapEntities, bridgeEntities, objectives, 'Treasury swap'));
     }
 
-    // Score all candidates
-    const scored = candidates.map((c) => ({
+    // STRATEGY: score and rank plans (separate from planning feasibility)
+    const scored = plans.map((c) => ({
       ...c,
       objectiveScores: this.scoreObjectives(c, objectives, desiredWorld.deltas),
     }));
@@ -115,14 +124,14 @@ export class ConstraintSolver {
     });
 
     const winner = scored[0];
-    return { transitions: winner.transitions, candidates: scored, winner };
+    return { transitions: winner.transitions, plans: scored, winner };
   }
 
   /* ----------------------------------------------------------------------- */
   /* Candidate generators — ALL generic, query capabilities, never hardcode  */
   /* ----------------------------------------------------------------------- */
 
-  private candidatePureBridge(entities: Entity[], evidence: Evidence[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
+  private candidatePureBridge(entities: Entity[], evidence: Evidence[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): ConvergencePlan {
     // Find bridge entities sorted by fee (lowest cost first), using EVIDENCE-BASED liquidity
     const now = Date.now();
     const scored = bridges.map((b) => {
@@ -170,7 +179,7 @@ export class ConstraintSolver {
     };
   }
 
-  private candidateReserveBridge(entities: Entity[], evidence: Evidence[], deltas: any[], debits: Entity[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
+  private candidateReserveBridge(entities: Entity[], evidence: Evidence[], deltas: any[], debits: Entity[], bridges: Entity[], objectives: OptimizationWeights, label: string): ConvergencePlan {
     const amount = deltas.find((d) => d.amount > 0)?.amount ?? 0;
     const reserve = debits.find((e) => e.type === 'reserve' && e.balance >= amount * 0.8);
     const reserveDraw = reserve ? Math.min(amount * 0.8, reserve.balance) : 0;
@@ -220,7 +229,7 @@ export class ConstraintSolver {
     };
   }
 
-  private candidateFastest(entities: Entity[], evidence: Evidence[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
+  private candidateFastest(entities: Entity[], evidence: Evidence[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): ConvergencePlan {
     // Sort by effective liquidity (highest confidence first)
     const now = Date.now();
     const scored = bridges.map((b) => {
@@ -260,7 +269,7 @@ export class ConstraintSolver {
     };
   }
 
-  private candidateDiversified(entities: Entity[], evidence: Evidence[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
+  private candidateDiversified(entities: Entity[], evidence: Evidence[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): ConvergencePlan {
     const now = Date.now();
     const scored = bridges.map((b) => {
       const { amount } = effectiveLiquidityFromEvidence(evidence, b.id, b.currency ?? 'GHS', now);
@@ -302,7 +311,7 @@ export class ConstraintSolver {
     };
   }
 
-  private candidateTreasury(entities: Entity[], evidence: Evidence[], deltas: any[], swaps: Entity[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
+  private candidateTreasury(entities: Entity[], evidence: Evidence[], deltas: any[], swaps: Entity[], bridges: Entity[], objectives: OptimizationWeights, label: string): ConvergencePlan {
     const amount = deltas.find((d) => d.amount > 0)?.amount ?? 0;
     const treasury = swaps[0];
     const treasuryDraw = Math.min(amount, treasury.balance);
@@ -353,7 +362,7 @@ export class ConstraintSolver {
   /* Scoring (generic — no finance knowledge)                                 */
   /* ----------------------------------------------------------------------- */
 
-  private scoreObjectives(c: SolverCandidate, weights: OptimizationWeights, deltas: any[]): ObjectiveScore[] {
+  private scoreObjectives(c: ConvergencePlan, weights: OptimizationWeights, deltas: any[]): ObjectiveScore[] {
     const amount = deltas.find((d) => d.amount > 0)?.amount ?? 1;
     const costPercent = round((c.totalCost / amount) * 100, 4);
     const costScore = Math.max(0, 1 - costPercent / 5);
@@ -388,7 +397,7 @@ export class ConstraintSolver {
     return Math.min(1, round(concentration + pathRisk + manualRisk, 4));
   }
 
-  private rejectionReason(c: SolverCandidate, best: SolverCandidate): string {
+  private rejectionReason(c: ConvergencePlan, best: ConvergencePlan): string {
     const reasons: string[] = [];
     if (c.totalCost > best.totalCost) reasons.push(`cost ${round(c.totalCost, 2)} > ${round(best.totalCost, 2)}`);
     if (c.totalLatencyMs > best.totalLatencyMs) reasons.push(`slower by ${formatDuration(c.totalLatencyMs - best.totalLatencyMs)}`);
@@ -398,4 +407,4 @@ export class ConstraintSolver {
   }
 }
 
-export const constraintSolver = new ConstraintSolver();
+export const convergencePlanner = new ConvergencePlanner();

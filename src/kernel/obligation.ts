@@ -24,18 +24,17 @@ import { uid } from './support';
 import type { EvidenceCitation } from './evidence';
 
 export type ObligationType =
-  | 'fiat_settlement'      // LP owes merchant fiat
-  | 'token_release'        // escrow owes token release
-  | 'confirmation'         // merchant owes confirmation
-  | 'rebalance'            // treasury owes reserve rebalance
-  | 'dispute_resolution'   // governance owes dispute resolution
-  | 'evidence_submission'  // LP owes evidence of settlement
-  | 'replacement_settlement' // replacement LP owes settlement
-  | 'collateral_release'   // vault owes collateral release
-  | 'exposure_release'     // LP owes exposure release
-  | 'proof_submission'     // LP owes fiat proof
-  | 'vote'                 // community owes governance vote
-  | 'custom';
+  | 'deliver'      // generic: deliver something to someone
+  | 'confirm'      // generic: confirm receipt/acknowledgment
+  | 'authorize'    // generic: authorize an action
+  | 'verify'       // generic: verify a claim or state
+  | 'transfer'     // generic: transfer ownership/rights
+  | 'approve'      // generic: approve a request
+  | 'release'      // generic: release a held resource
+  | 'submit'       // generic: submit evidence/proof
+  | 'resolve'      // generic: resolve a dispute
+  | 'rebalance'    // generic: rebalance state
+  | 'custom';      // domain-specific (PaySwap types live in protocol layer)
 
 export type ObligationState =
   | 'created'
@@ -229,16 +228,15 @@ export const obligationStore = new ObligationStore();
 
 /** Human-readable labels. */
 export const OBLIGATION_LABELS: Record<ObligationType, string> = {
-  fiat_settlement: 'Fiat Settlement',
-  token_release: 'Token Release',
-  confirmation: 'Confirmation',
+  deliver: 'Deliver',
+  confirm: 'Confirm',
+  authorize: 'Authorize',
+  verify: 'Verify',
+  transfer: 'Transfer',
+  approve: 'Approve',
+  release: 'Release',
+  submit: 'Submit',
+  resolve: 'Resolve',
   rebalance: 'Rebalance',
-  dispute_resolution: 'Dispute Resolution',
-  evidence_submission: 'Evidence Submission',
-  replacement_settlement: 'Replacement Settlement',
-  collateral_release: 'Collateral Release',
-  exposure_release: 'Exposure Release',
-  proof_submission: 'Proof Submission',
-  vote: 'Governance Vote',
   custom: 'Custom',
 };

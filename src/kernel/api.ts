@@ -34,7 +34,7 @@ import { SimulationEngine } from './simulation';
 import { WorldStore, buildWorldFromScenario, type WorldState as CanonicalWorldState } from './world-store';
 import { createEventSourcedWorld, appendTransition, currentWorld, type EventSourcedWorld } from './event-sourced-world';
 import { entitiesFromScenario, type Entity } from './entity';
-import { ConstraintSolver, type ConvergenceIntent, type SolverOutput } from './solver';
+import { ConvergencePlanner, type ConvergenceIntent, type PlannerOutput } from './planner';
 import { capabilityRegistry } from './capabilities';
 import { treasuryEngine } from './treasury';
 import { insuranceEngine } from './insurance';
@@ -188,8 +188,7 @@ export class IntentBuilder {
 }
 
 class KernelAPI {
-  private optimizer = new OptimizationEngine();
-  private solver = new ConstraintSolver();
+  private planner = new ConvergencePlanner();
   private sim = new SimulationEngine();
 
   /**
@@ -199,8 +198,8 @@ class KernelAPI {
    * of valid state transitions. The solver queries capabilities — it never
    * hardcodes finance. This is the universal API for every financial operation.
    */
-  converge(intent: ConvergenceIntent): SolverOutput {
-    return this.solver.converge(intent);
+  converge(intent: ConvergenceIntent): PlannerOutput {
+    return this.planner.converge(intent);
   }
 
   /** The intent builder — developers use this. */
@@ -216,8 +215,7 @@ class KernelAPI {
 
   /** Plan a liquidity movement from a scenario (low-level). */
   plan(scenario: SimulationScenario): LiquidityExecutionPlan {
-    const canonicalWorld = buildWorldFromScenario(scenario);
-    return this.optimizer.optimize({ scenario, world: canonicalWorld, objectives: scenario.aiWeights }).plan;
+    return this.sim.run(scenario).plan;
   }
 
   /** Run a full Digital Twin simulation. */

@@ -54,7 +54,7 @@ import type { ReasoningResultSummary, ExecutionGraphSummary, EntitySummary, Orga
 import { entitiesFromScenario } from './entity';
 import { buildExecutionGraph, topologicalOrder } from './execution-graph';
 import { Commands } from './command';
-import { ConstraintSolver } from './solver';
+import { ConvergencePlanner } from './planner';
 import { capabilityRegistry, ALL_CAPABILITIES } from './capabilities';
 import { createEventSourcedWorld, appendTransition, currentWorld, type EventSourcedWorld } from './event-sourced-world';
 import { createEvidence, type Evidence as KernelEvidence } from './evidence';
@@ -328,7 +328,7 @@ export class SimulationEngine {
 
     // 17. Generic Constraint Solver — converges world via capability queries.
     const allEntities = entitiesFromScenario(scenario);
-    const solver = new ConstraintSolver();
+    const solver = new ConvergencePlanner();
     const amount = scenario.transaction.amount;
     const cur = scenario.transaction.merchant.currency;
 
@@ -362,7 +362,7 @@ export class SimulationEngine {
       policies: { reservePolicy: scenario.policies.reservePolicy, maxLpShare: scenario.policies.maxLpShare, requireInsurance: scenario.policies.requireInsurance },
     });
 
-    const solverCandidates: SolverCandidateSummary[] = solverOutput.candidates.map((c) => ({
+    const solverCandidates: SolverCandidateSummary[] = solverOutput.plans.map((c) => ({
       id: c.id, label: c.label, transitionCount: c.transitions.length, totalCost: round(c.totalCost, 6),
       totalLatencyMs: c.totalLatencyMs, riskScore: c.riskScore, confidence: c.confidence,
       weightedScore: c.weightedScore, feasible: c.feasible, selected: c.selected,
@@ -393,7 +393,7 @@ export class SimulationEngine {
     const obligations: ObligationSummary[] = [];
     for (const draw of plan.sourceDraws) {
       const ob = obligationStore.register(obligation({
-        type: 'fiat_settlement',
+        type: 'deliver',
         priority: 'critical',
         obligorId: `lp:${draw.sourceId}`,
         obligeeId: 'wallet:merchant',
@@ -415,7 +415,7 @@ export class SimulationEngine {
     }
     // Merchant owes confirmation
     const confirmOb = obligationStore.register(obligation({
-      type: 'confirmation',
+      type: 'confirm',
       priority: 'high',
       obligorId: 'wallet:merchant',
       obligeeId: 'system',
