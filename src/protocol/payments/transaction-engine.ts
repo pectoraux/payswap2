@@ -19,6 +19,7 @@ import { settlementEscrow } from '../settlement/escrow';
 import { lpLifecycle } from '../lp-lifecycle-manager';
 import { merchantRegistry } from '../merchant-registry';
 import { resourceReservation } from '@/kernel/resource-reservation';
+import { webhookEngine } from '../webhooks/engine';
 import { RoutingService, type SettlementPlan } from './routing-service';
 import { SettlementOrchestrator } from './settlement-orchestrator';
 import { PaymentService, type PaymentIntent, type PaymentRequest, type PaymentResult, type PaymentState } from './payment-service';
@@ -41,6 +42,12 @@ export class TransactionEngine {
       receiverId: request.receiverId,
       priority: request.priority,
     }, 0);
+    // Fire webhook
+    webhookEngine.emit({
+      merchantId: request.receiverId,
+      eventType: 'payment.created',
+      payload: { paymentId: intent.id, amount: request.sourceAmount, currency: request.sourceCurrency, senderId: request.senderId },
+    }).catch(() => {});
     return intent;
   }
 
@@ -166,6 +173,13 @@ export class TransactionEngine {
     const settlementTimeMs = Date.now() - startMs;
     eventEngine.emit('payment.settled', { paymentId, escrowId: payment.escrowId, settlementTimeMs, cost: 0 }, 0);
 
+    // Fire webhook: payment.completed
+    webhookEngine.emit({
+      merchantId: payment.receiverId,
+      eventType: 'payment.completed',
+      payload: { paymentId, amount: payment.destinationAmount, currency: payment.destinationCurrency, settlementTimeMs, lpId: payment.lpId, escrowId: payment.escrowId },
+    }).catch(() => {});
+
     return {
       paymentId,
       state: 'settled',
@@ -187,6 +201,13 @@ export class TransactionEngine {
     this.orchestrator.cancel(payment, reason);
     this.paymentService.updateState(paymentId, 'failed', `Cancelled: ${reason}`);
     eventEngine.emit('payment.failed', { paymentId, reason }, 0);
+
+    // Fire webhook: payment.failed
+    webhookEngine.emit({
+      merchantId: payment.receiverId,
+      eventType: 'payment.failed',
+      payload: { paymentId, reason, amount: payment.destinationAmount, currency: payment.destinationCurrency },
+    }).catch(() => {});
 
     return {
       paymentId,

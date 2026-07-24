@@ -19,6 +19,7 @@ import { OptimizationPanel } from '@/components/simulator/optimization-panel';
 import { StateMachinePanel } from '@/components/simulator/state-machine-panel';
 import { ReasoningPanel } from '@/components/simulator/reasoning-panel';
 import { SolverPanel, TransitionsPanel } from '@/components/simulator/solver-panel';
+import { CheckoutWidget } from '@/components/simulator/checkout-widget';
 import { ProtocolPanel } from '@/components/simulator/protocol-panel';
 import { ProtocolScenariosPanel, FiatProofPanel, ConstitutionalVerificationPanel } from '@/components/simulator/protocol-scenarios';
 import { ExecutionGraphDAG } from '@/components/simulator/execution-graph-dag';
@@ -297,6 +298,9 @@ export default function Home() {
             ) : result ? (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="space-y-4">
                 <MetricsPanel metrics={result.plan.metrics} currency={result.scenario.transaction.currency} settled={result.settled} />
+
+                {/* Production Checkout Widget */}
+                <CheckoutWidget />
 
                 {/* 6-view Financial Control Center */}
                 <Tabs value={activeTab} onValueChange={setActiveTab}>
