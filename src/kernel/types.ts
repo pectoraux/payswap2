@@ -773,6 +773,7 @@ export interface TransitionSummary {
   currency?: string;
   status: string;
   frame?: number;
+  evidenceCitations: { evidenceId: string; evidenceType: string; confidence: number; reliedOn: boolean }[];
 }
 
 export interface EventLogEntry {

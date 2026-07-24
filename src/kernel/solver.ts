@@ -23,13 +23,15 @@ import type { Capability } from './capabilities';
 import { entitiesWithCapability, entitiesWithCapabilityIn, canPerform } from './capabilities';
 import type { Transition } from './transition';
 import { transition, buildTransitionsForDelta } from './transition';
+import type { Evidence, EvidenceCitation } from './evidence';
+import { computeEvidenceConfidence, effectiveLiquidityFromEvidence } from './evidence';
 import type { OptimizationWeights, ObjectiveScore, CurrencyCode } from './types';
 import { uid, round, formatDuration, PRIORITY_WEIGHTS } from './support';
 
 export interface ConvergenceIntent {
-  currentWorld: { entities: Entity[] };
+  currentWorld: { entities: Entity[]; evidence: Evidence[] };
   desiredWorld: { deltas: { entityId: string; amount: number; command: string; capability: Capability; fromState: string; toState: string }[] };
-  constraints: { maxCostPercent: number; maxRiskScore: number; maxSettlementMs: number };
+  constraints: { maxCostPercent: number; maxRiskScore: number; maxSettlementMs: number; minConfidence: number };
   objectives: OptimizationWeights;
   policies: { reservePolicy: string; maxLpShare: number; requireInsurance: boolean };
 }
@@ -67,37 +69,35 @@ export class ConstraintSolver {
   converge(intent: ConvergenceIntent): SolverOutput {
     const { currentWorld, desiredWorld, objectives } = intent;
     const entities = currentWorld.entities;
+    const evidence = currentWorld.evidence ?? [];
 
-    // The desired deltas tell us what needs to happen (e.g. merchant +25000,
-    // buyer -25000). The solver must find entities with the right capabilities
-    // to bridge the gap. It queries: who canDebit? who canCredit? who canBridge?
+    // The desired deltas tell us what needs to happen. The solver must find
+    // entities with the right capabilities AND sufficient EVIDENCE-BASED
+    // confidence to bridge the gap. It queries: who canBridge? What evidence
+    // do we have for their liquidity?
 
     const candidates: SolverCandidate[] = [];
 
-    // Candidate 1: Find bridging entities (who canBridge) in the buyer country.
     const bridgeEntities = entitiesWithCapability(entities, 'canBridge');
     const debitEntities = entitiesWithCapability(entities, 'canDebit');
     const creditEntities = entitiesWithCapability(entities, 'canCredit');
 
-    // Generate candidate solutions by trying different capability combinations.
-    // The solver is generic — it doesn't know these are "LPs" or "reserves".
+    // Candidate A: Pure bridge (evidence-weighted, cheapest first)
+    candidates.push(this.candidatePureBridge(entities, evidence, desiredWorld.deltas, bridgeEntities, objectives, 'Pure bridge (evidence-weighted)'));
 
-    // Candidate A: Pure bridge (use canBridge entities, cheapest first)
-    candidates.push(this.candidatePureBridge(entities, desiredWorld.deltas, bridgeEntities, objectives, 'Pure bridge (capability-based)'));
+    // Candidate B: Reserve + bridge
+    candidates.push(this.candidateReserveBridge(entities, evidence, desiredWorld.deltas, debitEntities, bridgeEntities, objectives, 'Reserve debit + bridge'));
 
-    // Candidate B: Reserve + bridge (use canDebit reserve, then canBridge)
-    candidates.push(this.candidateReserveBridge(entities, desiredWorld.deltas, debitEntities, bridgeEntities, objectives, 'Reserve debit + bridge'));
+    // Candidate C: Fastest (highest confidence bridge first)
+    candidates.push(this.candidateFastest(entities, evidence, desiredWorld.deltas, bridgeEntities, objectives, 'Fastest (highest confidence)'));
 
-    // Candidate C: Fastest (largest capacity bridge entity first)
-    candidates.push(this.candidateFastest(entities, desiredWorld.deltas, bridgeEntities, objectives, 'Fastest (largest capacity)'));
+    // Candidate D: Diversified
+    candidates.push(this.candidateDiversified(entities, evidence, desiredWorld.deltas, bridgeEntities, objectives, 'Diversified bridges'));
 
-    // Candidate D: Diversified (spread across multiple bridge entities)
-    candidates.push(this.candidateDiversified(entities, desiredWorld.deltas, bridgeEntities, objectives, 'Diversified bridges'));
-
-    // Candidate E: Treasury (use canSwap entities — treasury)
+    // Candidate E: Treasury swap
     const swapEntities = entitiesWithCapability(entities, 'canSwap');
     if (swapEntities.length > 0) {
-      candidates.push(this.candidateTreasury(entities, desiredWorld.deltas, swapEntities, bridgeEntities, objectives, 'Treasury swap'));
+      candidates.push(this.candidateTreasury(entities, evidence, desiredWorld.deltas, swapEntities, bridgeEntities, objectives, 'Treasury swap'));
     }
 
     // Score all candidates
@@ -122,31 +122,40 @@ export class ConstraintSolver {
   /* Candidate generators — ALL generic, query capabilities, never hardcode  */
   /* ----------------------------------------------------------------------- */
 
-  private candidatePureBridge(entities: Entity[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
-    // Find bridge entities sorted by fee (lowest cost first)
-    const sorted = [...bridges].sort((a, b) => (a.policies.feeBps ?? 0) - (b.policies.feeBps ?? 0));
+  private candidatePureBridge(entities: Entity[], evidence: Evidence[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
+    // Find bridge entities sorted by fee (lowest cost first), using EVIDENCE-BASED liquidity
+    const now = Date.now();
+    const scored = bridges.map((b) => {
+      const { amount, confidence, bestEvidence } = effectiveLiquidityFromEvidence(evidence, b.id, b.currency ?? 'GHS', now);
+      return { entity: b, effectiveLiquidity: amount, confidence, evidence: bestEvidence };
+    }).filter((s) => s.effectiveLiquidity > 0).sort((a, b) => (a.entity.policies.feeBps ?? 0) - (b.entity.policies.feeBps ?? 0));
+
     const amount = deltas.find((d) => d.amount > 0)?.amount ?? 0;
-    const cur = deltas.find((d) => d.amount > 0)?.capability;
 
     const transitions: Transition[] = [];
     let remaining = amount;
     let totalCost = 0;
     let totalLatency = 0;
 
-    for (const bridge of sorted) {
+    for (const { entity: bridge, effectiveLiquidity, confidence, evidence: ev } of scored) {
       if (remaining <= 0) break;
-      const drawn = Math.min(remaining, bridge.balance);
+      const drawn = Math.min(remaining, effectiveLiquidity);
       if (drawn <= 0) continue;
       const fee = round((drawn * (bridge.policies.feeBps ?? 0)) / 1e4, 6);
       totalCost += fee;
       totalLatency += (bridge.attributes.latencyMs as number) ?? 5000;
+      const citations: EvidenceCitation[] = ev ? [{ evidenceId: ev.id, evidenceType: ev.type, confidence, reliedOn: true }] : [];
       transitions.push(transition({
         entityId: bridge.id, entityType: bridge.type, command: 'BridgeLiquidity', capability: 'canBridge',
         fromState: bridge.state, toState: bridge.state, amount: drawn, currency: bridge.currency,
-        preconditions: [{ entity: bridge.id, condition: 'canBridge === true', met: true }, { entity: bridge.id, condition: `balance >= ${drawn}`, met: bridge.balance >= drawn }],
+        evidenceCitations: citations,
+        preconditions: [
+          { entity: bridge.id, condition: 'canBridge === true', met: true },
+          { entity: bridge.id, condition: `effectiveLiquidity (evidence-based) >= ${drawn}`, met: effectiveLiquidity >= drawn },
+        ],
         postconditions: [{ entity: bridge.id, condition: 'bridged', met: true }],
         rollback: { entityId: bridge.id, action: 'unbridge' },
-        events: [{ type: 'bridge.drawn', payload: { entityId: bridge.id, amount: drawn, fee } }],
+        events: [{ type: 'bridge.drawn', payload: { entityId: bridge.id, amount: drawn, fee, confidence, evidenceId: ev?.id } }],
       }));
       remaining -= drawn;
     }
@@ -161,9 +170,8 @@ export class ConstraintSolver {
     };
   }
 
-  private candidateReserveBridge(entities: Entity[], deltas: any[], debits: Entity[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
+  private candidateReserveBridge(entities: Entity[], evidence: Evidence[], deltas: any[], debits: Entity[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
     const amount = deltas.find((d) => d.amount > 0)?.amount ?? 0;
-    // Find a debit-capable entity (reserve) with enough balance
     const reserve = debits.find((e) => e.type === 'reserve' && e.balance >= amount * 0.8);
     const reserveDraw = reserve ? Math.min(amount * 0.8, reserve.balance) : 0;
     const remaining = amount - reserveDraw;
@@ -212,8 +220,13 @@ export class ConstraintSolver {
     };
   }
 
-  private candidateFastest(entities: Entity[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
-    const sorted = [...bridges].sort((a, b) => b.balance - a.balance); // largest capacity first
+  private candidateFastest(entities: Entity[], evidence: Evidence[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
+    // Sort by effective liquidity (highest confidence first)
+    const now = Date.now();
+    const scored = bridges.map((b) => {
+      const { amount, confidence } = effectiveLiquidityFromEvidence(evidence, b.id, b.currency ?? 'GHS', now);
+      return { entity: b, effectiveLiquidity: amount, confidence };
+    }).filter((s) => s.effectiveLiquidity > 0).sort((a, b) => b.effectiveLiquidity - a.effectiveLiquidity);
     const amount = deltas.find((d) => d.amount > 0)?.amount ?? 0;
 
     const transitions: Transition[] = [];
@@ -221,9 +234,9 @@ export class ConstraintSolver {
     let totalLatency = 0;
     let remaining = amount;
 
-    for (const bridge of sorted) {
+    for (const { entity: bridge, effectiveLiquidity } of scored) {
       if (remaining <= 0) break;
-      const drawn = Math.min(remaining, bridge.balance);
+      const drawn = Math.min(remaining, effectiveLiquidity);
       if (drawn <= 0) continue;
       const fee = round((drawn * (bridge.policies.feeBps ?? 0)) / 1e4, 6);
       totalCost += fee;
@@ -247,9 +260,14 @@ export class ConstraintSolver {
     };
   }
 
-  private candidateDiversified(entities: Entity[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
+  private candidateDiversified(entities: Entity[], evidence: Evidence[], deltas: any[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
+    const now = Date.now();
+    const scored = bridges.map((b) => {
+      const { amount } = effectiveLiquidityFromEvidence(evidence, b.id, b.currency ?? 'GHS', now);
+      return { entity: b, effectiveLiquidity: amount };
+    }).filter((s) => s.effectiveLiquidity > 0);
     const amount = deltas.find((d) => d.amount > 0)?.amount ?? 0;
-    const totalCap = bridges.reduce((s, b) => s + b.balance, 0) || 1;
+    const totalCap = scored.reduce((s, b) => s + b.effectiveLiquidity, 0) || 1;
     const cap = amount * 0.6;
 
     const transitions: Transition[] = [];
@@ -257,10 +275,10 @@ export class ConstraintSolver {
     let totalLatency = 0;
     let remaining = amount;
 
-    for (const bridge of bridges) {
+    for (const { entity: bridge, effectiveLiquidity } of scored) {
       if (remaining <= 0) break;
-      const share = (bridge.balance / totalCap) * amount;
-      const drawn = Math.min(remaining, share, cap, bridge.balance);
+      const share = (effectiveLiquidity / totalCap) * amount;
+      const drawn = Math.min(remaining, share, cap, effectiveLiquidity);
       if (drawn <= 0) continue;
       const fee = round((drawn * (bridge.policies.feeBps ?? 0)) / 1e4, 6);
       totalCost += fee;
@@ -284,7 +302,7 @@ export class ConstraintSolver {
     };
   }
 
-  private candidateTreasury(entities: Entity[], deltas: any[], swaps: Entity[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
+  private candidateTreasury(entities: Entity[], evidence: Evidence[], deltas: any[], swaps: Entity[], bridges: Entity[], objectives: OptimizationWeights, label: string): SolverCandidate {
     const amount = deltas.find((d) => d.amount > 0)?.amount ?? 0;
     const treasury = swaps[0];
     const treasuryDraw = Math.min(amount, treasury.balance);

@@ -2,13 +2,15 @@
  * PaySwap Runtime — Transition.
  *
  * The atomic unit of execution. Every node in the Execution Graph is exactly
- * one Transition: a state change on a single entity. This makes replay trivial
- * — replay is just re-applying transitions in order.
+ * one Transition: a state change on a single entity, CITED with the evidence
+ * the solver relied on. This makes every decision auditable.
  *
  *   Transition {
  *     from state, to state,    // state machine transition
  *     entity,                   // which entity changes
  *     command,                  // what triggered it
+ *     capability,               // what capability is being exercised
+ *     evidence,                 // EVIDENCE cited for this decision
  *     preconditions,            // must be true before
  *     postconditions,           // must be true after
  *     rollback,                 // how to undo
@@ -17,6 +19,7 @@
  */
 import { uid } from './support';
 import type { Capability } from './capabilities';
+import type { EvidenceCitation } from './evidence';
 
 export interface Transition {
   id: string;
@@ -28,6 +31,7 @@ export interface Transition {
   toState: string;
   amount?: number;
   currency?: string;
+  evidenceCitations: EvidenceCitation[];  // EVIDENCE cited for this decision
   preconditions: { entity: string; condition: string; met: boolean }[];
   postconditions: { entity: string; condition: string; met: boolean }[];
   rollback?: { entityId: string; action: string };
@@ -47,6 +51,7 @@ export function transition(params: {
   toState: string;
   amount?: number;
   currency?: string;
+  evidenceCitations?: EvidenceCitation[];
   preconditions?: { entity: string; condition: string; met: boolean }[];
   postconditions?: { entity: string; condition: string; met: boolean }[];
   rollback?: { entityId: string; action: string };
@@ -63,6 +68,7 @@ export function transition(params: {
     toState: params.toState,
     amount: params.amount,
     currency: params.currency,
+    evidenceCitations: params.evidenceCitations ?? [],
     preconditions: params.preconditions ?? [],
     postconditions: params.postconditions ?? [],
     rollback: params.rollback,

@@ -7,6 +7,7 @@
  */
 import { simulationEngine, type SimulationScenario, type SimulationResult } from '@/kernel';
 import { createFiatProof, computeConfidence, effectiveLiquidity, type FiatProof } from './economics/fiat-proof';
+import { createEvidence, computeEvidenceConfidence, type Evidence } from '@/kernel/evidence';
 import type { ProtocolScenario } from './scenarios';
 import type { FiatProofSummary } from '@/kernel';
 

@@ -57,6 +57,7 @@ import { Commands } from './command';
 import { ConstraintSolver } from './solver';
 import { capabilityRegistry, ALL_CAPABILITIES } from './capabilities';
 import { createEventSourcedWorld, appendTransition, currentWorld, type EventSourcedWorld } from './event-sourced-world';
+import { createEvidence, type Evidence as KernelEvidence } from './evidence';
 import { settlementEscrowContract, collateralVaultContract, lpRegistryContract, merchantRegistryContract, twinTokenContract, liquidityPoolContract } from '@/protocol/contracts';
 import { computeAuthorizedExposure, defaultExposureFactors } from '@/protocol/economics/authorized-exposure';
 import { computeLPReputation, defaultLPReputation } from '@/protocol/economics/reputation';
@@ -325,15 +326,33 @@ export class SimulationEngine {
     const solver = new ConstraintSolver();
     const amount = scenario.transaction.amount;
     const cur = scenario.transaction.merchant.currency;
+
+    // Generate evidence for LP entities (FiatProofs with confidence)
+    const solverEvidence: import('./evidence').Evidence[] = [];
+    for (const lp of scenario.liquidityProviders) {
+      if (lp.online) {
+        solverEvidence.push(createEvidence({
+          type: 'fiat_proof',
+          source: 'open_banking',
+          verificationLevel: 'institutional',
+          entityId: `lp:${lp.id}`,
+          attestedAmount: lp.tradingCapacity,
+          currency: cur,
+          reputation: lp.aiReputation,
+          attester: 'open_banking_api',
+        }));
+      }
+    }
+
     const solverOutput = solver.converge({
-      currentWorld: { entities: allEntities },
+      currentWorld: { entities: allEntities, evidence: solverEvidence },
       desiredWorld: {
         deltas: [
           { entityId: 'wallet:buyer', amount: -amount, command: 'TransferLiquidity', capability: 'canTransfer', fromState: 'active', toState: 'active' },
           { entityId: 'wallet:merchant', amount: amount, command: 'TransferLiquidity', capability: 'canReceive', fromState: 'active', toState: 'active' },
         ],
       },
-      constraints: { maxCostPercent: 5, maxRiskScore: 0.6, maxSettlementMs: 300000 },
+      constraints: { maxCostPercent: 5, maxRiskScore: 0.6, maxSettlementMs: 300000, minConfidence: 0.3 },
       objectives: { ...PRIORITY_WEIGHTS[scenario.transaction.priority], ...scenario.aiWeights },
       policies: { reservePolicy: scenario.policies.reservePolicy, maxLpShare: scenario.policies.maxLpShare, requireInsurance: scenario.policies.requireInsurance },
     });
@@ -348,6 +367,7 @@ export class SimulationEngine {
     const transitions: TransitionSummary[] = solverOutput.transitions.map((t, i) => ({
       id: t.id, entityId: t.entityId, entityType: t.entityType, command: t.command, capability: t.capability,
       fromState: t.fromState, toState: t.toState, amount: t.amount, currency: t.currency, status: 'applied', frame: i + 1,
+      evidenceCitations: t.evidenceCitations ?? [],
     }));
 
     // 18. Event-sourced world — events are truth, snapshots are cache.

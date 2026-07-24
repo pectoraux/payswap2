@@ -31,6 +31,8 @@ export { transition, buildTransitionsForDelta, verifyPreconditions, verifyPostco
 export type { Transition } from './transition';
 export { createEventSourcedWorld, appendEvent, appendTransition, currentWorld, rebuildWorld, rewindTo, diffWorlds, eventLogSummary } from './event-sourced-world';
 export type { EventSourcedWorld, WorldEvent } from './event-sourced-world';
+export { createEvidence, computeEvidenceConfidence, effectiveLiquidityFromEvidence, expireEvidence, revokeEvidence, validEvidenceFor, EvidenceStore, evidenceStore } from './evidence';
+export type { Evidence, EvidenceType, EvidenceSource, VerificationLevel, EvidenceCitation } from './evidence';
 export { PlanExecutor } from './plan-executor';
 export { LedgerEngine } from './ledger';
 export { ReserveEngine } from './reserve';

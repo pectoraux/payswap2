@@ -39,7 +39,32 @@ export type CommandType =
   | 'CloseCorridor'
   | 'IssueLoan'
   | 'ConvertStablecoin'
-  | 'ReplenishReserve';
+  | 'ReplenishReserve'
+  // Real protocol commands (v1.1)
+  | 'FreezeEscrow'
+  | 'UnlockEscrow'
+  | 'TransferSettlementRights'
+  | 'SlashCollateral'
+  | 'RegisterFiatProof'
+  | 'ExpireFiatProof'
+  | 'CreateAuction'
+  | 'AwardAuction'
+  | 'SubmitEvidence'
+  | 'VoteDispute'
+  | 'MintTwinToken'
+  | 'BurnTwinToken'
+  | 'StakeLiquidity'
+  | 'WithdrawLiquidity'
+  | 'RegisterLP'
+  | 'UpdateExposure'
+  | 'UpdateReputation'
+  | 'RegisterMerchant'
+  | 'UpdateTier'
+  | 'SlashBond'
+  | 'NetSettle'
+  | 'BridgeLiquidity'
+  | 'DebitReserve'
+  | 'SwapStablecoin';
 
 export interface Command {
   id: string;
@@ -120,4 +145,29 @@ export const COMMAND_LABELS: Record<CommandType, string> = {
   IssueLoan: 'Issue Loan',
   ConvertStablecoin: 'Convert Stablecoin',
   ReplenishReserve: 'Replenish Reserve',
+  // Real protocol commands
+  FreezeEscrow: 'Freeze Escrow',
+  UnlockEscrow: 'Unlock Escrow',
+  TransferSettlementRights: 'Transfer Settlement Rights',
+  SlashCollateral: 'Slash Collateral',
+  RegisterFiatProof: 'Register Fiat Proof',
+  ExpireFiatProof: 'Expire Fiat Proof',
+  CreateAuction: 'Create Auction',
+  AwardAuction: 'Award Auction',
+  SubmitEvidence: 'Submit Evidence',
+  VoteDispute: 'Vote Dispute',
+  MintTwinToken: 'Mint Twin Token',
+  BurnTwinToken: 'Burn Twin Token',
+  StakeLiquidity: 'Stake Liquidity',
+  WithdrawLiquidity: 'Withdraw Liquidity',
+  RegisterLP: 'Register LP',
+  UpdateExposure: 'Update Exposure',
+  UpdateReputation: 'Update Reputation',
+  RegisterMerchant: 'Register Merchant',
+  UpdateTier: 'Update Tier',
+  SlashBond: 'Slash Bond',
+  NetSettle: 'Net Settle',
+  BridgeLiquidity: 'Bridge Liquidity',
+  DebitReserve: 'Debit Reserve',
+  SwapStablecoin: 'Swap Stablecoin',
 };
