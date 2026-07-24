@@ -407,6 +407,9 @@ export class SimulationEngine {
       capabilities,
       eventLog,
       protocol,
+      fiatProofs: [],
+      scenarioId: '',
+      validates: [],
     };
   }
 

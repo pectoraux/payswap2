@@ -20,6 +20,7 @@ import { StateMachinePanel } from '@/components/simulator/state-machine-panel';
 import { ReasoningPanel } from '@/components/simulator/reasoning-panel';
 import { SolverPanel, TransitionsPanel } from '@/components/simulator/solver-panel';
 import { ProtocolPanel } from '@/components/simulator/protocol-panel';
+import { ProtocolScenariosPanel, FiatProofPanel, ConstitutionalVerificationPanel } from '@/components/simulator/protocol-scenarios';
 import { ExecutionGraphDAG } from '@/components/simulator/execution-graph-dag';
 import { EntityRegistry } from '@/components/simulator/entity-registry';
 import { RuntimeServicesPanel } from '@/components/simulator/runtime-services';
@@ -56,6 +57,9 @@ export default function Home() {
   const [saving, setSaving] = useState(false);
   const [regressing, setRegressing] = useState(false);
   const [regressResults, setRegressResults] = useState<{ scenarioId: string; name: string; passed: boolean; drift: { costPercent: number; settlementTimeMs: number; riskScore: number } }[] | null>(null);
+  const [protocolScenarios, setProtocolScenarios] = useState<{ id: string; name: string; category: string; description: string; expectedBehavior: string; validates: string[] }[]>([]);
+  const [protocolResults, setProtocolResults] = useState<Map<string, any>>(new Map());
+  const [protocolLoading, setProtocolLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,6 +72,10 @@ export default function Home() {
         setScenario(data.scenario);
         await run(data.scenario);
         await loadSaved();
+        // Load protocol scenarios
+        const pres = await fetch('/api/protocol');
+        const pdata = await pres.json();
+        if (!cancelled) setProtocolScenarios(pdata.scenarios ?? []);
       } catch (e) {
         if (!cancelled) setError('Failed to load kernel defaults');
       } finally {
@@ -156,6 +164,63 @@ export default function Home() {
   };
 
   const onLoadLibraryScenario = (s: SimulationScenario) => { setScenario(s); run(s); };
+
+  const onRunProtocolScenario = async (id: string) => {
+    setProtocolLoading(true);
+    try {
+      const res = await fetch('/api/protocol', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenarioId: id }),
+      });
+      const data = await res.json();
+      const summary = {
+        scenarioId: id,
+        name: data.scenario.name,
+        category: data.scenario.category,
+        passed: data.verification.passed,
+        settled: data.result.settled,
+        constitutionPassed: data.result.constitution.passed,
+        cost: data.result.plan.metrics.costPercent,
+        risk: data.result.plan.metrics.riskScore,
+        time: data.result.plan.metrics.settlementTimeLabel,
+        candidates: data.result.solverCandidates.length,
+        transitions: data.result.transitions.length,
+        escrowEntries: data.result.protocol.escrowEntries.length,
+        collateralEntries: data.result.protocol.collateralEntries.length,
+        fiatProofs: data.result.fiatProofs.length,
+        validates: data.scenario.validates,
+        verifiedInvariants: data.verification.checks.filter((c: any) => c.passed).length,
+        totalInvariants: data.verification.checks.length,
+      };
+      setProtocolResults((prev) => { const m = new Map(prev); m.set(id, summary); return m; });
+      toast.success(`${data.scenario.name}: ${data.verification.passed ? 'PASSED' : 'FAILED'}`);
+    } catch {
+      toast.error('Protocol scenario failed');
+    } finally {
+      setProtocolLoading(false);
+    }
+  };
+
+  const onRunAllProtocol = async () => {
+    setProtocolLoading(true);
+    try {
+      const res = await fetch('/api/protocol', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runAll: true }),
+      });
+      const data = await res.json();
+      const m = new Map<string, any>();
+      data.summary.forEach((s: any) => m.set(s.scenarioId, s));
+      setProtocolResults(m);
+      toast.success(`Architecture proof: ${data.passed}/${data.total} scenarios passed`);
+    } catch {
+      toast.error('Protocol suite failed');
+    } finally {
+      setProtocolLoading(false);
+    }
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -275,6 +340,14 @@ export default function Home() {
 
                   {/* 4. Protocol */}
                   <TabsContent value="protocol" className="space-y-4 mt-4">
+                    <ProtocolScenariosPanel
+                      scenarios={protocolScenarios}
+                      onRunScenario={onRunProtocolScenario}
+                      onRunAll={onRunAllProtocol}
+                      loading={protocolLoading}
+                      results={protocolResults}
+                    />
+                    {result?.fiatProofs && result.fiatProofs.length > 0 && <FiatProofPanel proofs={result.fiatProofs} />}
                     <ProtocolPanel protocol={result.protocol} />
                   </TabsContent>
 

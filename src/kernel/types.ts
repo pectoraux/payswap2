@@ -716,6 +716,21 @@ export interface SimulationResult {
   capabilities: string[];
   eventLog: EventLogEntry[];
   protocol: ProtocolSummary;
+  fiatProofs: FiatProofSummary[];
+  scenarioId: string;
+  validates: string[];
+}
+
+export interface FiatProofSummary {
+  id: string;
+  lpId: string;
+  proofType: string;
+  currency: string;
+  attestedAmount: number;
+  confidence: number;
+  effectiveLiquidity: number;
+  status: string;
+  expiresAt: number;
 }
 
 export interface ProtocolSummary {
