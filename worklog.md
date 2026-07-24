@@ -1183,3 +1183,91 @@ The payment now uses REAL connector-produced evidence:
 - Mobile money balance from M-Pesa (institutional, 85% confidence)
 
 Connectors CANNOT modify state — they only produce Evidence. The planner consumes evidence via the Confidence Service. This makes replacing evidence sources trivial.
+
+---
+Task ID: PHASE6 (Wallets, QR Payments, Multi-Chain Settlement)
+Agent: main (Z.ai Code)
+Task: Build production payment experience — wallets, QR payments, merchant QR API, Stellar settlement, multi-chain abstraction. No kernel changes.
+
+New Production Modules:
+
+1. `protocol/wallets/wallet-service.ts` — Wallet System
+   - PaySwap Account (identity) → Wallet (balances) → Blockchain Account (chain-specific)
+   - Account types: individual, merchant, lp
+   - Wallet operations: credit, debit, lock, unlock (all produce events)
+   - Balance is a PROJECTION — rebuildBalancesFromEvents() replays events to reconstruct
+   - Transaction history per wallet
+   - Blockchain account linking (Stellar address etc.)
+   - Wallet alias generation (psw_xxxx)
+
+2. `protocol/qr/qr-service.ts` — QR Payment System
+   - 6 QR types: static, dynamic, invoice, donation, subscription, checkout
+   - QR payload contains only payment metadata (no private info)
+   - encode/decode with base64 + JSON
+   - Expiry support for dynamic/invoice/checkout QRs
+   - markUsed() after payment created
+   - resolve() decodes + checks expiry + checks used status
+
+3. `protocol/blockchains/adapter.ts` — Blockchain Adapter Interface
+   - Pluggable interface: issueAsset, burnAsset, transfer, verify, getBalance, submitTransaction, createEscrow, healthCheck
+   - BlockchainAdapterRegistry manages all chains
+   - Future chains (Ethereum, Solana, XRPL, Polygon) plug in without modifying protocol
+
+4. `protocol/blockchains/stellar/adapter.ts` — Stellar Adapter (first chain)
+   - Full StellarAdapter implementing BlockchainAdapter interface
+   - Simulated on-chain state (in production: Stellar SDK + Horizon API)
+   - Operations: issueAsset (mint Twin Tokens), burnAsset, transfer, verify, getBalance, createEscrow (multisig), submitTransaction
+   - Every operation produces cryptographic Evidence (verificationLevel: cryptographic, confidence: 1.0, permanent TTL)
+   - Balance enforcement (can't transfer more than balance)
+   - fundAccount() for setup/testing
+
+New API Endpoints:
+
+5. `app/api/merchant/qr/route.ts` — Merchant QR API
+   - POST /api/merchant/qr — generate QR (6 types)
+   - GET /api/merchant/qr — list all QR codes
+   - Returns: qrId, type, payload, encoded string, QR URL
+
+6. `app/api/wallets/route.ts` — Wallet API
+   - POST action=create_account — creates PaySwap account + wallet + Stellar blockchain account
+   - POST action=get_balance — wallet balance + on-chain balance (verified via Stellar adapter)
+   - POST action=list_wallets — all wallets for an account
+   - POST action=transactions — transaction history
+
+7. `app/api/blockchain/route.ts` — Blockchain API
+   - GET — list registered chains
+   - POST operation=issue_asset — mint Twin Tokens on Stellar
+   - POST operation=transfer — transfer on-chain
+   - POST operation=verify — verify on-chain transaction
+   - POST operation=get_balance — on-chain balance with Evidence
+   - POST operation=create_escrow — multisig escrow account
+   - POST operation=health_check — chain health
+
+End-to-End Verification:
+
+1. Wallet Account Created:
+   Account: account_cuok001 (individual)
+   Wallet: wallet_cuok003 | balance: 0 GHS | alias: psw__cuok004
+   Blockchain: stellar | address: GACCOUNTCUOK001XXXXXXXX...
+
+2. Merchant QR Generated:
+   QR ID: qr_curu008
+   Type: checkout
+   Payload: {"v":1,"type":"checkout","merchant":"merchant_123","currency":"GHS","amount":250,"reference":"INV-23991"}
+   URL: https://pay.payswap.com/qr/qr_curu008
+
+3. Blockchain Health:
+   Chains: ['stellar'] | initialized: True
+
+4. Stellar Transfer:
+   Issue: success=True (100000 TWINGHS minted)
+   Transfer: success=True (1000 TWINGHS from GTEST123 to GTEST456)
+   Evidence: source=on_chain_state, verification=cryptographic, confidence=1.0
+
+5. On-chain Balance Verified:
+   Balance GTEST456: 1000 TWINGHS | Evidence: verified
+
+6. End-to-End Payment: settled ✓
+
+All Domains: PaySwap 11/20 | Supply Chain 5/5 | Browser: no errors | Lint: clean
+Protocol files: 39 | Kernel changes: 0

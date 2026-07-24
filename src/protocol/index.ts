@@ -47,6 +47,19 @@ export { computeAuthorizedExposure, defaultExposureFactors } from './economics/a
 export { computeLPReputation, defaultLPReputation } from './economics/reputation';
 export { computeExpectedCost, defaultExpectedCost } from './economics/expected-cost';
 export { tierFromBond, getTierConfig, TRUST_TIERS } from './economics/trust-tiers';
+
+// Wallet System
+export { walletService, WalletService } from './wallets/wallet-service';
+export type { PaySwapAccount, Wallet, BlockchainAccount, WalletTransaction, AccountType } from './wallets/wallet-service';
+
+// QR Payments
+export { qrService, QRService } from './qr/qr-service';
+export type { QRPayload, QRCode, QRType } from './qr/qr-service';
+
+// Blockchain Adapters
+export { BlockchainAdapterRegistry, blockchainRegistry } from './blockchains/adapter';
+export type { BlockchainAdapter } from './blockchains/adapter';
+export { StellarAdapter, stellarAdapter } from './blockchains/stellar/adapter';
 export { createFiatProof, computeConfidence, effectiveLiquidity } from './economics/fiat-proof';
 export { createAttestation, ATTESTATION_LABELS } from './economics/attestation';
 export type { Attestation, AttestationKind } from './economics/attestation';
