@@ -44,7 +44,7 @@ import { eventEngine } from './event';
 import { permissionEngine } from './permission';
 import { extensionRuntime } from './extension';
 import { insuranceEngine } from './insurance';
-import { lpLifecycle } from './lp-lifecycle';
+import { lpLifecycle as lpLifecycleOld } from './lp-lifecycle';
 import { buildGraph } from './financial-graph';
 import { evaluateConstitution } from './constitution';
 import { EventCatalog } from './events';
@@ -64,6 +64,14 @@ import type { Obligation } from '@/protocol/obligation';
 import { resourceReservation } from './resource-reservation';
 import { confidenceService } from './confidence-service';
 import { settlementEscrowContract, collateralVaultContract, lpRegistryContract, merchantRegistryContract, twinTokenContract, liquidityPoolContract } from '@/protocol/contracts';
+import { settlementEscrow } from '@/protocol/settlement/escrow';
+import { collateralVault } from '@/protocol/settlement/collateral-vault';
+import { settlementCapacityVault } from '@/protocol/settlement/capacity-vault';
+import { lpLifecycle } from '@/protocol/lp-lifecycle-manager';
+import { disputeEngine as disputeEngineV2 } from '@/protocol/settlement/dispute-engine';
+import { manualSettlementEngine } from '@/protocol/settlement/manual-settlement';
+import { merchantRegistry } from '@/protocol/merchant-registry';
+import { treasury as treasuryV2 } from '@/protocol/treasury';
 import { computeAuthorizedExposure, defaultExposureFactors } from '@/protocol/economics/authorized-exposure';
 import { computeLPReputation, defaultLPReputation } from '@/protocol/economics/reputation';
 import { disputeEngine } from '@/protocol/settlement/disputes';
@@ -239,9 +247,9 @@ export class SimulationEngine {
     const worldInspector = this.buildWorldInspector(scenario, plan, out, execWorld);
 
     // 9. LP lifecycle events (initialize stakes for online LPs).
-    lpLifecycle.reset();
+    lpLifecycleOld.reset();
     for (const lp of execWorld.liquidityProviders) {
-      if (lp.online) lpLifecycle.stake(lp, lp.twinTokenPosition, 0);
+      if (lp.online) lpLifecycleOld.stake(lp, lp.twinTokenPosition, 0);
     }
 
     // 10. Candidate plans summary (from the Optimization Engine).
@@ -510,7 +518,7 @@ export class SimulationEngine {
       constitution,
       graph: graphSnapshot,
       worldInspector,
-      lpLifecycleEvents: lpLifecycle.allEvents(),
+      lpLifecycleEvents: lpLifecycleOld.allEvents(),
       candidatePlans,
       stateTransitions,
       worldHistory,
@@ -535,44 +543,127 @@ export class SimulationEngine {
   }
 
   /**
-   * Build protocol state — the real PaySwap protocol economics.
-   * Escrow, collateral, LP registry, merchant registry, disputes, auctions,
-   * net settlement, twin token supply.
+   * Build protocol state — real PaySwap protocol using production modules.
+   * Escrow, collateral, capacity vault, LP lifecycle, merchant registry,
+   * disputes, auctions, net settlement, treasury, twin token supply.
    */
   private buildProtocolState(scenario: SimulationScenario, plan: import('./types').LiquidityExecutionPlan): import('./types').ProtocolSummary {
     const cur = scenario.transaction.merchant.currency;
     const amount = scenario.transaction.amount;
 
-    // Freeze escrow for this transaction
-    const escrow = settlementEscrowContract.freeze(plan.id, scenario.liquidityProviders[0]?.id ?? 'lp_1', 'merchant_1', amount, cur, amount);
+    // Reset all production modules for clean simulation
+    settlementEscrow.reset();
+    collateralVault.reset();
+    settlementCapacityVault.reset();
+    lpLifecycle.reset();
+    disputeEngineV2.reset();
+    manualSettlementEngine.reset();
+    merchantRegistry.reset();
+    treasuryV2.reset();
 
-    // Lock collateral for each LP
+    // 1. Register merchant with bond (trust tier system)
+    const merchantBond = 5000;
+    merchantRegistry.register('merchant_1', `Merchant ${scenario.transaction.merchant.country}`, scenario.transaction.merchant.country, cur, merchantBond);
+
+    // 2. Onboard LPs through full lifecycle (invite → apply → activate with stake + collateral)
     for (const lp of scenario.liquidityProviders) {
       if (lp.online) {
-        collateralVaultContract.lock(lp.id, lp.tradingCapacity * 0.2, cur);
-        lpRegistryContract.register(lp.id);
-        const exposure = computeAuthorizedExposure(defaultExposureFactors(lp.tradingCapacity * 0.2, lp.tradingCapacity));
-        lpRegistryContract.updateExposure(lp.id, exposure);
+        lpLifecycle.invite(lp.id, lp.name, lp.country, lp.currency);
+        lpLifecycle.apply(lp.id);
+        const stakeAmount = lp.tradingCapacity * 0.3;
+        const collateralAmount = lp.tradingCapacity * 0.2;
+        lpLifecycle.activate(lp.id, stakeAmount, collateralAmount);
         const rep = computeLPReputation(defaultLPReputation());
-        lpRegistryContract.updateReputation(lp.id, rep);
+        lpLifecycle.updateReputation(lp.id, rep);
       }
     }
 
-    // Register merchant
-    merchantRegistryContract.register('merchant_1', 5000);
+    // 3. Freeze escrow for this transaction (THE guarantee — replaces insurance)
+    const escrowEntry = settlementEscrow.freeze(
+      plan.id,
+      scenario.liquidityProviders[0]?.id ?? 'lp_1',
+      'merchant_1',
+      amount, cur, amount,
+    );
 
-    // Mint twin tokens
+    // 4. If LP is manual-only, start manual settlement workflow
+    const primaryLp = scenario.liquidityProviders[0];
+    if (primaryLp?.manualOnly) {
+      const ms = manualSettlementEngine.start(plan.id, escrowEntry.id, primaryLp.id, 'merchant_1', amount, cur);
+      manualSettlementEngine.notifyLp(ms.id);
+      // Simulate LP submitting proof
+      manualSettlementEngine.submitProof(ms.id, uid('proof'), 'Bank transfer confirmation');
+      // Merchant confirms
+      manualSettlementEngine.confirm(ms.id);
+    } else if (scenario.failures.some((f) => f.type === 'manual_settlement_required')) {
+      // Failure-injected manual settlement
+      const ms = manualSettlementEngine.start(plan.id, escrowEntry.id, primaryLp?.id ?? 'lp_1', 'merchant_1', amount, cur, 5000);
+      manualSettlementEngine.notifyLp(ms.id);
+      manualSettlementEngine.submitProof(ms.id, uid('proof'), 'External settlement proof');
+      manualSettlementEngine.confirm(ms.id);
+    }
+
+    // 5. Handle failure injections through dispute engine
+    if (scenario.failures.some((f) => f.type === 'fraud_alert')) {
+      const merchant = merchantRegistry.get('merchant_1');
+      const dispute = disputeEngineV2.open(escrowEntry.id, 'merchant_1', merchant?.tier ?? 'verified', 'Fraud alert — LP submitted forged evidence', 60000);
+      if (dispute) {
+        disputeEngineV2.submitEvidence(dispute.id, 'lp', 'forged_bank_receipt', 'Suspected forged bank receipt', false);
+        disputeEngineV2.submitEvidence(dispute.id, 'merchant', 'merchant_statement', 'Merchant did not receive funds', true);
+        disputeEngineV2.openVoting(dispute.id);
+        disputeEngineV2.communityVote(dispute.id, 'community_1', true, 1);
+        disputeEngineV2.communityVote(dispute.id, 'community_2', false, 1);
+        disputeEngineV2.adjudicate(dispute.id, true, 'forged_evidence');
+      }
+    }
+
+    if (scenario.failures.some((f) => f.type === 'insurance_claim')) {
+      const merchant = merchantRegistry.get('merchant_1');
+      const dispute = disputeEngineV2.open(escrowEntry.id, 'merchant_1', merchant?.tier ?? 'verified', 'Merchant dispute — LP failed to settle', 60000);
+      if (dispute) {
+        disputeEngineV2.submitEvidence(dispute.id, 'merchant', 'no_receipt', 'No funds received', true);
+        disputeEngineV2.openVoting(dispute.id);
+        disputeEngineV2.communityVote(dispute.id, 'community_1', true, 1);
+        disputeEngineV2.adjudicate(dispute.id, true, 'unable_to_prove');
+      }
+    }
+
+    // 6. If settlement succeeded, release escrow
+    if (scenario.failures.length === 0 || !scenario.failures.some((f) => f.type === 'fraud_alert' || f.type === 'compliance_block')) {
+      settlementEscrow.release(escrowEntry.id, uid('proof'));
+    }
+
+    // 7. Initialize treasury and generate recommendations
+    treasuryV2.initPosition(cur, scenario.treasury.stablecoinBalance, scenario.treasury.emergencyTreasury, 0);
+    const treasuryRecs = treasuryV2.generateRecommendations([
+      { country: scenario.treasury.originReserve.country, currency: scenario.treasury.originReserve.currency, available: scenario.treasury.originReserve.available, minThreshold: scenario.treasury.originReserve.minThreshold },
+      { country: scenario.treasury.destinationReserve.country, currency: scenario.treasury.destinationReserve.currency, available: scenario.treasury.destinationReserve.available, minThreshold: scenario.treasury.destinationReserve.minThreshold },
+    ]);
+
+    // 8. Mint twin tokens (protocol accounting)
     twinTokenContract.mint(cur, amount);
 
-    // Record corridor obligation for net settlement
+    // 9. Record corridor obligation for net settlement
     netSettlementEngine.record(scenario.transaction.buyer.country, scenario.transaction.merchant.country, cur, amount);
 
+    // 10. If large amount, trigger liquidity auction
+    if (amount > 50000) {
+      const auction = auctionEngine.open(amount, cur, scenario.transaction.buyer.country, 20000);
+      for (const lp of scenario.liquidityProviders) {
+        if (lp.online) {
+          auctionEngine.bid(auction.id, lp.id, lp.tradingCapacity, lp.tradingFees);
+        }
+      }
+      auctionEngine.close(auction.id);
+    }
+
+    // Build summary from REAL production modules
     return {
-      escrowEntries: settlementEscrowContract.all().map((e) => ({ id: e.id, transactionId: e.transactionId, lpId: e.lpId, merchantId: e.merchantId, amount: e.amount, currency: e.currency, state: e.state })),
-      collateralEntries: collateralVaultContract.all().map((c) => ({ id: c.id, lpId: c.lpId, amount: c.amount, currency: c.currency, state: c.state, slashAmount: c.slashAmount })),
-      lpRegistry: lpRegistryContract.all().map((r) => ({ lpId: r.lpId, authorizedExposure: r.authorizedExposure, reputation: r.reputation, tier: r.tier })),
-      merchantRegistry: merchantRegistryContract.all().map((m) => ({ merchantId: m.merchantId, tier: m.tier, bond: m.bond, reputation: m.reputation })),
-      disputes: disputeEngine.all().map((d) => ({ id: d.id, state: d.state, outcome: d.outcome, fraudType: d.fraudType, lpId: d.lpId, merchantId: d.merchantId })),
+      escrowEntries: settlementEscrow.all().map((e) => ({ id: e.id, transactionId: e.transactionId, lpId: e.lpId, merchantId: e.merchantId, amount: e.amount, currency: e.currency, state: e.state })),
+      collateralEntries: collateralVault.all().map((c) => ({ id: c.id, lpId: c.lpId, amount: c.amount, currency: c.currency, state: c.state, slashAmount: c.slashAmount })),
+      lpRegistry: lpLifecycle.all().map((r) => ({ lpId: r.id, authorizedExposure: r.authorizedExposure, reputation: r.reputation, tier: r.tier })),
+      merchantRegistry: merchantRegistry.all().map((m) => ({ merchantId: m.id, tier: m.tier, bond: m.bond, reputation: m.reputation })),
+      disputes: disputeEngineV2.all().map((d) => ({ id: d.id, state: d.state, outcome: d.outcome, fraudType: d.fraudType, lpId: d.lpId, merchantId: d.merchantId })),
       auctions: auctionEngine.all().map((a) => ({ id: a.id, amount: a.amount, currency: a.currency, status: a.status, winnerCount: a.winnerBids.length })),
       netSettlement: {
         corridors: netSettlementEngine.all().map((c) => ({ fromCountry: c.fromCountry, toCountry: c.toCountry, balance: c.balance, currency: c.currency })),
