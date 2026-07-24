@@ -792,3 +792,53 @@ The kernel is validated as a general coordination runtime:
 - 100% replay determinism
 - 80% fault recovery (20% are designed blocks, not failures)
 - Zero kernel changes for the third domain
+
+---
+Task ID: PROTOCOL-1 (Production Protocol Implementation — Escrow + Collateral + Capacity + LP Lifecycle)
+Agent: main (Z.ai Code)
+Task: Begin building the complete PaySwap protocol on the frozen kernel. Replace placeholder implementations with real protocol modules. No kernel changes.
+
+New Protocol Modules:
+
+1. `protocol/settlement/escrow.ts` — Settlement Escrow
+   - Full lifecycle: created → frozen → (released | disputed → (refunded | slashed | transferred) | expired)
+   - State machine with allowed transitions enforced
+   - Emits kernel events on every state change (escrow.frozen, escrow.released, escrow.disputed, escrow.refunded, escrow.slashed, escrow.transferred, escrow.expired)
+   - TTL-based expiry (auto-expire after timeout)
+   - Full transition history (audit trail per escrow entry)
+   - Integration with dispute engine and collateral vault
+
+2. `protocol/settlement/collateral-vault.ts` — Collateral Vault
+   - Lifecycle: locked → (released | partially_slashed → (slashed | released) | slashed)
+   - State machine enforced
+   - Supports: lock, slash (partial or full), release, increase
+   - Emits kernel events (collateral.locked, collateral.slashed, collateral.released, collateral.increased)
+   - Tracks slashAmount, remainingAmount per entry
+   - totalLockedByLp() for exposure calculation
+
+3. `protocol/settlement/capacity-vault.ts` — Settlement Capacity Vault (formerly Liquidity Pool)
+   - LPs stake Twin Tokens → provides settlement capacity (not liquidity)
+   - Supports: stake, unstake, rebalance, distributeFees (pro-rata), yieldAccrued
+   - Governance weight = stake amount (1 token = 1 vote)
+   - Emits kernel events (capacity.staked, capacity.unstaked, capacity.rebalanced, capacity.fees_distributed)
+   - totalCapacity() and capacityByLp() for planner queries
+
+4. `protocol/lp-lifecycle-manager.ts` — LP Lifecycle Manager
+   - Full lifecycle: invited → pending → active → (paused | draining → withdraw_requested → exited | suspended → slashed)
+   - State machine enforced (ALLOWED transitions per state)
+   - Integrates with: SettlementCapacityVault (stake/unstake), CollateralVault (lock/release/slash)
+   - Dynamic authorized exposure computation (10-factor model)
+   - reserveExposure/releaseExposure for transaction-level exposure management
+   - updateReputation triggers exposure recalculation
+   - tier derived from reputation (probationary → standard → trusted → premium)
+   - Emits kernel events on every lifecycle transition
+
+Verification:
+- PaySwap: 11/20 (no regression)
+- Supply Chain: 5/5 (no regression)
+- Infrastructure: 4/5 (no regression)
+- Lint clean
+- Browser: no errors
+- Zero kernel changes
+
+Next: Dispute Resolution, Manual Settlement, Liquidity Auctions, Net Settlement, Treasury, Merchant Trust Tiers

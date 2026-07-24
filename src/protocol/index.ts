@@ -17,6 +17,14 @@ export { settlementEscrowContract, collateralVaultContract, lpRegistryContract, 
 export { disputeEngine } from './settlement/disputes';
 export { auctionEngine } from './settlement/auctions';
 export { netSettlementEngine } from './settlement/net-settlement';
+export { settlementEscrow, SettlementEscrow } from './settlement/escrow';
+export type { EscrowEntry, EscrowState, EscrowTransition } from './settlement/escrow';
+export { collateralVault, CollateralVault } from './settlement/collateral-vault';
+export type { CollateralEntry, CollateralState } from './settlement/collateral-vault';
+export { settlementCapacityVault, SettlementCapacityVault } from './settlement/capacity-vault';
+export type { StakePosition } from './settlement/capacity-vault';
+export { lpLifecycle, LPLifecycle } from './lp-lifecycle-manager';
+export type { LPRecord, LPLifecycleState } from './lp-lifecycle-manager';
 export { computeAuthorizedExposure, defaultExposureFactors } from './economics/authorized-exposure';
 export { computeLPReputation, defaultLPReputation } from './economics/reputation';
 export { computeExpectedCost, defaultExpectedCost } from './economics/expected-cost';
