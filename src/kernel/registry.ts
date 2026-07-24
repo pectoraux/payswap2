@@ -47,6 +47,7 @@ export const ENGINES: EngineHealth[] = [
 
   // Intelligence
   { id: 'ai-agent', name: 'AI Agent Engine', category: 'Intelligence', status: 'online', version: KERNEL_VERSION, description: 'Explainable multi-objective optimization across 11 dimensions.' },
+  { id: 'reasoning', name: 'Financial Reasoning Engine', category: 'Intelligence', status: 'online', version: KERNEL_VERSION, description: '10 reasoning capabilities: optimization, anomaly detection, forecasting, fraud, treasury strategy.' },
 
   // Platform
   { id: 'extension', name: 'Extension Runtime', category: 'Platform', status: 'online', version: KERNEL_VERSION, description: 'Liquidity Intent API — extensions never execute directly.' },

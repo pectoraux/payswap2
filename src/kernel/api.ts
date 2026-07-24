@@ -1,31 +1,32 @@
 /**
- * PaySwap Kernel — Developer API.
+ * PaySwap Financial Kernel — Developer API.
  *
- * Exposes financial primitives the way AWS exposes infrastructure primitives
- * and Stripe exposes developer APIs. Every operation is composable, typed and
- * deterministic. Extensions, services and products call these — they never
- * touch engines directly.
+ * Developers think in terms of INTENTS, not engines. Every financial operation
+ * — payment, loan, treasury rebalance, LP withdrawal, insurance payout,
+ * stablecoin conversion, reserve replenishment — is an Intent that converges
+ * the world toward a target state.
  *
- *   kernel.plan(intent)      → LiquidityExecutionPlan
- *   kernel.simulate(scenario) → SimulationResult
- *   kernel.execute(plan)      → ExecutionOutput
- *   kernel.replay(result)     → ReplayFrame[]
- *   kernel.validate(plan)     → ConstitutionVerdict
- *   kernel.world()            → WorldState
- *   kernel.treasury()         → Treasury
- *   kernel.insurance()        → InsuranceEngine
- *   kernel.graph(scenario)    → FinancialGraph
+ *   await kernel.intent.payment({ ... })
+ *   await kernel.intent.loan({ ... })
+ *   await kernel.intent.rebalance({ ... })
+ *   await kernel.intent.withdrawLP({ ... })
+ *   await kernel.intent.insurancePayout({ ... })
+ *   await kernel.intent.convertStablecoin({ ... })
  *
- * Extensions request a "Liquidity Intent" and receive a plan. They never
- * execute liquidity movements themselves — the kernel does.
+ * Internally they all call: Optimization Engine → Execution Graph → Executor.
+ * Developers never touch routing logic. Exactly like Stripe.
  */
 import type {
   SimulationScenario,
   SimulationResult,
   LiquidityExecutionPlan,
   WorldState,
-  Treasury,
-  ReplayFrame,
+  CurrencyCode,
+  RoutingPriority,
+  FailureInjection,
+  OptimizationWeights,
+  LiquidityProvider,
+  FinancialOperator,
 } from './types';
 import { OptimizationEngine } from './optimization-engine';
 import { PlanExecutor } from './plan-executor';
@@ -38,23 +39,38 @@ import { evaluateConstitution, type ConstitutionVerdict, type InvariantContext }
 import { eventEngine } from './event';
 import { auditEngine } from './audit';
 
-/** A Liquidity Intent — what extensions submit to request liquidity movement. */
+/** A Liquidity Intent — the universal input for world-state convergence. */
 export interface LiquidityIntent {
+  type: IntentType;
   amount: number;
-  currency: import('./types').CurrencyCode;
-  origin: { country: string; currency: import('./types').CurrencyCode; method: string };
-  destination: { country: string; currency: import('./types').CurrencyCode; method: string };
-  objective: import('./types').RoutingPriority;
-  policy?: Partial<import('./types').SimulationScenario['policies']>;
-  aiWeights?: Partial<import('./types').OptimizationWeights>;
-  failures?: import('./types').FailureInjection[];
+  currency: CurrencyCode;
+  origin: { country: string; currency: CurrencyCode; method: string };
+  destination: { country: string; currency: CurrencyCode; method: string };
+  objective: RoutingPriority;
+  policy?: Partial<SimulationScenario['policies']>;
+  aiWeights?: Partial<OptimizationWeights>;
+  failures?: FailureInjection[];
+  metadata?: Record<string, unknown>;
 }
 
-/** Convert a Liquidity Intent into a full SimulationScenario (the kernel's input). */
-export function intentToScenario(intent: LiquidityIntent, world: { reserves: import('./types').SimulationScenario['treasury']; liquidityProviders: import('./types').LiquidityProvider[]; financialOperators: import('./types').FinancialOperator[] }): SimulationScenario {
+export type IntentType =
+  | 'payment'
+  | 'loan'
+  | 'rebalance'
+  | 'withdrawLP'
+  | 'insurancePayout'
+  | 'convertStablecoin'
+  | 'reserveReplenish'
+  | 'lpStake';
+
+/** Convert a Liquidity Intent into a full SimulationScenario. */
+export function intentToScenario(
+  intent: LiquidityIntent,
+  world: { reserves: SimulationScenario['treasury']; liquidityProviders: LiquidityProvider[]; financialOperators: FinancialOperator[] },
+): SimulationScenario {
   return {
-    name: `${intent.origin.country} → ${intent.destination.country} (${intent.objective})`,
-    description: 'Generated from Liquidity Intent',
+    name: `${intent.type}: ${intent.origin.country} → ${intent.destination.country} (${intent.objective})`,
+    description: `Generated from ${intent.type} intent`,
     transaction: {
       type: intent.origin.country === intent.destination.country ? 'domestic' : 'cross_border',
       buyer: { country: intent.origin.country, currency: intent.origin.currency, method: intent.origin.method },
@@ -80,16 +96,109 @@ export function intentToScenario(intent: LiquidityIntent, world: { reserves: imp
       cost: 0.25, speed: 0.25, safety: 0.25, liquidityPreservation: 0.25,
       merchantSatisfaction: 0.25, communityImpact: 0.15, carbonImpact: 0.15, treasuryHealth: 0.25,
       ...intent.aiWeights,
-    } as import('./types').OptimizationWeights,
+    } as OptimizationWeights,
   };
+}
+
+/** Intent builders — the developer-facing API. */
+export class IntentBuilder {
+  constructor(private world: { reserves: SimulationScenario['treasury']; liquidityProviders: LiquidityProvider[]; financialOperators: FinancialOperator[] }) {}
+
+  /** Move value from buyer to merchant. */
+  payment(params: {
+    amount: number; currency: CurrencyCode;
+    origin: { country: string; currency: CurrencyCode; method: string };
+    destination: { country: string; currency: CurrencyCode; method: string };
+    objective?: RoutingPriority;
+    failures?: FailureInjection[];
+    aiWeights?: Partial<OptimizationWeights>;
+  }): LiquidityIntent {
+    return { type: 'payment', ...params, objective: params.objective ?? 'cheapest' };
+  }
+
+  /** Issue a loan backed by liquidity. */
+  loan(params: {
+    amount: number; currency: CurrencyCode;
+    origin: { country: string; currency: CurrencyCode; method: string };
+    destination: { country: string; currency: CurrencyCode; method: string };
+    objective?: RoutingPriority;
+  }): LiquidityIntent {
+    return { type: 'loan', ...params, objective: params.objective ?? 'safest' };
+  }
+
+  /** Rebalance reserves across countries. */
+  rebalance(params: {
+    amount: number; currency: CurrencyCode;
+    origin: { country: string; currency: CurrencyCode; method: string };
+    destination: { country: string; currency: CurrencyCode; method: string };
+    objective?: RoutingPriority;
+  }): LiquidityIntent {
+    return { type: 'rebalance', ...params, objective: params.objective ?? 'balanced' };
+  }
+
+  /** LP withdraws its stake. */
+  withdrawLP(params: {
+    amount: number; currency: CurrencyCode;
+    origin: { country: string; currency: CurrencyCode; method: string };
+    destination: { country: string; currency: CurrencyCode; method: string };
+  }): LiquidityIntent {
+    return { type: 'withdrawLP', ...params, objective: 'safest' };
+  }
+
+  /** Pay out an insurance claim. */
+  insurancePayout(params: {
+    amount: number; currency: CurrencyCode;
+    origin: { country: string; currency: CurrencyCode; method: string };
+    destination: { country: string; currency: CurrencyCode; method: string };
+  }): LiquidityIntent {
+    return { type: 'insurancePayout', ...params, objective: 'safest' };
+  }
+
+  /** Convert stablecoin to fiat. */
+  convertStablecoin(params: {
+    amount: number; currency: CurrencyCode;
+    origin: { country: string; currency: CurrencyCode; method: string };
+    destination: { country: string; currency: CurrencyCode; method: string };
+  }): LiquidityIntent {
+    return { type: 'convertStablecoin', ...params, objective: 'cheapest' };
+  }
+
+  /** Replenish a reserve. */
+  reserveReplenish(params: {
+    amount: number; currency: CurrencyCode;
+    origin: { country: string; currency: CurrencyCode; method: string };
+    destination: { country: string; currency: CurrencyCode; method: string };
+  }): LiquidityIntent {
+    return { type: 'reserveReplenish', ...params, objective: 'balanced' };
+  }
+
+  /** LP stakes twin tokens. */
+  lpStake(params: {
+    amount: number; currency: CurrencyCode;
+    origin: { country: string; currency: CurrencyCode; method: string };
+    destination: { country: string; currency: CurrencyCode; method: string };
+  }): LiquidityIntent {
+    return { type: 'lpStake', ...params, objective: 'safest' };
+  }
 }
 
 class KernelAPI {
   private optimizer = new OptimizationEngine();
   private sim = new SimulationEngine();
 
-  /** Plan a liquidity movement from a Liquidity Intent. */
-  plan(scenario: SimulationScenario, world: { reserves: import('./types').Reserve[]; liquidityProviders: import('./types').LiquidityProvider[]; financialOperators: import('./types').FinancialOperator[] }): LiquidityExecutionPlan {
+  /** The intent builder — developers use this. */
+  intent(world: { reserves: SimulationScenario['treasury']; liquidityProviders: LiquidityProvider[]; financialOperators: FinancialOperator[] }): IntentBuilder {
+    return new IntentBuilder(world);
+  }
+
+  /** Execute an intent — converges the world toward the target state. */
+  async execute(intent: LiquidityIntent, world: { reserves: SimulationScenario['treasury']; liquidityProviders: LiquidityProvider[]; financialOperators: FinancialOperator[] }): Promise<SimulationResult> {
+    const scenario = intentToScenario(intent, world);
+    return this.sim.run(scenario);
+  }
+
+  /** Plan a liquidity movement from a scenario (low-level). */
+  plan(scenario: SimulationScenario): LiquidityExecutionPlan {
     const canonicalWorld = buildWorldFromScenario(scenario);
     return this.optimizer.optimize({ scenario, world: canonicalWorld, objectives: scenario.aiWeights }).plan;
   }
@@ -99,17 +208,17 @@ class KernelAPI {
     return this.sim.run(scenario);
   }
 
-  /** Execute a plan against a world state (production + sim same code). */
-  execute(plan: LiquidityExecutionPlan, world: WorldState, scenario: SimulationScenario): import('./types').SimulationResult {
+  /** Execute a plan against a world state. */
+  execute_plan(plan: LiquidityExecutionPlan, world: WorldState, scenario: SimulationScenario): SimulationResult {
     return this.sim.run(scenario);
   }
 
   /** Replay a simulation result frame by frame. */
-  replay(result: SimulationResult): ReplayFrame[] {
+  replay(result: SimulationResult) {
     return result.replay;
   }
 
-  /** Validate a plan against the Kernel Constitution (non-overridable invariants). */
+  /** Validate a plan against the Constitution. */
   validate(plan: LiquidityExecutionPlan, ctx: Partial<InvariantContext>): ConstitutionVerdict {
     return evaluateConstitution({
       plan,
@@ -120,13 +229,8 @@ class KernelAPI {
     });
   }
 
-  /** Get the current world state. */
-  world(): WorldState {
-    return { accounts: new Map(), reserves: [], liquidityProviders: [], financialOperators: [], treasury: { positions: [] }, twinTokens: [], wallets: [] };
-  }
-
   /** Get the treasury state. */
-  treasury(): Treasury {
+  treasury() {
     return { positions: treasuryEngine.all() };
   }
 

@@ -118,3 +118,27 @@ Stage Summary:
 - State Machine: 5 transitions per run (created→validated→approved→executing→completed→settled). Fraud scenario: executing→failed→rolled_back.
 - 28 engines. Each engine has exactly one responsibility: executor never thinks, optimizer never executes, constitution never plans, graph never mutates.
 - 6-view Financial Control Center with synchronized tabs. Lint clean. Agent Browser verified all 6 tabs render correctly.
+
+---
+Task ID: FK-1 (Financial Kernel — State Convergence)
+Agent: main (Z.ai Code)
+Task: Final architectural leap — from "transaction planner" to "state convergence." The kernel asks "given current world state and desired target, what sequence of valid state transitions converges the world toward that target while satisfying the Constitution?" Expand Constitution to 43 rules across 12 sections. Add Financial Reasoning Engine (10 capabilities). Add intent-based Developer API. Expand state machines for every object.
+
+Work Log:
+- Expanded `constitution.ts`: 43 non-overridable invariants grouped into 12 sections (Accounting 5, Liquidity 5, Treasury 3, Insurance 4, Risk 3, Compliance 4, Governance 3, Security 3, Performance 3, Availability 3, Auditability 4, AI 3). ConstitutionVerdict now includes sections[], totalRules, passedRules. The Constitution is the kernel's verifier — like Linux's verifier.
+- New `reasoning-engine.ts`: Financial Reasoning Engine with 10 independent reasoning capabilities — optimization, explanation, anomaly detection, treasury strategy, reserve forecasting, LP recommendations, fraud detection, insurance recommendation, governance recommendation, extension recommendation. None execute; they only reason.
+- New `api.ts` intent-based Developer API: kernel.intent(world).payment/loan/rebalance/withdrawLP/insurancePayout/convertStablecoin/reserveReplenish/lpStake(). Developers think in intents, not engines. All converge world state.
+- Expanded `state-machine.ts`: 9 state machine definitions (plan, payment, insurance_claim, LP, merchant, reserve, treasury_recommendation, extension, workflow). LP lifecycle: Invited→Pending→Active→Paused→Draining→Withdraw Requested→Exited→Slashed (15 edges). Merchant: Created→Verified→Approved→Operating→Suspended→Closed (7 edges). Reserve: Healthy→Low→Critical→Emergency→Recovering (7 edges).
+- Updated `simulation.ts`: calls reasoningEngine.reason() producing 10 reasoning results. SimulationResult now includes reasoningResults[] + intentType.
+- Updated `types.ts`: added ReasoningResultSummary, ReasoningRecommendationSummary. Updated ConstitutionVerdict with sections[] + totalRules + passedRules. Updated SimulationResult with reasoningResults + intentType.
+- Updated `registry.ts`: 29 engines (added Financial Reasoning Engine). Version 0.5.0-financial-kernel.
+- New UI: constitution-panel.tsx (grouped by 12 sections with section grid + detailed checks), reasoning-panel.tsx (10 reasoning capabilities with confidence bars + recommendations).
+- Updated page.tsx: title "Financial Kernel", subtitle about state convergence, Reasoning panel added to Optimization tab, engine count 29.
+
+Stage Summary:
+- Kernel now models WHAT the financial system IS via state convergence.
+- Constitution: 43 rules across 12 sections (all 43 pass on default scenario).
+- Reasoning Engine: 10 capabilities (optimization 87%, explanation 100%, anomaly 100%, treasury 85%, forecasting 80%, LP 90%, fraud 100%, insurance 85%, governance 95%, extension 90%).
+- State Machines: 9 definitions, LP has 15 lifecycle edges, Merchant 7, Reserve 7.
+- Intent API: kernel.intent().payment/loan/rebalance/withdrawLP/insurancePayout/convertStablecoin/reserveReplenish/lpStake().
+- 29 engines. Lint clean. Agent Browser verified: Constitution shows 43/43 rules, 12 sections; Reasoning panel shows 10 capabilities. No errors.

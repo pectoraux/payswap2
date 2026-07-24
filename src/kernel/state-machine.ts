@@ -28,6 +28,8 @@ export type ObjectKind =
   | 'payment'
   | 'insurance_claim'
   | 'lp'
+  | 'merchant'
+  | 'reserve'
   | 'treasury_recommendation'
   | 'extension'
   | 'workflow';
@@ -58,7 +60,11 @@ export type InsuranceState =
   | 'appealed'
   | 'resolved';
 
-export type LPState = 'active' | 'manual' | 'inactive' | 'suspended' | 'slashed';
+export type LPState = 'invited' | 'pending' | 'active' | 'paused' | 'draining' | 'withdraw_requested' | 'exited' | 'slashed' | 'manual' | 'suspended' | 'inactive';
+
+export type MerchantState = 'created' | 'verified' | 'approved' | 'operating' | 'suspended' | 'closed';
+
+export type ReserveState = 'healthy' | 'low' | 'critical' | 'emergency' | 'recovering';
 
 export type TreasuryRecState = 'proposed' | 'evaluating' | 'approved' | 'executing' | 'completed' | 'rejected';
 
@@ -66,7 +72,7 @@ export type ExtensionState = 'registered' | 'enabled' | 'disabled' | 'suspended'
 
 export type WorkflowState = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
-export type AnyState = PlanState | InsuranceState | LPState | TreasuryRecState | ExtensionState | WorkflowState;
+export type AnyState = PlanState | InsuranceState | LPState | MerchantState | ReserveState | TreasuryRecState | ExtensionState | WorkflowState;
 
 export interface StateTransition {
   id: string;
@@ -148,17 +154,52 @@ export const STATE_MACHINES: Record<ObjectKind, StateMachineDefinition> = {
   },
   lp: {
     kind: 'lp',
-    initial: 'inactive',
-    terminal: [],
+    initial: 'invited',
+    terminal: ['exited', 'slashed'],
     edges: [
-      { from: 'inactive', to: 'active', trigger: 'stake' },
+      { from: 'invited', to: 'pending', trigger: 'apply' },
+      { from: 'pending', to: 'active', trigger: 'stake' },
+      { from: 'active', to: 'paused', trigger: 'pause' },
+      { from: 'paused', to: 'active', trigger: 'resume' },
+      { from: 'active', to: 'draining', trigger: 'drain' },
+      { from: 'draining', to: 'withdraw_requested', trigger: 'request_withdraw' },
+      { from: 'withdraw_requested', to: 'exited', trigger: 'withdraw_complete' },
       { from: 'active', to: 'manual', trigger: 'set_manual' },
       { from: 'manual', to: 'active', trigger: 'set_auto' },
       { from: 'active', to: 'suspended', trigger: 'suspend' },
       { from: 'manual', to: 'suspended', trigger: 'suspend' },
       { from: 'suspended', to: 'active', trigger: 'reactivate' },
       { from: 'suspended', to: 'slashed', trigger: 'slash' },
-      { from: 'active', to: 'inactive', trigger: 'withdraw_all' },
+      { from: 'active', to: 'inactive', trigger: 'disconnect' },
+      { from: 'inactive', to: 'active', trigger: 'reconnect' },
+    ],
+  },
+  merchant: {
+    kind: 'merchant',
+    initial: 'created',
+    terminal: ['closed'],
+    edges: [
+      { from: 'created', to: 'verified', trigger: 'verify' },
+      { from: 'verified', to: 'approved', trigger: 'approve' },
+      { from: 'approved', to: 'operating', trigger: 'activate' },
+      { from: 'operating', to: 'suspended', trigger: 'suspend' },
+      { from: 'suspended', to: 'operating', trigger: 'reactivate' },
+      { from: 'operating', to: 'closed', trigger: 'close' },
+      { from: 'suspended', to: 'closed', trigger: 'close' },
+    ],
+  },
+  reserve: {
+    kind: 'reserve',
+    initial: 'healthy',
+    terminal: [],
+    edges: [
+      { from: 'healthy', to: 'low', trigger: 'drop_below_50%' },
+      { from: 'low', to: 'critical', trigger: 'drop_below_25%' },
+      { from: 'critical', to: 'emergency', trigger: 'drop_below_threshold' },
+      { from: 'emergency', to: 'recovering', trigger: 'replenish_start' },
+      { from: 'recovering', to: 'healthy', trigger: 'replenished' },
+      { from: 'low', to: 'healthy', trigger: 'replenished' },
+      { from: 'critical', to: 'low', trigger: 'partial_replenish' },
     ],
   },
   treasury_recommendation: {

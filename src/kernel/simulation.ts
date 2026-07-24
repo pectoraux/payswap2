@@ -36,6 +36,7 @@ import { OptimizationEngine } from './optimization-engine';
 import { PlanExecutor } from './plan-executor';
 import { WorldStore, buildWorldFromScenario, summarizeWorld } from './world-store';
 import { stateMachine, stateLabel } from './state-machine';
+import { reasoningEngine } from './reasoning-engine';
 import { treasuryAI } from './treasury-ai';
 import { treasuryEngine } from './treasury';
 import { auditEngine } from './audit';
@@ -49,6 +50,7 @@ import { evaluateConstitution } from './constitution';
 import { EventCatalog } from './events';
 import { ENGINES } from './registry';
 import { KERNEL_VERSION, uid, round, hashMetrics } from './support';
+import type { ReasoningResultSummary } from './types';
 
 export interface SimulationOptions {
   actorId?: string;
@@ -233,6 +235,18 @@ export class SimulationEngine {
       objectiveScores: c.objectiveScores,
     }));
 
+    // 10b. Financial Reasoning Engine — 10 independent reasoning capabilities.
+    const reasoningResults: ReasoningResultSummary[] = reasoningEngine.reason(plan, scenario, {
+      reserves: execWorld.reserves,
+      liquidityProviders: execWorld.liquidityProviders,
+    }).map((r) => ({
+      category: r.category,
+      summary: r.summary,
+      recommendations: r.recommendations.map((rec) => ({ action: rec.action, rationale: rec.rationale, priority: rec.priority, category: rec.category })),
+      confidence: r.confidence,
+      evidence: r.evidence,
+    }));
+
     // 11. State machine transitions.
     const stateTransitions: StateTransitionSummary[] = stateMachine.allTransitions().map((t) => ({
       id: t.id, objectId: t.objectId, objectKind: t.objectKind, from: t.from, to: t.to,
@@ -278,6 +292,8 @@ export class SimulationEngine {
       candidatePlans,
       stateTransitions,
       worldHistory,
+      reasoningResults,
+      intentType: 'payment',
     };
   }
 

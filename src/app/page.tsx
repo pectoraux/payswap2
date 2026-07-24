@@ -17,6 +17,7 @@ import { WorldInspectorPanel } from '@/components/simulator/world-inspector';
 import { LPLifecyclePanel } from '@/components/simulator/lp-lifecycle';
 import { OptimizationPanel } from '@/components/simulator/optimization-panel';
 import { StateMachinePanel } from '@/components/simulator/state-machine-panel';
+import { ReasoningPanel } from '@/components/simulator/reasoning-panel';
 import { ThemeToggle } from '@/components/simulator/theme-toggle';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
@@ -164,12 +165,12 @@ export default function Home() {
                 <span className="text-sm font-bold tracking-tight">PaySwap</span>
                 <Badge variant="secondary" className="h-4 px-1 text-[9px] font-mono">v{meta?.kernelVersion ?? '0.2.0'}</Badge>
               </div>
-              <span className="text-[10px] text-muted-foreground">Financial Control Plane</span>
+              <span className="text-[10px] text-muted-foreground">Financial Kernel</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="hidden gap-1 sm:flex"><GitBranch className="h-3 w-3 text-emerald-500" /> Milestone 1</Badge>
-            <Badge className="gap-1 bg-emerald-600 hover:bg-emerald-600 text-white"><Server className="h-3 w-3" /><span className="hidden sm:inline">{meta?.engines.length ?? 28} engines</span><span className="sm:hidden">{meta?.engines.length ?? 28}</span></Badge>
+            <Badge className="gap-1 bg-emerald-600 hover:bg-emerald-600 text-white"><Server className="h-3 w-3" /><span className="hidden sm:inline">{meta?.engines.length ?? 29} engines</span><span className="sm:hidden">{meta?.engines.length ?? 29}</span></Badge>
             <ThemeToggle />
           </div>
         </div>
@@ -177,11 +178,11 @@ export default function Home() {
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
         <div className="mb-6">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Financial Control Center</h1>
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Financial Kernel</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Six synchronized views of the entire financial system. The <span className="font-medium text-foreground">World State</span> is the
-            source of truth; the <span className="font-medium text-foreground">Optimization Engine</span> finds the best world transition;
-            the <span className="font-medium text-foreground">State Machine</span> governs every object's lifecycle. The executor never thinks.
+            The kernel asks: <span className="font-medium text-foreground">"Given the current world state and desired target, what sequence of valid
+            state transitions converges the world toward that target while satisfying the Constitution?"</span> Every operation — payment,
+            loan, rebalance, withdrawal, payout, conversion — is the same convergence problem.
           </p>
         </div>
 
@@ -252,6 +253,7 @@ export default function Home() {
                     <OptimizationPanel candidates={result.candidatePlans} />
                     <AIReasoningView reasoning={result.plan.reasoning} />
                     <AlternativesPanel alternatives={result.plan.alternatives} />
+                    <ReasoningPanel results={result.reasoningResults} />
                   </TabsContent>
 
                   {/* 3. Execution Timeline */}
@@ -296,8 +298,8 @@ export default function Home() {
       <footer className="mt-auto border-t bg-background/80 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-1 px-4 py-3 text-center sm:flex-row sm:text-left">
           <p className="text-[11px] text-muted-foreground">
-            <span className="font-semibold text-foreground">PaySwap</span> · Financial Control Plane ·
-            28 engines · world store · optimization · state machine · constitution · production = simulation
+            <span className="font-semibold text-foreground">PaySwap</span> · Financial Kernel ·
+            29 engines · 43 constitution rules · 10 reasoning capabilities · 9 state machines · production = simulation
           </p>
           <p className="font-mono text-[10px] text-muted-foreground">
             {result ? `run ${result.runId.slice(0, 16)} · ${result.resultHash} · ${result.settled ? 'settled' : 'blocked'} · ${result.constitution.passed ? 'constitution ✓' : 'constitution ✗'}` : 'no run yet'}

@@ -705,6 +705,8 @@ export interface SimulationResult {
   candidatePlans: CandidatePlanSummary[];
   stateTransitions: StateTransitionSummary[];
   worldHistory: WorldSnapshotSummary[];
+  reasoningResults: ReasoningResultSummary[];
+  intentType: string;
 }
 
 /* ========================================================================== */
@@ -760,6 +762,25 @@ export interface WorldSnapshotSummary {
 }
 
 /* ========================================================================== */
+/* Financial Reasoning Engine                                                  */
+/* ========================================================================== */
+
+export interface ReasoningRecommendationSummary {
+  action: string;
+  rationale: string;
+  priority: 'low' | 'medium' | 'high';
+  category: string;
+}
+
+export interface ReasoningResultSummary {
+  category: string;
+  summary: string;
+  recommendations: ReasoningRecommendationSummary[];
+  confidence: number;
+  evidence: string[];
+}
+
+/* ========================================================================== */
 /* Scenario Library                                                            */
 /* ========================================================================== */
 
@@ -795,15 +816,20 @@ export interface RegressionResult {
 /* ========================================================================== */
 
 export interface ConstitutionCheck {
+  section: string;
   invariant: string;
   passed: boolean;
   detail: string;
+  severity: 'block' | 'warn';
 }
 
 export interface ConstitutionVerdict {
   passed: boolean;
-  violations: { invariant: string; detail: string; severity: 'block' | 'warn' }[];
-  checks: ConstitutionCheck[];
+  sections: { section: string; passed: boolean; checks: ConstitutionCheck[] }[];
+  violations: { section: string; invariant: string; detail: string; severity: 'block' | 'warn' }[];
+  checks: { invariant: string; passed: boolean; detail: string; section: string }[];
+  totalRules: number;
+  passedRules: number;
 }
 
 /* ========================================================================== */
