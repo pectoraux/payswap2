@@ -1485,3 +1485,89 @@ Success Criteria Progress:
 ✅ 8. Merchant can view analytics (revenue, transactions, AOV)
 ✅ 9. All through documented REST APIs
 ⬜ 10. Withdraw/settle funds (needs wallet withdrawal flow)
+
+---
+Task ID: PRODUCTION-2 (Payout Service + Merchant Dashboard — completes the money loop)
+Agent: main (Z.ai Code)
+Task: Build the final missing piece of the merchant journey — Withdraw/Settle funds (success criterion #10) — plus a production merchant dashboard UI that shows the complete end-to-end PaySwap product. Zero kernel changes.
+
+New Production Modules:
+
+1. `protocol/payouts/payout-service.ts` — Payout / Withdrawal Service (NEW, 322 lines)
+   - quote() — previews FX rate (from ExchangeRateConnector), fee (bps schedule), net amount; no state change
+   - request() — creates a Payout (state: requested → reviewing); fires payout.requested event + webhook
+   - process() — the irreversible step:
+     · bank/mobile_money: burns Twin Tokens (redeem) → connector (Open Banking / M-Pesa) initiates external fiat transfer → produces Evidence
+     · onchain: transfers Twin Tokens to external Stellar wallet → produces on-chain Evidence
+     · fires payout.processing → payout.completed (or payout.failed) events + webhooks
+   - cancel() — cancels before processing
+   - stats() — total, completed, failed, volume, fees, byMethod
+   - availableBalance() / creditMerchant() — helpers
+   - Fee schedule (protocol data, no kernel change): bank 50bps, mobile 75bps, onchain 10bps
+   - ETA schedule (protocol data): bank T+1, mobile 1min, onchain 5s
+   - Lifecycle: requested → reviewing → processing → completed | failed | cancelled
+   - All external truth via Evidence from connectors/adapter. All state via events. Zero kernel changes.
+
+2. `app/api/merchant/payout/route.ts` — Payout API (NEW)
+   - Actions: quote, request, process, cancel, list, get, stats, balance, seed
+   - GET returns recent payouts across merchants
+
+3. `app/api/merchant/state/route.ts` — Unified Dashboard State API (NEW)
+   - Single GET returns: merchant, apiKeys, team, settings, products, invoices, customers,
+     analytics, twinToken (asset + balance + operations), payouts, payoutStats,
+     webhooks (endpoints + deliveries), events (merchant-filtered)
+   - One round-trip for the whole dashboard
+
+4. `src/app/page.tsx` — PaySwap Merchant Dashboard (REPLACED the simulator view, ~1180 lines)
+   - Auto-bootstraps a demo merchant "Accra Coffee Co." (Ghana, GHS, 5000 bond → trusted)
+     on first load: onboard → verify → webhook → API key → product → customer → seed 25,000 TWINGHS
+   - Merchant hero: name, state, tier, country, bond, available balance, revenue, txns, payouts
+   - 6 tabs:
+     · Overview — KPIs, Twin Token balance card, recent token operations, top customers, recent payouts
+     · Checkout — 6 QR types (static/dynamic/checkout/invoice/donation/subscription), deterministic
+       pseudo-QR SVG visual (no external QR lib), hosted checkout + payment link cards
+     · Payouts — stats row + withdraw form (bank/mobile/onchain, FX quote, fee breakdown, net amount)
+       + payout history with evidence + txHash + status badges
+     · Catalog — create product, product grid, customer cards
+     · API & Webhooks — API key management (reveal/copy/scopes), webhook endpoints (URL/secret/events),
+       recent webhook deliveries with status + attempts
+     · Events — protocol event log (merchant.onboarded, merchant.verified, payout.*, twintoken.*, etc.)
+   - Sticky header with merchant tier badge + available balance + refresh/reset/theme toggle
+   - Sticky footer with merchant ID + kernel metadata
+   - Fully responsive (mobile-first), dark mode default, emerald/teal palette (no indigo/blue)
+
+Agent Browser Verification (golden path):
+  ✓ Page loads, auto-bootstraps merchant (6 onboard calls + seed payout, all 200)
+  ✓ Merchant hero shows: Accra Coffee Co. · active · trusted · Ghana · bond GH₵5,000 · available GH₵25,000
+  ✓ Overview tab: KPIs (revenue, AOV, token supply, payout volume), token balance card, operations list
+  ✓ Payouts tab: quote 1000 TWINGHS → 995 GHS net (50 bps fee) → click Withdraw → 
+    "Payout completed GH₵995 · bank_tx_owz1111" — evidence: open_banking (institutional)
+  ✓ Payout history shows completed entry with txHash + evidence source
+  ✓ Checkout tab: QR visual renders, amount + reference shown, hosted checkout + payment link cards
+  ✓ API tab: API key "Production" with scopes, webhook endpoint with URL + secret + subscribed events,
+    webhook deliveries show payout.requested / payout.processing / payout.completed all "delivered"
+  ✓ Events tab: full event chain visible (merchant.onboarded → verified → tier_upgraded → api_key_created
+    → payout.requested → payout.processing → payout.completed)
+  ✓ No console errors, no runtime errors, no hydration crashes
+  ✓ Layout confirmed professional (VLM: "fintech-grade appearance, complete, graceful empty states")
+
+Regression:
+  - All existing protocol modules untouched (41 files)
+  - All existing API endpoints untouched (18 endpoints)
+  - Kernel: ZERO changes (frozen 7 primitives intact)
+  - New: 1 protocol module + 2 API endpoints + 1 page replacement
+
+Success Criteria — ALL 10 COMPLETE:
+  ✅ 1. Merchant can register (onboard API)
+  ✅ 2. Merchant can complete verification (verify with bond)
+  ✅ 3. Merchant can generate API key (psk_live_xxx)
+  ✅ 4. Merchant can embed checkout (QR + hosted checkout + payment links)
+  ✅ 5. Merchant can accept QR payments (6 QR types)
+  ✅ 6. Twin Tokens minted on Stellar (cryptographic evidence)
+  ✅ 7. Merchant can receive webhooks (auto-fired on payment + payout events)
+  ✅ 8. Merchant can view analytics (revenue, transactions, AOV, refund rate)
+  ✅ 9. All through documented REST APIs (20 endpoints total)
+  ✅ 10. Withdraw/settle funds (Payout service: bank + mobile money + on-chain)
+
+Lint: clean | Dev log: all 200, no errors | Browser: verified end-to-end
+Protocol files: 42 (was 41) | API endpoints: 20 (was 18) | Kernel changes: 0
