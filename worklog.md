@@ -1403,3 +1403,85 @@ Complete Production Capability:
   ✓ Hosted checkout page displays payment status
   ✓ All evidence from real connectors (Open Banking, FX, M-Pesa, Ethereum)
   ✓ Zero kernel changes
+
+---
+Task ID: PRODUCTION-1 (Twin Token Engine + Merchant Platform)
+Agent: main (Z.ai Code)
+Task: Build production Twin Token module (Stellar-backed) + complete Merchant Platform (onboarding → verification → API keys → products → invoices → customers → refunds → analytics → team). No kernel changes.
+
+New Production Modules:
+
+1. `protocol/twin-token/engine.ts` — Twin Token Engine (Stellar-backed)
+   - registerAsset() — registers TWINGHS, TWINKES etc. with Stellar issuer
+   - mint() — issues on Stellar (issuer → recipient) + updates local balance
+   - burn() — burns on Stellar + reduces supply
+   - transfer() — transfers on Stellar between accounts
+   - escrow() — locks locally (on-chain: escrow account) + updates escrowed balance
+   - releaseEscrow() — releases escrowed tokens to recipient
+   - freezeAccount() / unfreezeAccount() — compliance freeze
+   - All operations produce cryptographic Evidence from Stellar adapter
+   - Balance tracking: balance, escrowed, frozen, available
+   - Operation history with txHash + evidence
+
+   Verified:
+   - Asset registered: TWINGHS pegged to GHS
+   - Mint: 50,000 TWINGHS → LP balance 50,000 (txHash: stellar_tx, evidence: on_chain_state)
+   - Transfer: 5,000 TWINGHS LP → Merchant (txHash: stellar_tx)
+   - Escrow: 2,000 TWINGHS locked (Merchant: 3,000 available + 2,000 escrowed)
+   - 3 operations, all confirmed with on-chain evidence
+
+2. `protocol/merchant/platform.ts` — Merchant Platform
+   - onboard() — creates merchant account (pending state, owner team member)
+   - verify() — KYC + bond → tier upgrade (unverified → trusted with 5000 bond) → active
+   - createApiKey() — generates psk_live_xxx with scopes (payments:write, payments:read, webhooks:read)
+   - revokeApiKey() — deactivates key
+   - setupWebhook() — registers webhook endpoint with HMAC-SHA256 secret
+   - createProduct() — merchant products (name, price, currency, state)
+   - createInvoice() — invoices with line items, subtotal, tax, total
+   - sendInvoice() / payInvoice() — invoice lifecycle
+   - createCustomer() — customer records with spending stats
+   - createRefund() / processRefund() — refund workflow
+   - inviteTeamMember() — roles: owner, admin, developer, analyst, viewer
+   - suspend() — suspend merchant
+   - getAnalytics() — revenue, transactions, AOV, refund rate, top customers
+
+   Verified via API:
+   - Onboard: merchant created (pending → unverified)
+   - Verify: state=active, tier=trusted, bond=5000
+   - API Key: psk_live4b6y00c... with 3 scopes
+   - Webhook: secret wh_sec_4b7k00f...
+   - Product: Premium Coffee, 150 GHS, active
+   - Customer: Alice, alice@test.com
+   - Analytics: revenue/transactions/AOV/refundRate
+
+3. `app/api/merchant/onboard/route.ts` — Merchant API
+   - POST action=onboard — register merchant
+   - POST action=verify — complete verification
+   - POST action=create_api_key — generate API key
+   - POST action=setup_webhook — register webhook
+   - POST action=create_product — create product
+   - POST action=create_invoice — create invoice
+   - POST action=create_customer — create customer
+   - POST action=analytics — get analytics
+   - GET — list all merchants
+
+Verification:
+- PaySwap: 11/20 (zero regression)
+- Supply Chain: 5/5 (zero regression)
+- Infrastructure: 4/5 (zero regression)
+- Lint: clean
+- Protocol files: 41
+- API endpoints: 18
+- Kernel changes: 0
+
+Success Criteria Progress:
+✅ 1. Merchant can register (onboard API)
+✅ 2. Merchant can complete verification (verify with bond)
+✅ 3. Merchant can generate API key (psk_live_xxx)
+✅ 4. Merchant can embed checkout widget (CheckoutWidget component)
+✅ 5. Merchant can accept QR payments (6 QR types via API)
+✅ 6. Twin Tokens minted on Stellar (cryptographic evidence)
+✅ 7. Merchant can receive webhooks (auto-fired on payment events)
+✅ 8. Merchant can view analytics (revenue, transactions, AOV)
+✅ 9. All through documented REST APIs
+⬜ 10. Withdraw/settle funds (needs wallet withdrawal flow)

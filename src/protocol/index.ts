@@ -64,6 +64,14 @@ export { StellarAdapter, stellarAdapter } from './blockchains/stellar/adapter';
 // Webhooks
 export { webhookEngine, WebhookEngine } from './webhooks/engine';
 export type { WebhookEndpoint, WebhookDelivery } from './webhooks/engine';
+
+// Twin Token Engine
+export { twinTokenEngine, TwinTokenEngine } from './twin-token/engine';
+export type { TwinTokenAsset, TwinTokenBalance, TwinTokenOperation } from './twin-token/engine';
+
+// Merchant Platform
+export { merchantPlatform, MerchantPlatform } from './merchant/platform';
+export type { MerchantAccount, ApiKey, Product, Invoice, Customer, Refund, MerchantSettings, MerchantAnalytics, Role } from './merchant/platform';
 export { createFiatProof, computeConfidence, effectiveLiquidity } from './economics/fiat-proof';
 export { createAttestation, ATTESTATION_LABELS } from './economics/attestation';
 export type { Attestation, AttestationKind } from './economics/attestation';
