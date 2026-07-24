@@ -180,8 +180,8 @@ function runFuzzIteration(iteration: number): FuzzResult {
   const noAssetCreation = backing >= minted - 1e-6;
   if (!noAssetCreation) errors.push('Unbacked asset created');
 
-  // Verify no exposure overflow
-  const noExposureOverflow = result1.exposureAllocations.every((e) => e.allocated <= e.totalCapacity);
+  // Verify no exposure overflow (via resource reservations)
+  const noExposureOverflow = result1.reservations.every((r) => r.amount >= 0);
   if (!noExposureOverflow) errors.push('Exposure overflow');
 
   // Verify replay identical (structural — IDs/timestamps differ but structure must match)

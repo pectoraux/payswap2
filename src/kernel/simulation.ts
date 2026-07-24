@@ -50,7 +50,7 @@ import { evaluateConstitution } from './constitution';
 import { EventCatalog } from './events';
 import { ENGINES, RUNTIME_SERVICES } from './registry';
 import { KERNEL_VERSION, uid, round, hashMetrics, PRIORITY_WEIGHTS } from './support';
-import type { ReasoningResultSummary, ExecutionGraphSummary, EntitySummary, OrganizationPolicy, RuntimeServiceSummary, SolverCandidateSummary, TransitionSummary, EventLogEntry, ObligationSummary, ClaimSummary, ExposureAllocationSummary } from './types';
+import type { ReasoningResultSummary, ExecutionGraphSummary, EntitySummary, OrganizationPolicy, RuntimeServiceSummary, SolverCandidateSummary, TransitionSummary, EventLogEntry, ObligationSummary, ProposalSummary, ReservationSummary } from './types';
 import { entitiesFromScenario } from './entity';
 import { buildExecutionGraph, topologicalOrder } from './execution-graph';
 import { Commands } from './command';
@@ -59,11 +59,9 @@ import { capabilityRegistry, ALL_CAPABILITIES } from './capabilities';
 import { createEventSourcedWorld, appendTransition, currentWorld, type EventSourcedWorld } from './event-sourced-world';
 import { createEvidence, type Evidence as KernelEvidence } from './evidence';
 import { obligation, obligationStore, transitionObligation, type Obligation } from './obligation';
-import { createClaim, supportClaim, validateClaim, claimsStore, type Claim } from './claims';
-import { exposureManager } from '@/protocol/economics/exposure-allocation';
-import { exposureLeaseManager } from '@/protocol/economics/exposure-lease';
-import { commitment, commitmentStore, acceptCommitment, activateCommitment, completeCommitment, type Commitment } from './commitment';
-import { ReputationProjection } from './confidence-engine';
+import { proposal, proposalStore, accept as acceptProposal, activate as activateProposal, complete as completeProposal, type Proposal } from './proposal';
+import { resourceReservation } from './resource-reservation';
+import { confidenceService } from './confidence-service';
 import { settlementEscrowContract, collateralVaultContract, lpRegistryContract, merchantRegistryContract, twinTokenContract, liquidityPoolContract } from '@/protocol/contracts';
 import { computeAuthorizedExposure, defaultExposureFactors } from '@/protocol/economics/authorized-exposure';
 import { computeLPReputation, defaultLPReputation } from '@/protocol/economics/reputation';
@@ -431,101 +429,56 @@ export class SimulationEngine {
       dueAt: confirmOb.dueAt, fulfilledAt: confirmOb.fulfilledAt,
     });
 
-    // 22. Claims — LPs claim settlement capacity; evidence supports claims.
-    claimsStore.reset();
-    const claims: ClaimSummary[] = [];
-    for (const lp of scenario.liquidityProviders) {
-      if (lp.online) {
-        let claim = createClaim({
-          type: 'settlement_capacity',
-          claimantId: `lp:${lp.id}`,
-          claimText: `I can settle ${lp.tradingCapacity} ${scenario.transaction.merchant.currency}`,
-          claimedAmount: lp.tradingCapacity,
-          currency: scenario.transaction.merchant.currency,
-        });
-        // Support with evidence
-        const lpEvidence = solverEvidence.filter((e) => e.entityId === `lp:${lp.id}`);
-        claim = supportClaim(claim, lpEvidence);
-        claim = validateClaim(claim, 0.3);
-        claimsStore.register(claim);
-        claims.push({
-          id: claim.id, type: claim.type, state: claim.state,
-          claimantId: claim.claimantId, claimText: claim.claimText,
-          claimedAmount: claim.claimedAmount, confidence: claim.confidence,
-          evidenceCount: claim.supportingEvidence.length,
-        });
-      }
-    }
-
-    // 23. Exposure as allocated resource.
-    exposureManager.reset();
-    for (const lp of scenario.liquidityProviders) {
-      if (lp.online) {
-        const capacity = computeAuthorizedExposure(defaultExposureFactors(lp.tradingCapacity * 0.2, lp.tradingCapacity));
-        exposureManager.register(lp.id, capacity, scenario.transaction.merchant.currency);
-      }
-    }
-    // Reserve exposure for the winning candidate's draws
+    // 22. Proposals — merge of Claims + Commitments. Evidence → Proposal → Obligation.
+    proposalStore.reset();
+    const proposals: import('./types').ProposalSummary[] = [];
     for (const draw of plan.sourceDraws) {
-      exposureManager.reserve(draw.sourceId, plan.id, draw.drawn, scenario.transaction.merchant.currency);
-      exposureManager.consume(draw.sourceId, plan.id); // mark as consumed after settlement
-    }
-    const exposureAllocations: ExposureAllocationSummary[] = exposureManager.all().map((e) => ({
-      lpId: e.lpId, totalCapacity: e.totalCapacity,
-      allocated: exposureManager.allocated(e.lpId),
-      remaining: exposureManager.remaining(e.lpId),
-      utilization: exposureManager.utilization(e.lpId),
-      allocationCount: e.allocations.length,
-    }));
-
-    // 24. Commitments — LPs commit to settling; activation creates obligations.
-    commitmentStore.reset();
-    const commitments: import('./types').CommitmentSummary[] = [];
-    for (const draw of plan.sourceDraws) {
-      let cm = commitment({
-        type: 'settlement',
-        committerId: `lp:${draw.sourceId}`,
+      let p = proposal({
+        type: 'deliver',
+        proposerId: `lp:${draw.sourceId}`,
         beneficiaryId: 'wallet:merchant',
         amount: draw.drawn,
         currency: scenario.transaction.merchant.currency,
+        confidence: 0.83,
         ttlMs: 300000,
       });
-      cm = acceptCommitment(cm);
-      // Activate → creates obligation (link to the obligation created above)
+      p = acceptProposal(p);
       const matchingObl = obligations.find((o) => o.obligorId === `lp:${draw.sourceId}`);
-      if (matchingObl) {
-        cm = activateCommitment(cm, matchingObl.id);
-      }
-      if (out.settled) cm = completeCommitment(cm);
-      commitmentStore.register(cm);
-      commitments.push({
-        id: cm.id, type: cm.type, state: cm.state,
-        committerId: cm.committerId, beneficiaryId: cm.beneficiaryId,
-        amount: cm.amount, currency: cm.currency,
-        expiresAt: cm.expiresAt, activatedAt: cm.activatedAt, obligationId: cm.obligationId,
+      if (matchingObl) p = activateProposal(p, matchingObl.id);
+      if (out.settled) p = completeProposal(p);
+      proposalStore.register(p);
+      proposals.push({
+        id: p.id, type: p.type, state: p.state,
+        proposerId: p.proposerId, beneficiaryId: p.beneficiaryId,
+        amount: p.amount, currency: p.currency, confidence: p.confidence,
+        expiresAt: p.expiresAt, obligationId: p.obligationId,
       });
     }
 
-    // 25. Exposure Leases — capacity leased per transaction.
-    exposureLeaseManager.reset();
+    // 23. Resource Reservations — generic (replaces Exposure Leases + Allocations).
+    resourceReservation.reset();
     for (const lp of scenario.liquidityProviders) {
       if (lp.online) {
         const capacity = computeAuthorizedExposure(defaultExposureFactors(lp.tradingCapacity * 0.2, lp.tradingCapacity));
-        exposureLeaseManager.registerCapacity(lp.id, capacity, scenario.transaction.merchant.currency);
+        resourceReservation.registerCapacity('exposure', lp.id, capacity, scenario.transaction.merchant.currency);
       }
     }
-    const leases: import('./types').LeaseSummary[] = [];
+    const reservations: import('./types').ReservationSummary[] = [];
     for (const draw of plan.sourceDraws) {
-      const lease = exposureLeaseManager.lease(draw.sourceId, plan.id, draw.drawn, scenario.transaction.merchant.currency);
-      if (lease) {
-        if (out.settled) exposureLeaseManager.consume(lease.id);
-        leases.push({
-          id: lease.id, lpId: lease.lpId, transactionId: lease.transactionId,
-          capacity: lease.capacity, currency: lease.currency, state: lease.state,
-          expiresAt: lease.expiresAt, renewalCount: lease.renewalCount,
+      const r = resourceReservation.reserve('exposure', draw.sourceId, 'wallet:merchant', draw.drawn, 300000, scenario.transaction.merchant.currency);
+      if (r) {
+        if (out.settled) resourceReservation.consume(r.id);
+        reservations.push({
+          id: r.id, resourceType: r.resourceType, ownerId: r.ownerId, consumerId: r.consumerId,
+          amount: r.amount, state: r.state, expiresAt: r.expiresAt, renewalCount: r.renewalCount,
         });
       }
     }
+
+    // 24. Confidence Service — planner consumes confidence, not evidence sources.
+    confidenceService.reset();
+    confidenceService.registerEvidence(solverEvidence);
+    confidenceService.registerEvents(out.events.map((e) => ({ type: e.type, payload: e.payload, ts: e.ts, entityId: e.payload.entityId as string })));
 
     const resultHash = hashMetrics({
       costPercent: plan.metrics.costPercent,
@@ -575,10 +528,8 @@ export class SimulationEngine {
       scenarioId: '',
       validates: [],
       obligations: obligations ?? [],
-      claims: claims ?? [],
-      exposureAllocations: exposureAllocations ?? [],
-      commitments: commitments ?? [],
-      leases: leases ?? [],
+      proposals: proposals ?? [],
+      reservations: reservations ?? [],
     };
   }
 

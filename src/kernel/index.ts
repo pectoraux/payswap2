@@ -35,12 +35,12 @@ export { createEvidence, computeEvidenceConfidence, effectiveLiquidityFromEviden
 export type { Evidence, EvidenceType, EvidenceSource, VerificationLevel, EvidenceCitation, EvidenceNode } from './evidence';
 export { obligation, transitionObligation, transferFulfiller, isOverdue, isActive, ObligationStore, obligationStore, OBLIGATION_LABELS } from './obligation';
 export type { Obligation, ObligationType, ObligationState, ObligationPriority } from './obligation';
-export { createClaim, supportClaim, validateClaim, executeClaim, breachClaim, ClaimsStore, claimsStore, CLAIM_LABELS } from './claims';
-export type { Claim, ClaimType, ClaimState } from './claims';
-export { commitment, acceptCommitment, rejectCommitment, activateCommitment, completeCommitment, expireCommitment, withdrawCommitment, breachCommitment, canActivate, CommitmentStore, commitmentStore, COMMITMENT_LABELS } from './commitment';
-export type { Commitment, CommitmentType, CommitmentState } from './commitment';
-export { computeConfidence, aggregateConfidence, ReputationProjection } from './confidence-engine';
-export type { ConfidenceResult } from './confidence-engine';
+export { proposal, accept as acceptProposal, reject as rejectProposal, activate as activateProposal, complete as completeProposal, expire as expireProposal, withdraw as withdrawProposal, breach as breachProposal, canActivate, isExpired as isProposalExpired, isActive as isProposalActive, ProposalStore, proposalStore, PROPOSAL_LABELS } from './proposal';
+export type { Proposal, ProposalType, ProposalState } from './proposal';
+export { ResourceReservation, resourceReservation } from './resource-reservation';
+export type { Reservation, ReservationState, ResourceCapacity } from './resource-reservation';
+export { ConfidenceService, confidenceService } from './confidence-service';
+export type { ConfidenceQuery, ConfidenceResult } from './confidence-service';
 export { PlanExecutor } from './plan-executor';
 export { LedgerEngine } from './ledger';
 export { ReserveEngine } from './reserve';

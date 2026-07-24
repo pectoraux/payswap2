@@ -720,31 +720,29 @@ export interface SimulationResult {
   scenarioId: string;
   validates: string[];
   obligations: ObligationSummary[];
-  claims: ClaimSummary[];
-  exposureAllocations: ExposureAllocationSummary[];
-  commitments: CommitmentSummary[];
-  leases: LeaseSummary[];
+  proposals: ProposalSummary[];
+  reservations: ReservationSummary[];
 }
 
-export interface CommitmentSummary {
+export interface ProposalSummary {
   id: string;
   type: string;
   state: string;
-  committerId: string;
+  proposerId: string;
   beneficiaryId: string;
   amount?: number;
   currency?: string;
+  confidence: number;
   expiresAt: number;
-  activatedAt: number | null;
   obligationId?: string;
 }
 
-export interface LeaseSummary {
+export interface ReservationSummary {
   id: string;
-  lpId: string;
-  transactionId: string;
-  capacity: number;
-  currency: string;
+  resourceType: string;
+  ownerId: string;
+  consumerId: string;
+  amount: number;
   state: string;
   expiresAt: number;
   renewalCount: number;
@@ -764,26 +762,6 @@ export interface ObligationSummary {
   currency?: string;
   dueAt: number;
   fulfilledAt: number | null;
-}
-
-export interface ClaimSummary {
-  id: string;
-  type: string;
-  state: string;
-  claimantId: string;
-  claimText: string;
-  claimedAmount?: number;
-  confidence: number;
-  evidenceCount: number;
-}
-
-export interface ExposureAllocationSummary {
-  lpId: string;
-  totalCapacity: number;
-  allocated: number;
-  remaining: number;
-  utilization: number;
-  allocationCount: number;
 }
 
 export interface FiatProofSummary {
