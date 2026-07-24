@@ -48,9 +48,12 @@ import { lpLifecycle } from './lp-lifecycle';
 import { buildGraph } from './financial-graph';
 import { evaluateConstitution } from './constitution';
 import { EventCatalog } from './events';
-import { ENGINES } from './registry';
+import { ENGINES, RUNTIME_SERVICES } from './registry';
 import { KERNEL_VERSION, uid, round, hashMetrics } from './support';
-import type { ReasoningResultSummary } from './types';
+import type { ReasoningResultSummary, ExecutionGraphSummary, EntitySummary, OrganizationPolicy, RuntimeServiceSummary } from './types';
+import { entitiesFromScenario } from './entity';
+import { buildExecutionGraph, topologicalOrder } from './execution-graph';
+import { Commands } from './command';
 
 export interface SimulationOptions {
   actorId?: string;
@@ -259,6 +262,54 @@ export class SimulationEngine {
       return { version: snap.version, label: snap.label, ts: snap.ts, totalReserves: sum.totalReserves, totalLpCapacity: sum.totalLpCapacity, totalTwinSupply: sum.totalTwinSupply, totalTreasury: sum.totalTreasury, ledgerBalanced: sum.ledgerBalanced, events: sum.events };
     });
 
+    // 13. Execution Graph DAG (replaces linear plan — enables parallel execution, retries, compensation).
+    const cmd = Commands.transferLiquidity('wallet:buyer', 'wallet:merchant', scenario.transaction.amount, scenario.transaction.currency);
+    const graphNodes = plan.steps.map((s) => ({
+      type: s.type === 'debit_source' ? 'debit' as const : s.type === 'credit_reserve' || s.type === 'credit_destination' ? 'credit' as const : s.type === 'mint_twin' ? 'mint' as const : s.type === 'burn_twin' ? 'burn' as const : s.type === 'draw_lp' ? 'draw_lp' as const : s.type === 'draw_reserve' ? 'draw_reserve' as const : s.type === 'draw_treasury' ? 'draw_treasury' as const : s.type === 'fx_convert' ? 'fx_convert' as const : s.type === 'notify_lp' ? 'notify' as const : s.type === 'await_confirmation' ? 'await' as const : s.type === 'insurance_claim' ? 'insurance' as const : 'accrue_fee' as const,
+      title: s.title,
+      description: s.description,
+      amount: s.amount,
+      currency: s.currency,
+      entityRef: s.sourceRef?.id ?? s.targetRef?.id,
+      reversible: s.reversible,
+      frame: s.frame,
+      meta: s.meta as Record<string, string | number | boolean> | undefined,
+    }));
+    const execGraph = buildExecutionGraph(cmd.id, graphNodes);
+    const executionGraph: ExecutionGraphSummary = {
+      id: execGraph.id, commandId: execGraph.commandId,
+      totalNodes: execGraph.totalNodes, parallelGroups: execGraph.parallelGroups,
+      criticalPathLength: execGraph.criticalPathLength, status: execGraph.status,
+      nodes: execGraph.nodes.map((n) => ({ id: n.id, type: n.type, title: n.title, status: n.status, parallelGroup: n.parallelGroup ?? 0, dependencies: n.dependencies, reversible: n.reversible, checkpoint: n.checkpoint ?? false, amount: n.amount, currency: n.currency, frame: n.frame })),
+      edges: execGraph.edges.map((e) => ({ from: e.from, to: e.to, kind: e.kind })),
+    };
+
+    // 14. Entities (the Entity-Component model — every object derives from Entity).
+    const entities: EntitySummary[] = entitiesFromScenario(scenario).map((e) => ({
+      id: e.id, type: e.type, state: e.state, label: e.label, country: e.country, currency: e.currency,
+      balance: e.balance,
+      capabilities: Object.entries(e.capabilities).filter(([, v]) => v).map(([k]) => k),
+      policies: e.policies as Record<string, unknown>,
+    }));
+
+    // 15. Organization Policy (configurable, vs immutable Constitution).
+    const organizationPolicy: OrganizationPolicy = {
+      reserveThreshold: scenario.treasury.destinationReserve.minThreshold,
+      treasuryStrategy: 'balanced',
+      lpPreference: 'mixed',
+      carbonObjective: scenario.aiWeights.carbonImpact,
+      communityWeight: scenario.aiWeights.communityImpact,
+      riskAppetite: scenario.policies.maxRiskScore > 0.4 ? 'high' : scenario.policies.maxRiskScore > 0.2 ? 'medium' : 'low',
+      maxLpShare: scenario.policies.maxLpShare,
+      maxCostPercent: scenario.policies.maxCostPercent,
+      maxRiskScore: scenario.policies.maxRiskScore,
+      requireInsurance: scenario.policies.requireInsurance,
+      reservePolicy: scenario.policies.reservePolicy,
+    };
+
+    // 16. Runtime Services (6 consolidated services).
+    const runtimeServices: RuntimeServiceSummary[] = RUNTIME_SERVICES;
+
     const resultHash = hashMetrics({
       costPercent: plan.metrics.costPercent,
       settlementTimeMs: plan.metrics.settlementTimeMs,
@@ -294,6 +345,10 @@ export class SimulationEngine {
       worldHistory,
       reasoningResults,
       intentType: 'payment',
+      executionGraph,
+      entities,
+      organizationPolicy,
+      runtimeServices,
     };
   }
 

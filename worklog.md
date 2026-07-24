@@ -142,3 +142,27 @@ Stage Summary:
 - State Machines: 9 definitions, LP has 15 lifecycle edges, Merchant 7, Reserve 7.
 - Intent API: kernel.intent().payment/loan/rebalance/withdrawLP/insurancePayout/convertStablecoin/reserveReplenish/lpStake().
 - 29 engines. Lint clean. Agent Browser verified: Constitution shows 43/43 rules, 12 sections; Reasoning panel shows 10 capabilities. No errors.
+
+---
+Task ID: RT-1 (PaySwap Runtime — Deterministic Financial Runtime)
+Agent: main (Z.ai Code)
+Task: Final restructuring — kernel becomes a deterministic financial runtime. Every object is an Entity; every change is a Command; the solver produces an Execution Graph DAG. Consolidate 29 engines into 6 Runtime Services. Separate Constitution (immutable) from Organization Policy (configurable).
+
+Work Log:
+- New `entity.ts`: Entity-Component model. Every object (reserve, LP, merchant, treasury, wallet, twin_token, insurance_pool, financial_operator, country, bank, psp, loan, etc.) derives from a single Entity type: { id, type, state, attributes, relationships, capabilities, policies, metadata }. entitiesFromScenario() converts scenario to 14 entities. ENTITY_META for display.
+- New `command.ts`: Command pattern. 15 command types (TransferLiquidity, MintAsset, BurnAsset, MoveReserve, StakeLP, UnstakeLP, CreateClaim, ApproveClaim, ExecuteSettlement, FreezeAccount, OpenCorridor, CloseCorridor, IssueLoan, ConvertStablecoin, ReplenishReserve). Commands express intent, don't know how. Commands builders + labels.
+- New `execution-graph.ts`: Execution Graph DAG (replaces linear plan). GraphNode with dependencies, parallelGroup, compensationNode, checkpoint. buildExecutionGraph() computes parallel groups + critical path. topologicalOrder() + parallelLayers(). Enables parallel execution, retries, checkpoints, compensation, partial rollback, replay.
+- Updated `simulation.ts`: builds Execution Graph DAG from plan steps, generates Entity registry from scenario, separates Organization Policy (configurable) from Constitution (immutable), surfaces 6 Runtime Services.
+- Updated `types.ts`: added ExecutionGraphSummary, EntitySummary, OrganizationPolicy, RuntimeServiceSummary. SimulationResult now includes executionGraph, entities, organizationPolicy, runtimeServices.
+- Updated `registry.ts`: RUNTIME_SERVICES — 6 consolidated services (World Runtime, Financial Solver, Execution Runtime, Governance Runtime, Intelligence Runtime, Developer Runtime) grouping the 29 engines. Version 0.6.0-runtime.
+- New UI: execution-graph-dag.tsx (DAG with parallel layers + checkpoints + reversibility), entity-registry.tsx (14 entities grouped by type with capabilities/state), runtime-services.tsx (6 services with status + engine counts).
+- Updated page.tsx: title "PaySwap Runtime", subtitle about entity/command/DAG. World tab shows Entity Registry. Execution tab shows DAG. Infra tab shows Runtime Services + Entity Registry.
+
+Stage Summary:
+- Kernel is now a deterministic financial runtime — not an application.
+- Entity model: 14 entities (country, reserve, LP, treasury, FO, wallet, insurance_pool), all derive from common Entity type.
+- Command pattern: 15 command types expressing intent without implementation.
+- Execution Graph DAG: 9 nodes, 9 parallel layers, critical path 9, checkpoints every 3 nodes, compensation edges.
+- 6 Runtime Services consolidate 29 engines: World Runtime (5), Financial Solver (3), Execution Runtime (5), Governance Runtime (8), Intelligence Runtime (4), Developer Runtime (4).
+- Constitution (immutable, 43 rules) separated from Organization Policy (configurable: reserveThreshold, treasuryStrategy, lpPreference, riskAppetite, carbonObjective, communityWeight).
+- Lint clean. Agent Browser verified: Entity Registry (14 entities), DAG (9 nodes, 9 layers), Runtime Services (6 services). No errors.

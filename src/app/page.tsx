@@ -18,6 +18,9 @@ import { LPLifecyclePanel } from '@/components/simulator/lp-lifecycle';
 import { OptimizationPanel } from '@/components/simulator/optimization-panel';
 import { StateMachinePanel } from '@/components/simulator/state-machine-panel';
 import { ReasoningPanel } from '@/components/simulator/reasoning-panel';
+import { ExecutionGraphDAG } from '@/components/simulator/execution-graph-dag';
+import { EntityRegistry } from '@/components/simulator/entity-registry';
+import { RuntimeServicesPanel } from '@/components/simulator/runtime-services';
 import { ThemeToggle } from '@/components/simulator/theme-toggle';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
@@ -165,7 +168,7 @@ export default function Home() {
                 <span className="text-sm font-bold tracking-tight">PaySwap</span>
                 <Badge variant="secondary" className="h-4 px-1 text-[9px] font-mono">v{meta?.kernelVersion ?? '0.2.0'}</Badge>
               </div>
-              <span className="text-[10px] text-muted-foreground">Financial Kernel</span>
+              <span className="text-[10px] text-muted-foreground">PaySwap Runtime</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -178,11 +181,12 @@ export default function Home() {
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
         <div className="mb-6">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Financial Kernel</h1>
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PaySwap Runtime</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            The kernel asks: <span className="font-medium text-foreground">"Given the current world state and desired target, what sequence of valid
-            state transitions converges the world toward that target while satisfying the Constitution?"</span> Every operation — payment,
-            loan, rebalance, withdrawal, payout, conversion — is the same convergence problem.
+            A deterministic financial runtime. Every object is an <span className="font-medium text-foreground">Entity</span>;
+            every change is a <span className="font-medium text-foreground">Command</span>; the solver produces an
+            <span className="font-medium text-foreground"> Execution Graph DAG</span>. 6 runtime services consolidate 29 engines.
+            The runtime transforms one immutable financial world into another — nothing more.
           </p>
         </div>
 
@@ -241,6 +245,7 @@ export default function Home() {
 
                   {/* 1. World State */}
                   <TabsContent value="world" className="space-y-4 mt-4">
+                    <EntityRegistry entities={result.entities} />
                     <FinancialGraphPanel graph={result.graph} />
                     <div className="grid gap-4 xl:grid-cols-2">
                       <WorldStatePanel world={result.worldState} currency={result.scenario.transaction.currency} />
@@ -259,8 +264,8 @@ export default function Home() {
                   {/* 3. Execution Timeline */}
                   <TabsContent value="execution" className="space-y-4 mt-4">
                     <StateMachinePanel transitions={result.stateTransitions} />
+                    <ExecutionGraphDAG graph={result.executionGraph} />
                     {result.amendments.length > 0 && <AmendmentsPanel amendments={result.amendments} />}
-                    <ExecutionGraph plan={result.plan} />
                     <ReplayStepper key={result.runId} replay={result.replay} currency={result.scenario.transaction.currency} />
                   </TabsContent>
 
@@ -275,6 +280,8 @@ export default function Home() {
 
                   {/* 5. Infrastructure */}
                   <TabsContent value="infrastructure" className="space-y-4 mt-4">
+                    <RuntimeServicesPanel services={result.runtimeServices} />
+                    <EntityRegistry entities={result.entities} />
                     <FinancialGraphPanel graph={result.graph} />
                     <LPLifecyclePanel events={result.lpLifecycleEvents} />
                     {meta && <EnginesPanel engines={meta.engines} />}
@@ -298,8 +305,8 @@ export default function Home() {
       <footer className="mt-auto border-t bg-background/80 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-1 px-4 py-3 text-center sm:flex-row sm:text-left">
           <p className="text-[11px] text-muted-foreground">
-            <span className="font-semibold text-foreground">PaySwap</span> · Financial Kernel ·
-            29 engines · 43 constitution rules · 10 reasoning capabilities · 9 state machines · production = simulation
+            <span className="font-semibold text-foreground">PaySwap Runtime</span> ·
+            6 services · 29 engines · entity model · command pattern · execution DAG · 43 constitution rules · production = simulation
           </p>
           <p className="font-mono text-[10px] text-muted-foreground">
             {result ? `run ${result.runId.slice(0, 16)} · ${result.resultHash} · ${result.settled ? 'settled' : 'blocked'} · ${result.constitution.passed ? 'constitution ✓' : 'constitution ✗'}` : 'no run yet'}

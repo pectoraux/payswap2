@@ -60,3 +60,16 @@ export const ENGINES: EngineHealth[] = [
 ];
 
 export const ENGINE_COUNT = ENGINES.length;
+
+/**
+ * The 6 Runtime Services — consolidated grouping of the 29 engines.
+ * This reduces apparent complexity while preserving rich internal behavior.
+ */
+export const RUNTIME_SERVICES: { name: string; owns: string; status: 'online' | 'degraded' | 'offline'; engineCount: number }[] = [
+  { name: 'World Runtime', owns: 'World state, entities, events, snapshots', status: 'online', engineCount: 5 },
+  { name: 'Financial Solver', owns: 'Optimization, graph search, objective scoring', status: 'online', engineCount: 3 },
+  { name: 'Execution Runtime', owns: 'Execution graph, state machines, replay', status: 'online', engineCount: 5 },
+  { name: 'Governance Runtime', owns: 'Constitution, policies, permissions, audit', status: 'online', engineCount: 8 },
+  { name: 'Intelligence Runtime', owns: 'Deterministic reasoning, forecasting, LLM narratives', status: 'online', engineCount: 4 },
+  { name: 'Developer Runtime', owns: 'Intent API, extensions, SDKs, webhooks', status: 'online', engineCount: 4 },
+];

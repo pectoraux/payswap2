@@ -707,6 +707,17 @@ export interface SimulationResult {
   worldHistory: WorldSnapshotSummary[];
   reasoningResults: ReasoningResultSummary[];
   intentType: string;
+  executionGraph: ExecutionGraphSummary;
+  entities: EntitySummary[];
+  organizationPolicy: OrganizationPolicy;
+  runtimeServices: RuntimeServiceSummary[];
+}
+
+export interface RuntimeServiceSummary {
+  name: string;
+  owns: string;
+  status: 'online' | 'degraded' | 'offline';
+  engineCount: number;
 }
 
 /* ========================================================================== */
@@ -897,4 +908,50 @@ export interface LPLifecycleEvent {
   ts: number;
   detail: string;
 }
+
+/* ========================================================================== */
+/* PaySwap Runtime — Entity, Command, Execution Graph                         */
+/* ========================================================================== */
+
+export interface ExecutionGraphSummary {
+  id: string;
+  commandId: string;
+  totalNodes: number;
+  parallelGroups: number;
+  criticalPathLength: number;
+  status: string;
+  nodes: { id: string; type: string; title: string; status: string; parallelGroup: number; dependencies: string[]; reversible: boolean; checkpoint: boolean; amount?: number; currency?: string; frame?: number }[];
+  edges: { from: string; to: string; kind: string }[];
+}
+
+export interface EntitySummary {
+  id: string;
+  type: string;
+  state: string;
+  label: string;
+  country?: string;
+  currency?: CurrencyCode;
+  balance: number;
+  capabilities: string[];
+  policies: Record<string, unknown>;
+}
+
+/* ========================================================================== */
+/* Organization Policy (configurable, vs immutable Constitution)              */
+/* ========================================================================== */
+
+export interface OrganizationPolicy {
+  reserveThreshold: number;
+  treasuryStrategy: 'conservative' | 'balanced' | 'aggressive';
+  lpPreference: 'community' | 'institutional' | 'mixed';
+  carbonObjective: number; // 0..1 weight
+  communityWeight: number; // 0..1 weight
+  riskAppetite: 'low' | 'medium' | 'high';
+  maxLpShare: number;
+  maxCostPercent: number;
+  maxRiskScore: number;
+  requireInsurance: boolean;
+  reservePolicy: ReservePolicy;
+}
+
 

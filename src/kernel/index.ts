@@ -8,7 +8,7 @@
  */
 export * from './types';
 export { KERNEL_VERSION, CURRENCIES, COUNTRY_FLAGS, COUNTRIES, COUNTRY_OPTIONS, FO_META, PRIORITY_WEIGHTS, formatMoney, formatDuration, round, hashMetrics } from './support';
-export { ENGINES, ENGINE_COUNT } from './registry';
+export { ENGINES, ENGINE_COUNT, RUNTIME_SERVICES } from './registry';
 export { simulationEngine, SimulationEngine } from './simulation';
 export { OptimizationEngine } from './optimization-engine';
 export { WorldStore, buildWorldFromScenario, summarizeWorld } from './world-store';
@@ -17,6 +17,12 @@ export { stateMachine, StateMachineEngine, STATE_MACHINES, stateLabel, allowedNe
 export type { ObjectKind, PlanState, InsuranceState, LPState, MerchantState, ReserveState, StateTransition, StateMachineDefinition } from './state-machine';
 export { FinancialReasoningEngine, reasoningEngine } from './reasoning-engine';
 export type { ReasoningCategory, ReasoningResult, ReasoningRecommendation } from './reasoning-engine';
+export { createEntity, entitiesFromScenario, ENTITY_META } from './entity';
+export type { Entity, EntityType, EntityCapabilities, EntityPolicies, EntityRelationship, EntityMetadata } from './entity';
+export { Commands, COMMAND_LABELS } from './command';
+export type { Command, CommandType } from './command';
+export { buildExecutionGraph, topologicalOrder, parallelLayers } from './execution-graph';
+export type { ExecutionGraph, GraphNode, GraphEdge, GraphNodeStatus, GraphNodeType } from './execution-graph';
 export { PlanExecutor } from './plan-executor';
 export { LedgerEngine } from './ledger';
 export { ReserveEngine } from './reserve';
