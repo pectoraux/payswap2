@@ -270,4 +270,87 @@ export interface EvidenceCitation {
   evidenceType: EvidenceType;
   confidence: number;
   reliedOn: boolean; // did the solver rely on this evidence for the decision?
+  provenanceChain?: string[]; // chain of evidence IDs that support this evidence
 }
+
+/**
+ * Evidence Graph — evidence with provenance.
+ *
+ * Evidence itself has provenance. The runtime explains not only
+ * "I used this evidence" but "I trusted this evidence because…"
+ *
+ *   Bank Webhook → Settlement Event → Reputation Update → Exposure Increase
+ *
+ * This becomes extremely valuable during disputes.
+ */
+export interface EvidenceNode {
+  evidenceId: string;
+  type: EvidenceType;
+  source: EvidenceSource;
+  confidence: number;
+  derivedFrom: string[]; // parent evidence IDs (provenance chain)
+  derivedFromType: EvidenceType[];
+  explanation: string;   // human-readable: "I trusted this because…"
+}
+
+export class EvidenceGraph {
+  private nodes: Map<string, EvidenceNode> = new Map();
+
+  /** Add an evidence node with optional provenance. */
+  addNode(evidence: Evidence, derivedFrom: Evidence[] = [], explanation?: string): EvidenceNode {
+    const node: EvidenceNode = {
+      evidenceId: evidence.id,
+      type: evidence.type,
+      source: evidence.source,
+      confidence: computeEvidenceConfidence(evidence),
+      derivedFrom: derivedFrom.map((e) => e.id),
+      derivedFromType: derivedFrom.map((e) => e.type),
+      explanation: explanation ?? `Trusted ${evidence.source} (${evidence.verificationLevel}) at ${(computeEvidenceConfidence(evidence) * 100).toFixed(0)}% confidence`,
+    };
+    this.nodes.set(evidence.id, node);
+    return node;
+  }
+
+  /** Get the full provenance chain for a piece of evidence. */
+  provenanceChain(evidenceId: string): EvidenceNode[] {
+    const chain: EvidenceNode[] = [];
+    const visited = new Set<string>();
+    const collect = (id: string) => {
+      if (visited.has(id)) return;
+      visited.add(id);
+      const node = this.nodes.get(id);
+      if (!node) return;
+      chain.unshift(node);
+      for (const parentId of node.derivedFrom) {
+        collect(parentId);
+      }
+    };
+    collect(evidenceId);
+    return chain;
+  }
+
+  /** Explain why a piece of evidence was trusted. */
+  explain(evidenceId: string): string {
+    const chain = this.provenanceChain(evidenceId);
+    if (chain.length === 0) return 'No provenance available.';
+    return chain.map((n, i) => {
+      const prefix = '  '.repeat(i);
+      const derived = n.derivedFrom.length > 0 ? ` ← derived from ${n.derivedFromType.join(', ')}` : '';
+      return `${prefix}${n.source} (${n.type}, ${(n.confidence * 100).toFixed(0)}%)${derived}`;
+    }).join('\n');
+  }
+
+  getNode(evidenceId: string): EvidenceNode | undefined {
+    return this.nodes.get(evidenceId);
+  }
+
+  allNodes(): EvidenceNode[] {
+    return [...this.nodes.values()];
+  }
+
+  reset(): void {
+    this.nodes.clear();
+  }
+}
+
+export const evidenceGraph = new EvidenceGraph();

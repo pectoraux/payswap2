@@ -31,8 +31,12 @@ export { transition, buildTransitionsForDelta, verifyPreconditions, verifyPostco
 export type { Transition } from './transition';
 export { createEventSourcedWorld, appendEvent, appendTransition, currentWorld, rebuildWorld, rewindTo, diffWorlds, eventLogSummary } from './event-sourced-world';
 export type { EventSourcedWorld, WorldEvent } from './event-sourced-world';
-export { createEvidence, computeEvidenceConfidence, effectiveLiquidityFromEvidence, expireEvidence, revokeEvidence, validEvidenceFor, EvidenceStore, evidenceStore } from './evidence';
-export type { Evidence, EvidenceType, EvidenceSource, VerificationLevel, EvidenceCitation } from './evidence';
+export { createEvidence, computeEvidenceConfidence, effectiveLiquidityFromEvidence, expireEvidence, revokeEvidence, validEvidenceFor, EvidenceStore, evidenceStore, EvidenceGraph, evidenceGraph } from './evidence';
+export type { Evidence, EvidenceType, EvidenceSource, VerificationLevel, EvidenceCitation, EvidenceNode } from './evidence';
+export { obligation, transitionObligation, isOverdue, isActive, ObligationStore, obligationStore, OBLIGATION_LABELS } from './obligation';
+export type { Obligation, ObligationType, ObligationState, ObligationPriority } from './obligation';
+export { createClaim, supportClaim, validateClaim, executeClaim, breachClaim, ClaimsStore, claimsStore, CLAIM_LABELS } from './claims';
+export type { Claim, ClaimType, ClaimState } from './claims';
 export { PlanExecutor } from './plan-executor';
 export { LedgerEngine } from './ledger';
 export { ReserveEngine } from './reserve';

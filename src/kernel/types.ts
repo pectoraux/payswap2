@@ -719,6 +719,42 @@ export interface SimulationResult {
   fiatProofs: FiatProofSummary[];
   scenarioId: string;
   validates: string[];
+  obligations: ObligationSummary[];
+  claims: ClaimSummary[];
+  exposureAllocations: ExposureAllocationSummary[];
+}
+
+export interface ObligationSummary {
+  id: string;
+  type: string;
+  state: string;
+  priority: string;
+  obligorId: string;
+  obligeeId: string;
+  amount?: number;
+  currency?: string;
+  dueAt: number;
+  fulfilledAt: number | null;
+}
+
+export interface ClaimSummary {
+  id: string;
+  type: string;
+  state: string;
+  claimantId: string;
+  claimText: string;
+  claimedAmount?: number;
+  confidence: number;
+  evidenceCount: number;
+}
+
+export interface ExposureAllocationSummary {
+  lpId: string;
+  totalCapacity: number;
+  allocated: number;
+  remaining: number;
+  utilization: number;
+  allocationCount: number;
 }
 
 export interface FiatProofSummary {

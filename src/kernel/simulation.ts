@@ -50,7 +50,7 @@ import { evaluateConstitution } from './constitution';
 import { EventCatalog } from './events';
 import { ENGINES, RUNTIME_SERVICES } from './registry';
 import { KERNEL_VERSION, uid, round, hashMetrics, PRIORITY_WEIGHTS } from './support';
-import type { ReasoningResultSummary, ExecutionGraphSummary, EntitySummary, OrganizationPolicy, RuntimeServiceSummary, SolverCandidateSummary, TransitionSummary, EventLogEntry } from './types';
+import type { ReasoningResultSummary, ExecutionGraphSummary, EntitySummary, OrganizationPolicy, RuntimeServiceSummary, SolverCandidateSummary, TransitionSummary, EventLogEntry, ObligationSummary, ClaimSummary, ExposureAllocationSummary } from './types';
 import { entitiesFromScenario } from './entity';
 import { buildExecutionGraph, topologicalOrder } from './execution-graph';
 import { Commands } from './command';
@@ -58,13 +58,15 @@ import { ConstraintSolver } from './solver';
 import { capabilityRegistry, ALL_CAPABILITIES } from './capabilities';
 import { createEventSourcedWorld, appendTransition, currentWorld, type EventSourcedWorld } from './event-sourced-world';
 import { createEvidence, type Evidence as KernelEvidence } from './evidence';
+import { obligation, obligationStore, transitionObligation, type Obligation } from './obligation';
+import { createClaim, supportClaim, validateClaim, claimsStore, type Claim } from './claims';
+import { exposureManager } from '@/protocol/economics/exposure-allocation';
 import { settlementEscrowContract, collateralVaultContract, lpRegistryContract, merchantRegistryContract, twinTokenContract, liquidityPoolContract } from '@/protocol/contracts';
 import { computeAuthorizedExposure, defaultExposureFactors } from '@/protocol/economics/authorized-exposure';
 import { computeLPReputation, defaultLPReputation } from '@/protocol/economics/reputation';
 import { disputeEngine } from '@/protocol/settlement/disputes';
 import { auctionEngine } from '@/protocol/settlement/auctions';
 import { netSettlementEngine } from '@/protocol/settlement/net-settlement';
-import type { ProtocolSummary } from './types';
 
 export interface SimulationOptions {
   actorId?: string;
@@ -383,6 +385,94 @@ export class SimulationEngine {
     // 20. Protocol state — the real PaySwap protocol economics.
     const protocol = this.buildProtocolState(scenario, plan);
 
+    // 21. Obligations — the world converges outstanding obligations until none remain.
+    obligationStore.reset();
+    const obligations: ObligationSummary[] = [];
+    for (const draw of plan.sourceDraws) {
+      const ob = obligationStore.register(obligation({
+        type: 'fiat_settlement',
+        priority: 'critical',
+        obligorId: `lp:${draw.sourceId}`,
+        obligeeId: 'wallet:merchant',
+        amount: draw.drawn,
+        currency: scenario.transaction.merchant.currency,
+        dueAt: Date.now() + 300000, // 5 min deadline
+      }));
+      // Auto-fulfill settled obligations
+      if (out.settled) {
+        const fulfilled = transitionObligation(ob, 'fulfilled', 'settlement completed');
+        obligationStore.update(ob.id, fulfilled);
+      }
+      obligations.push({
+        id: ob.id, type: ob.type, state: obligationStore.get(ob.id)?.state ?? ob.state,
+        priority: ob.priority, obligorId: ob.obligorId, obligeeId: ob.obligeeId,
+        amount: ob.amount, currency: ob.currency, dueAt: ob.dueAt, fulfilledAt: ob.fulfilledAt,
+      });
+    }
+    // Merchant owes confirmation
+    const confirmOb = obligationStore.register(obligation({
+      type: 'confirmation',
+      priority: 'high',
+      obligorId: 'wallet:merchant',
+      obligeeId: 'system',
+      dueAt: Date.now() + 600000,
+    }));
+    if (out.settled) {
+      obligationStore.update(confirmOb.id, transitionObligation(confirmOb, 'fulfilled', 'merchant confirmed'));
+    }
+    obligations.push({
+      id: confirmOb.id, type: confirmOb.type, state: obligationStore.get(confirmOb.id)?.state ?? confirmOb.state,
+      priority: confirmOb.priority, obligorId: confirmOb.obligorId, obligeeId: confirmOb.obligeeId,
+      dueAt: confirmOb.dueAt, fulfilledAt: confirmOb.fulfilledAt,
+    });
+
+    // 22. Claims — LPs claim settlement capacity; evidence supports claims.
+    claimsStore.reset();
+    const claims: ClaimSummary[] = [];
+    for (const lp of scenario.liquidityProviders) {
+      if (lp.online) {
+        let claim = createClaim({
+          type: 'settlement_capacity',
+          claimantId: `lp:${lp.id}`,
+          claimText: `I can settle ${lp.tradingCapacity} ${scenario.transaction.merchant.currency}`,
+          claimedAmount: lp.tradingCapacity,
+          currency: scenario.transaction.merchant.currency,
+        });
+        // Support with evidence
+        const lpEvidence = solverEvidence.filter((e) => e.entityId === `lp:${lp.id}`);
+        claim = supportClaim(claim, lpEvidence);
+        claim = validateClaim(claim, 0.3);
+        claimsStore.register(claim);
+        claims.push({
+          id: claim.id, type: claim.type, state: claim.state,
+          claimantId: claim.claimantId, claimText: claim.claimText,
+          claimedAmount: claim.claimedAmount, confidence: claim.confidence,
+          evidenceCount: claim.supportingEvidence.length,
+        });
+      }
+    }
+
+    // 23. Exposure as allocated resource.
+    exposureManager.reset();
+    for (const lp of scenario.liquidityProviders) {
+      if (lp.online) {
+        const capacity = computeAuthorizedExposure(defaultExposureFactors(lp.tradingCapacity * 0.2, lp.tradingCapacity));
+        exposureManager.register(lp.id, capacity, scenario.transaction.merchant.currency);
+      }
+    }
+    // Reserve exposure for the winning candidate's draws
+    for (const draw of plan.sourceDraws) {
+      exposureManager.reserve(draw.sourceId, plan.id, draw.drawn, scenario.transaction.merchant.currency);
+      exposureManager.consume(draw.sourceId, plan.id); // mark as consumed after settlement
+    }
+    const exposureAllocations: ExposureAllocationSummary[] = exposureManager.all().map((e) => ({
+      lpId: e.lpId, totalCapacity: e.totalCapacity,
+      allocated: exposureManager.allocated(e.lpId),
+      remaining: exposureManager.remaining(e.lpId),
+      utilization: exposureManager.utilization(e.lpId),
+      allocationCount: e.allocations.length,
+    }));
+
     const resultHash = hashMetrics({
       costPercent: plan.metrics.costPercent,
       settlementTimeMs: plan.metrics.settlementTimeMs,
@@ -430,6 +520,9 @@ export class SimulationEngine {
       fiatProofs: [],
       scenarioId: '',
       validates: [],
+      obligations: obligations ?? [],
+      claims: claims ?? [],
+      exposureAllocations: exposureAllocations ?? [],
     };
   }
 
@@ -438,7 +531,7 @@ export class SimulationEngine {
    * Escrow, collateral, LP registry, merchant registry, disputes, auctions,
    * net settlement, twin token supply.
    */
-  private buildProtocolState(scenario: SimulationScenario, plan: import('./types').LiquidityExecutionPlan): ProtocolSummary {
+  private buildProtocolState(scenario: SimulationScenario, plan: import('./types').LiquidityExecutionPlan): import('./types').ProtocolSummary {
     const cur = scenario.transaction.merchant.currency;
     const amount = scenario.transaction.amount;
 
