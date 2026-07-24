@@ -6,7 +6,7 @@ import {
   Wallet, KeyRound, Webhook, Package, QrCode, ArrowDownToLine, ArrowUpRight,
   Shield, CheckCircle2, Clock, AlertCircle, Copy, RefreshCw, Plus, Banknote,
   Smartphone, Link2, Receipt, TrendingUp, Users, Activity, Zap, Layers, GitBranch,
-  Server, ExternalLink, Eye, EyeOff, X,
+  Server, ExternalLink, Eye, EyeOff, X, Gauge, Database, Cpu, AlertTriangle,
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
@@ -301,13 +301,14 @@ export default function Home() {
             <MerchantHero state={state} />
 
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <TabsList className="grid w-full grid-cols-3 md:grid-cols-6 h-auto">
+              <TabsList className="grid w-full grid-cols-4 md:grid-cols-7 h-auto">
                 <TabsTrigger value="overview" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Activity className="h-3.5 w-3.5" />Overview</TabsTrigger>
                 <TabsTrigger value="checkout" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><QrCode className="h-3.5 w-3.5" />Checkout</TabsTrigger>
                 <TabsTrigger value="payouts" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><ArrowDownToLine className="h-3.5 w-3.5" />Payouts</TabsTrigger>
                 <TabsTrigger value="catalog" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Package className="h-3.5 w-3.5" />Catalog</TabsTrigger>
                 <TabsTrigger value="api" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><KeyRound className="h-3.5 w-3.5" />API & Webhooks</TabsTrigger>
                 <TabsTrigger value="events" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><GitBranch className="h-3.5 w-3.5" />Events</TabsTrigger>
+                <TabsTrigger value="infra" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Gauge className="h-3.5 w-3.5" />Infra</TabsTrigger>
               </TabsList>
 
               <TabsContent value="overview" className="mt-4 space-y-4"><OverviewTab state={state} /></TabsContent>
@@ -316,6 +317,7 @@ export default function Home() {
               <TabsContent value="catalog" className="mt-4 space-y-4"><CatalogTab state={state} merchantId={merchantId!} onRefresh={refresh} /></TabsContent>
               <TabsContent value="api" className="mt-4 space-y-4"><ApiTab state={state} merchantId={merchantId!} onRefresh={refresh} /></TabsContent>
               <TabsContent value="events" className="mt-4 space-y-4"><EventsTab state={state} /></TabsContent>
+              <TabsContent value="infra" className="mt-4 space-y-4"><InfraTab /></TabsContent>
             </Tabs>
           </motion.div>
         )}
@@ -1202,5 +1204,216 @@ function EventsTab({ state }: { state: MerchantState }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// ─── Infrastructure tab (PRODUCTION-3) ───────────────────────────────────────
+// Shows the production settlement-network subsystems: ops overview, ledger,
+// reconciliation, treasury, resilience health. All data fetched from the
+// /api/ops, /api/ledger, /api/treasury, /api/resilience endpoints.
+
+interface OpsOverview {
+  overview?: { kpis?: Record<string, number>; [k: string]: unknown };
+  alerts?: { id: string; severity: string; name: string; message: string; firedAt: number }[];
+  slos?: unknown[];
+  ts?: number;
+}
+interface TrialBalance { totalDebits: number; totalCredits: number; balanced: boolean; accounts: Record<string, { debit: number; credit: number; balance: number }>; entryCount: number; }
+interface ReconReport { trialBalance?: { balanced: boolean; totalDebits: number; totalCredits: number; discrepancy: number }; twinTokenBacking?: { reconciled: boolean; assets?: unknown[] }; escrow?: { reconciled: boolean }; payouts?: { reconciled: boolean }; failedCount?: number; durationMs?: number; [k: string]: unknown }
+interface TreasuryStatus { status?: { reserves?: unknown[]; backingVerified?: boolean; alerts?: unknown[]; frozenAssets?: string[]; [k: string]: unknown }; alerts?: unknown[]; freezes?: unknown[]; ts?: number }
+interface ResilienceHealth { overall: string; components?: { name: string; healthy: boolean; latencyMs?: number; details?: string }[]; outages?: unknown[]; circuits?: { name: string; state: string }[]; lastCheckTs?: number }
+
+function InfraTab() {
+  const [ops, setOps] = useState<OpsOverview | null>(null);
+  const [trial, setTrial] = useState<TrialBalance | null>(null);
+  const [recon, setRecon] = useState<ReconReport | null>(null);
+  const [treasury, setTreasury] = useState<TreasuryStatus | null>(null);
+  const [health, setHealth] = useState<ResilienceHealth | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [o, t, r, tr, h] = await Promise.all([
+        fetch('/api/ops/overview').then((x) => x.json()).catch(() => null),
+        fetch('/api/ledger/trial-balance').then((x) => x.json()).catch(() => null),
+        fetch('/api/ledger/reconciliation').then((x) => x.json()).catch(() => null),
+        fetch('/api/treasury/status').then((x) => x.json()).catch(() => null),
+        fetch('/api/resilience/health').then((x) => x.json()).catch(() => null),
+      ]);
+      setOps(o); setTrial(t); setRecon(r); setTreasury(tr); setHealth(h);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load infra state');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) return <Skeleton className="h-96 w-full" />;
+  if (error) return <div className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-sm text-rose-600"><AlertCircle className="h-4 w-4" />{error}</div>;
+
+  const overall = health?.overall ?? 'unknown';
+  const healthColor = overall === 'healthy' ? 'text-emerald-600 bg-emerald-500/10 border-emerald-500/30'
+    : overall === 'degraded' ? 'text-amber-600 bg-amber-500/10 border-amber-500/30'
+    : 'text-rose-600 bg-rose-500/10 border-rose-500/30';
+
+  return (
+    <div className="space-y-4">
+      {/* Top row: health + SLOs + alerts */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between"><span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">System Health</span><Gauge className="h-4 w-4 text-emerald-500" /></div>
+            <div className={`mt-2 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-sm font-bold capitalize ${healthColor}`}>
+              <span className={`h-2 w-2 rounded-full ${overall === 'healthy' ? 'bg-emerald-500' : overall === 'degraded' ? 'bg-amber-500' : 'bg-rose-500'}`} />
+              {overall}
+            </div>
+            <div className="text-[10px] text-muted-foreground mt-1">{health?.components?.length ?? 0} components · {health?.circuits?.length ?? 0} circuits</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between"><span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Trial Balance</span><Database className="h-4 w-4 text-teal-500" /></div>
+            <div className="mt-2 flex items-center gap-2">
+              <span className={`text-sm font-bold ${trial?.balanced ? 'text-emerald-600' : 'text-rose-600'}`}>{trial?.balanced ? 'BALANCED' : 'UNBALANCED'}</span>
+            </div>
+            <div className="text-[10px] text-muted-foreground mt-1">{trial?.entryCount ?? 0} journal entries · DR {trial?.totalDebits ?? 0} · CR {trial?.totalCredits ?? 0}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between"><span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Active Alerts</span><AlertTriangle className="h-4 w-4 text-amber-500" /></div>
+            <div className="mt-2 text-2xl font-bold tabular-nums">{ops?.alerts?.length ?? 0}</div>
+            <div className="text-[10px] text-muted-foreground mt-0.5">{(ops?.alerts ?? []).filter((a) => a.severity === 'critical').length} critical</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between"><span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">SLOs Tracked</span><Cpu className="h-4 w-4 text-emerald-500" /></div>
+            <div className="mt-2 text-2xl font-bold tabular-nums">{ops?.slos?.length ?? 0}</div>
+            <div className="text-[10px] text-muted-foreground mt-0.5">error budgets monitored</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* Ledger reconciliation */}
+        <Card>
+          <CardHeader className="pb-3"><CardTitle className="flex items-center gap-2 text-base"><Database className="h-4 w-4 text-emerald-500" />Ledger Reconciliation</CardTitle>
+            <CardDescription className="text-xs">Double-entry integrity · rebuilt from events</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {recon ? (
+              <>
+                <ReconRow label="Trial balance" ok={recon.trialBalance?.balanced} detail={`discrepancy ${recon.trialBalance?.discrepancy ?? 0}`} />
+                <ReconRow label="Twin token backing" ok={recon.twinTokenBacking?.reconciled} detail={`${(recon.twinTokenBacking?.assets as unknown[] | undefined)?.length ?? 0} assets`} />
+                <ReconRow label="Escrow" ok={recon.escrow?.reconciled} />
+                <ReconRow label="Payouts" ok={recon.payouts?.reconciled} />
+                <Separator />
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Failed checks: {recon.failedCount ?? 0}</span>
+                  <span className="text-muted-foreground">Duration: {recon.durationMs ?? 0}ms</span>
+                </div>
+              </>
+            ) : <EmptyState icon={<Database className="h-5 w-5" />} title="No reconciliation" sub="Run a payment to populate the ledger." />}
+          </CardContent>
+        </Card>
+
+        {/* Treasury */}
+        <Card>
+          <CardHeader className="pb-3"><CardTitle className="flex items-center gap-2 text-base"><Shield className="h-4 w-4 text-teal-500" />Treasury Status</CardTitle>
+            <CardDescription className="text-xs">Reserves · backing · freezes</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {treasury?.status ? (
+              <>
+                <ReconRow label="Backing verified" ok={treasury.status.backingVerified} />
+                <div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">Reserves</span><span className="font-semibold tabular-nums">{(treasury.status.reserves as unknown[] | undefined)?.length ?? 0} currencies</span></div>
+                <div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">Active alerts</span><span className="font-semibold tabular-nums">{(treasury.status.alerts as unknown[] | undefined)?.length ?? 0}</span></div>
+                <div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">Frozen assets</span><span className="font-semibold tabular-nums">{(treasury.status.frozenAssets as string[] | undefined)?.length ?? 0}</span></div>
+                {(treasury.status.frozenAssets as string[] | undefined)?.length ? (
+                  <div className="flex flex-wrap gap-1 mt-1">{(treasury.status.frozenAssets as string[]).map((a) => <Badge key={a} variant="outline" className="h-3.5 px-1 text-[9px] text-rose-600 border-rose-500/30">{a}</Badge>)}</div>
+                ) : null}
+              </>
+            ) : <EmptyState icon={<Shield className="h-5 w-5" />} title="Treasury idle" sub="Reserve monitoring will populate after chain sync." />}
+          </CardContent>
+        </Card>
+
+        {/* Circuit breakers + components */}
+        <Card className="lg:col-span-2">
+          <CardHeader className="pb-3"><CardTitle className="flex items-center gap-2 text-base"><Server className="h-4 w-4 text-emerald-500" />Resilience Components</CardTitle>
+            <CardDescription className="text-xs">Circuit breakers · connectors · outages</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {(health?.components ?? []).map((c) => (
+                <div key={c.name} className="flex items-center gap-2 rounded-lg border p-2 text-xs">
+                  <span className={`h-2 w-2 rounded-full shrink-0 ${c.healthy ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                  <span className="font-medium flex-1 truncate">{c.name}</span>
+                  <span className="text-muted-foreground tabular-nums">{c.latencyMs != null ? `${c.latencyMs}ms` : '—'}</span>
+                </div>
+              ))}
+              {(health?.circuits ?? []).map((c) => (
+                <div key={c.name} className="flex items-center gap-2 rounded-lg border p-2 text-xs">
+                  <span className={`h-2 w-2 rounded-full shrink-0 ${c.state === 'closed' ? 'bg-emerald-500' : c.state === 'half_open' ? 'bg-amber-500' : 'bg-rose-500'}`} />
+                  <span className="font-medium flex-1 truncate">{c.name}</span>
+                  <Badge variant="outline" className="h-3.5 px-1 text-[9px]">{c.state}</Badge>
+                </div>
+              ))}
+              {(health?.components?.length === 0 && health?.circuits?.length === 0) && (
+                <EmptyState icon={<Server className="h-5 w-5" />} title="No components" sub="Health check will populate after first request." />
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Active alerts list */}
+        <Card className="lg:col-span-2">
+          <CardHeader className="pb-3"><CardTitle className="flex items-center gap-2 text-base"><AlertTriangle className="h-4 w-4 text-amber-500" />Active Alerts</CardTitle></CardHeader>
+          <CardContent>
+            {(ops?.alerts ?? []).length === 0 ? (
+              <EmptyState icon={<CheckCircle2 className="h-5 w-5" />} title="No active alerts" sub="All systems nominal." />
+            ) : (
+              <ScrollArea className="max-h-64">
+                <div className="space-y-2">
+                  {(ops?.alerts ?? []).map((a) => (
+                    <div key={a.id} className="flex items-start gap-2 rounded-lg border p-2 text-xs">
+                      <AlertTriangle className={`h-3.5 w-3.5 shrink-0 mt-0.5 ${a.severity === 'critical' ? 'text-rose-500' : a.severity === 'warning' ? 'text-amber-500' : 'text-sky-500'}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium">{a.name}</div>
+                        <div className="text-muted-foreground">{a.message}</div>
+                      </div>
+                      <Badge variant="outline" className="h-3.5 px-1 text-[9px] shrink-0">{a.severity}</Badge>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="flex justify-center">
+        <Button variant="outline" size="sm" onClick={load} className="gap-2"><RefreshCw className="h-3.5 w-3.5" />Refresh infrastructure</Button>
+      </div>
+    </div>
+  );
+}
+
+function ReconRow({ label, ok, detail }: { label: string; ok?: boolean; detail?: string }) {
+  return (
+    <div className="flex items-center justify-between text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="flex items-center gap-1.5">
+        {detail && <span className="text-muted-foreground">{detail}</span>}
+        <Badge variant="outline" className={`h-3.5 px-1 text-[9px] ${ok ? 'text-emerald-600 border-emerald-500/30' : ok === false ? 'text-rose-600 border-rose-500/30' : 'text-zinc-500'}`}>
+          {ok === true ? '✓ OK' : ok === false ? '✗ FAIL' : '—'}
+        </Badge>
+      </span>
+    </div>
   );
 }

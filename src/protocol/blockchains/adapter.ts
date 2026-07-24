@@ -1,15 +1,30 @@
 /**
- * PaySwap Protocol — Blockchain Adapter Interface.
+ * PaySwap Protocol — Blockchain Adapter Interface (BACKWARD-COMPAT SHIM).
  *
- * Do not hardcode Stellar. The adapter interface makes all blockchains
- * pluggable. Future chains (Ethereum, Base, Solana, XRPL, Polygon) plug in
- * without modifying protocol logic.
+ * DEPRECATED: This module is preserved verbatim for backward compatibility
+ * with existing twin-token / payouts / wallets / blockchain code. New code
+ * should use the rich `ChainAdapter` interface from `@/protocol/chains`.
  *
- * The adapter only produces Evidence and executes protocol-authorized commands.
- * It cannot approve transactions, change balances, or release escrow.
+ * What this module re-exports:
+ *   - `BlockchainAdapter` interface (OLD, preserved verbatim — do NOT change)
+ *   - `BlockchainAdapterRegistry` class (OLD, preserved verbatim)
+ *   - `blockchainRegistry` singleton (OLD, preserved verbatim)
+ *   - `chainRegistry` (NEW) — proxied re-export for consumers that want
+ *     the new interface without changing their import path
+ *   - All new types (`ChainAdapter`, `ChainResult`, etc.)
+ *
+ * The old API is preserved 1:1 so existing callers don't need edits. The
+ * new `chainRegistry` lives in `../chains/registry`; this file re-exports
+ * it so importers can use either.
+ *
+ * Frozen-kernel compliance: imports only `Evidence` from `@/kernel/evidence`.
  */
 import type { Evidence } from '@/kernel/evidence';
 
+/* ============================================================================
+ * OLD BlockchainAdapter interface — preserved verbatim for backward compat.
+ * New code: use `ChainAdapter` from `@/protocol/chains/adapter` instead.
+ * ========================================================================== */
 export interface BlockchainAdapter {
   chain: string;
   isInitialized: boolean;
@@ -66,10 +81,9 @@ export interface BlockchainAdapter {
   healthCheck(): Promise<{ healthy: boolean; latencyMs: number }>;
 }
 
-/**
- * Blockchain Adapter Registry — manages all registered chains.
- * The protocol queries the registry; the registry delegates to the adapter.
- */
+/* ============================================================================
+ * OLD BlockchainAdapterRegistry — preserved verbatim for backward compat.
+ * ========================================================================== */
 export class BlockchainAdapterRegistry {
   private adapters: Map<string, BlockchainAdapter> = new Map();
 
@@ -95,3 +109,53 @@ export class BlockchainAdapterRegistry {
 }
 
 export const blockchainRegistry = new BlockchainAdapterRegistry();
+
+/* ============================================================================
+ * NEW ChainAdapter / chainRegistry — re-exported for new consumers.
+ * ========================================================================== */
+export type {
+  ChainAdapter,
+  ChainAccount,
+  ChainAsset,
+  ChainMemo,
+  ChainOperation,
+  ChainTransaction,
+  ChainResult,
+  AccountResult,
+  BalanceResult,
+  BalancesResult,
+  TxResult,
+  VerifyResult,
+  EscrowResult,
+  ClaimableBalanceResult,
+  ClaimableBalancesResult,
+  SequenceResult,
+  LedgerResult,
+  LedgerEntryResult,
+  HealthResult,
+  PathPaymentResult,
+  ClaimPredicate,
+  MemoType,
+  LedgerStreamCallback,
+  CreateAccountParams,
+  FundAccountParams,
+  RegisterAssetParams,
+  IssueAssetParams,
+  BurnAssetParams,
+  CreateTrustlineParams,
+  TransferParams,
+  PathPaymentParams,
+  CreateClaimableBalanceParams,
+  CreateEscrowAccountParams,
+  ReleaseEscrowParams,
+  SponsorReserveParams,
+  FeeBumpParams,
+  AddSignerParams,
+  RemoveSignerParams,
+  SetThresholdsParams,
+  GetBalanceParams,
+  VerifyTransactionParams,
+  GetLedgerEntryParams,
+} from '../chains/adapter';
+export { assetKey, makeAsset } from '../chains/adapter';
+export { chainRegistry } from '../chains/registry';
