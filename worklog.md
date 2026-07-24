@@ -955,3 +955,89 @@ All 8 production protocol modules are now LIVE in the simulation engine:
 6. ✓ Manual Settlement Workflow — triggered for manualOnly LPs
 7. ✓ Merchant Trust Tiers — registered with bond, tier derived
 8. ✓ Treasury — positions + recommendations generated
+
+---
+Task ID: PROTOCOL-4 (Production Protocol Runtime — Phase 1)
+Agent: main (Z.ai Code)
+Task: Build the real PaySwap protocol runtime on the frozen kernel. Replace simulation-driven behavior with production protocol modules. No kernel changes.
+
+New Production Protocol Modules (5 new, 29 total protocol files):
+
+1. `protocol/payments/lifecycle.ts` — Payment Lifecycle Engine
+   - Full lifecycle: intent_created → planning → proposal_sent → proposal_accepted → resources_reserved → escrow_frozen → settling → merchant_confirming → evidence_collecting → escrow_releasing → settled | failed | disputed
+   - Every step flows through kernel pipeline: Intent → Planner → Proposal → Command → Transition → Event
+   - Evidence requirements enforced (exchange_rate_proof, source_funds_proof, merchant_identity_proof, liquidity_availability_proof)
+   - Integrates with: ConvergencePlanner, settlementEscrow, lpLifecycle, resourceReservation, merchantRegistry
+   - No direct state mutation — kernel owns execution
+
+2. `protocol/liquidity/marketplace.ts` — Liquidity Marketplace
+   - LPs are NOT balances — they provide settlement capacity
+   - quoteCapacity() uses: Capacity × Confidence × Availability × Exposure Lease
+   - Never uses reported bank balances directly as routing liquidity
+   - findBestLP() answers: "Which available actor has the highest probability of completing this transition?"
+   - quoteAll() returns all LPs sorted by effective capacity
+   - Integrates with: lpLifecycle, settlementCapacityVault
+
+3. `protocol/identity/service.ts` — Identity Service
+   - KYC verification for all protocol actors (individuals, businesses, LPs)
+   - Identity states: unverified → pending → verified | suspended | revoked
+   - Auto-registers verified businesses in merchant registry with bond based on KYC level
+   - Identity is established through evidence (no direct trust)
+
+4. `protocol/governance/engine.ts` — Governance Engine
+   - Protocol parameter evolution through proposals and voting
+   - Proposal lifecycle: proposed → voting → passed/rejected → executed
+   - Weighted community voting with quorum + pass threshold
+   - Actions: update_parameter, add/remove_corridor, slash_lp, upgrade_merchant_tier, emergency_pause, treasury_rebalance
+   - Default parameters: max_lp_share, max_cost_percent, max_risk_score, auction_timeout, escrow_ttl, min_confidence, etc.
+
+5. `protocol/connectors/index.ts` — Connector Architecture
+   - Connectors CANNOT modify state — they only produce Evidence
+   - 5 connector types: Bank, Blockchain, MobileMoney, PSP, Exchange
+   - Each connector returns ConnectorResult with Evidence (source, timestamp, signature, confidence)
+   - ConnectorRegistry manages all connectors with health checks
+   - Bank: Open Banking API → Evidence (institutional, 0.9 confidence, 60s TTL)
+   - Blockchain: On-chain verification → Evidence (cryptographic, 1.0 confidence, permanent)
+   - MobileMoney: M-Pesa/etc → Evidence (institutional, 0.85, 60s TTL)
+   - PSP: Payment confirmation → Evidence (institutional, 0.88, 90s TTL)
+   - Exchange: FX rate → Evidence (attested, 0.8, 30s TTL — rates expire fast)
+
+Verification:
+- PaySwap: 11/20 (zero regression)
+- Supply Chain: 5/5 (zero regression)
+- Infrastructure: 4/5 (zero regression)
+- Lint clean
+- Browser: no errors
+- Zero kernel changes
+- Protocol files: 29 (was 24 — added 5 production modules)
+
+Complete Protocol Module List (13 production modules):
+1. ✓ Settlement Escrow
+2. ✓ Collateral Vault
+3. ✓ Settlement Capacity Vault
+4. ✓ LP Lifecycle Manager
+5. ✓ Dispute Resolution Engine
+6. ✓ Manual Settlement Workflow
+7. ✓ Merchant Trust Tiers
+8. ✓ Treasury
+9. ✓ Payment Lifecycle (NEW)
+10. ✓ Liquidity Marketplace (NEW)
+11. ✓ Identity Service (NEW)
+12. ✓ Governance Engine (NEW)
+13. ✓ Connector Architecture (NEW)
+
+Protocol Directory Structure:
+protocol/
+├── payments/          — Payment lifecycle
+├── liquidity/         — LP marketplace
+├── settlement/        — Escrow, collateral, capacity, disputes, auctions, net-settlement, manual
+├── treasury/          — Treasury management
+├── governance/        — Protocol parameter evolution
+├── identity/          — KYC/verification
+├── connectors/        — External adapters (bank, blockchain, mobile_money, psp, exchange)
+├── economics/         — Exposure, reputation, expected cost, attestations, trust tiers
+├── contracts/         — Smart contract interfaces
+└── lp-lifecycle-manager.ts — LP onboarding/exit
+
+Every action flows through: Intent → Kernel Planner → Proposal → Command → Transition → Event → Projection
+No direct state mutation. All external truth enters through evidence. All decisions go through planner.
