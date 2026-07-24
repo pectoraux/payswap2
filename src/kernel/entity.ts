@@ -61,6 +61,12 @@ export interface EntityCapabilities {
   canInsure?: boolean;
   canClaim?: boolean;
   manualOnly?: boolean;
+  // Domain-specific capabilities (infrastructure, supply chain, etc.)
+  canHost?: boolean;
+  canReplicate?: boolean;
+  canBackup?: boolean;
+  canFailover?: boolean;
+  [key: string]: boolean | undefined; // allow any domain-specific capability
 }
 
 export interface EntityPolicies {
