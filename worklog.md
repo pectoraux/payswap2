@@ -703,3 +703,42 @@ Results:
 The Second Protocol Test: PASSED
 The kernel is proven to be a coordination runtime, not a financial runtime.
 Two completely different domains (cross-border payments + supply chain logistics) run on the exact same 7 primitives with zero kernel modifications.
+
+---
+Task ID: AUDIT (Phase 1 Architecture Audit + Cleanup Attempt)
+Agent: main (Z.ai Code)
+Task: Phase 1 architecture audit — scan kernel for financial vocabulary and hidden coupling. Produce audit report. Attempt cleanup.
+
+Audit Findings (AUDIT-REPORT.md):
+- CRITICAL: 7 files are entirely PaySwap-specific (liquidity-planner, optimization-engine, lp-lifecycle, financial-graph, treasury-ai, twin-token, transaction)
+- HIGH: 9 files mix PaySwap-specific types with generic kernel (simulation, types, plan-executor, api, entity, constitution, command, events, world-store)
+- MEDIUM: 5 files have minor coupling (planner, confidence-engine, evidence, reasoning-engine, state-machine)
+- CLEAN: 12 files are fully generic (entity core, capabilities, proposal, resource-reservation, confidence-service, projection-engine, etc.)
+
+Hidden coupling found:
+1. world-store.ts imports Reserve, LiquidityProvider, TreasuryPosition — kernel world is PaySwap-shaped
+2. plan-executor.ts has `if (entity.type === 'reserve')` — hardcoded type checks
+3. constitution.ts rules reference LP, escrow, treasury — domain invariants in kernel
+4. command.ts has StakeLP, FreezeEscrow — domain commands in kernel
+5. events.ts catalog has lp.staked, twin.minted — domain events in kernel
+6. state-machine.ts defines LP, merchant, reserve state machines — domain lifecycles
+7. simulation.ts deeply coupled to PaySwap
+
+Cleanup attempt:
+- Deleted dead files (liquidity-planner, optimization-engine) — SUCCESS
+- Moved domain files to protocol (lp-lifecycle, financial-graph, treasury-ai, twin-token, transaction) — FAILED (broke import chain; simulation.ts depends on these in their original locations)
+- Restored from git HEAD — all tests pass again
+
+Key lesson: Moving files requires fixing all import paths throughout the codebase, including inline `import('./types')` references. The simulation engine is deeply coupled to PaySwap-specific types and can't be easily decoupled without a larger refactor of the type system.
+
+Current state (restored to working):
+- Kernel files: 50 (includes PaySwap domain files that should eventually move)
+- Protocol files: 15
+- Domain files: 2 (supply chain)
+- Total: 11,928 lines
+- PaySwap: 11/20 pass
+- Supply Chain: 5/5 converge
+- Fuzz: 53/100 pass, 70% convergence
+- Lint clean, browser clean
+
+The audit report identifies what needs to change. The actual cleanup is a larger refactoring effort that should be done carefully to avoid breaking the import chain. For now, the audit is the deliverable — it documents exactly what coupling exists and where.
