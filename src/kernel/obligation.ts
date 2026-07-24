@@ -55,10 +55,15 @@ export interface Obligation {
   priority: ObligationPriority;
 
   // Who owes what to whom
-  obligorId: string;      // entity that owes
-  obligeeId: string;      // entity that is owed
+  obligorId: string;      // entity that owes (original owner of the obligation)
+  obligeeId: string;      // entity that is owed (beneficiary)
   amount?: number;
   currency?: string;
+
+  // Settlement rights — live on the obligation, not on escrow
+  currentFulfillerId: string;  // who is currently responsible for fulfilling
+  escrowId?: string;           // escrow holding the guarantee
+  deadline: number;            // when this obligation must be fulfilled
 
   // Evidence supporting this obligation
   evidenceCitations: EvidenceCitation[];
@@ -88,6 +93,8 @@ export function obligation(params: {
   obligeeId: string;
   amount?: number;
   currency?: string;
+  currentFulfillerId?: string;
+  escrowId?: string;
   evidenceCitations?: EvidenceCitation[];
   dueAt: number;
   meta?: Record<string, unknown>;
@@ -101,6 +108,9 @@ export function obligation(params: {
     obligeeId: params.obligeeId,
     amount: params.amount,
     currency: params.currency,
+    currentFulfillerId: params.currentFulfillerId ?? params.obligorId,
+    escrowId: params.escrowId,
+    deadline: params.dueAt,
     evidenceCitations: params.evidenceCitations ?? [],
     createdAt: Date.now(),
     dueAt: params.dueAt,
@@ -139,6 +149,19 @@ export function isOverdue(ob: Obligation, now: number = Date.now()): boolean {
 /** Check if an obligation is active (not yet resolved). */
 export function isActive(ob: Obligation): boolean {
   return ob.state === 'created' || ob.state === 'pending' || ob.state === 'in_progress';
+}
+
+/**
+ * Transfer the fulfiller of an obligation (for replacement LPs).
+ * Only the currentFulfillerId changes — the obligation itself stays the same.
+ * This makes replacement LPs trivial: just transfer fulfiller.
+ */
+export function transferFulfiller(ob: Obligation, newFulfillerId: string): Obligation {
+  return {
+    ...ob,
+    currentFulfillerId: newFulfillerId,
+    state: 'transferred',
+  };
 }
 
 /**

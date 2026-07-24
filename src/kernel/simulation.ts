@@ -409,6 +409,7 @@ export class SimulationEngine {
       obligations.push({
         id: ob.id, type: ob.type, state: obligationStore.get(ob.id)?.state ?? ob.state,
         priority: ob.priority, obligorId: ob.obligorId, obligeeId: ob.obligeeId,
+        currentFulfillerId: ob.currentFulfillerId, escrowId: ob.escrowId, deadline: ob.deadline,
         amount: ob.amount, currency: ob.currency, dueAt: ob.dueAt, fulfilledAt: ob.fulfilledAt,
       });
     }
@@ -426,6 +427,7 @@ export class SimulationEngine {
     obligations.push({
       id: confirmOb.id, type: confirmOb.type, state: obligationStore.get(confirmOb.id)?.state ?? confirmOb.state,
       priority: confirmOb.priority, obligorId: confirmOb.obligorId, obligeeId: confirmOb.obligeeId,
+      currentFulfillerId: confirmOb.currentFulfillerId, escrowId: confirmOb.escrowId, deadline: confirmOb.deadline,
       dueAt: confirmOb.dueAt, fulfilledAt: confirmOb.fulfilledAt,
     });
 

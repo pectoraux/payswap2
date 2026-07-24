@@ -36,13 +36,14 @@ export type CommitmentType =
   | 'custom';
 
 export type CommitmentState =
-  | 'offered'      // commitment proposed (e.g., auction bid won)
-  | 'accepted'     // both parties accepted
-  | 'activated'    // obligation created from this commitment
+  | 'offered'      // SYN: committer proposes
+  | 'accepted'     // SYN-ACK: beneficiary accepts
+  | 'activated'    // ACK: committer confirms activation → obligation created
   | 'completed'    // commitment fulfilled
   | 'expired'      // deadline passed without activation
   | 'withdrawn'    // commitment withdrawn before activation
-  | 'breached';    // activated but not fulfilled
+  | 'breached'     // activated but not fulfilled
+  | 'rejected';    // beneficiary rejected the offer
 
 export interface Commitment {
   id: string;
@@ -103,12 +104,20 @@ export function commitment(params: {
   };
 }
 
-/** Accept a commitment (both parties agree). */
+/** Accept a commitment (SYN-ACK: beneficiary accepts the offer). */
 export function acceptCommitment(c: Commitment): Commitment {
   return { ...c, state: 'accepted' };
 }
 
-/** Activate a commitment — creates the corresponding obligation. */
+/** Reject a commitment (beneficiary rejects the offer). */
+export function rejectCommitment(c: Commitment, reason?: string): Commitment {
+  return { ...c, state: 'rejected', meta: { ...c.meta, rejectionReason: reason } };
+}
+
+/**
+ * Activate a commitment (ACK: committer confirms → creates obligation).
+ * Bilateral handshake complete: SYN → SYN-ACK → ACK → activated.
+ */
 export function activateCommitment(c: Commitment, obligationId: string): Commitment {
   return {
     ...c,

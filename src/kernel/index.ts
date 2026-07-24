@@ -33,11 +33,11 @@ export { createEventSourcedWorld, appendEvent, appendTransition, currentWorld, r
 export type { EventSourcedWorld, WorldEvent } from './event-sourced-world';
 export { createEvidence, computeEvidenceConfidence, effectiveLiquidityFromEvidence, expireEvidence, revokeEvidence, validEvidenceFor, EvidenceStore, evidenceStore, EvidenceGraph, evidenceGraph } from './evidence';
 export type { Evidence, EvidenceType, EvidenceSource, VerificationLevel, EvidenceCitation, EvidenceNode } from './evidence';
-export { obligation, transitionObligation, isOverdue, isActive, ObligationStore, obligationStore, OBLIGATION_LABELS } from './obligation';
+export { obligation, transitionObligation, transferFulfiller, isOverdue, isActive, ObligationStore, obligationStore, OBLIGATION_LABELS } from './obligation';
 export type { Obligation, ObligationType, ObligationState, ObligationPriority } from './obligation';
 export { createClaim, supportClaim, validateClaim, executeClaim, breachClaim, ClaimsStore, claimsStore, CLAIM_LABELS } from './claims';
 export type { Claim, ClaimType, ClaimState } from './claims';
-export { commitment, acceptCommitment, activateCommitment, completeCommitment, expireCommitment, withdrawCommitment, breachCommitment, canActivate, CommitmentStore, commitmentStore, COMMITMENT_LABELS } from './commitment';
+export { commitment, acceptCommitment, rejectCommitment, activateCommitment, completeCommitment, expireCommitment, withdrawCommitment, breachCommitment, canActivate, CommitmentStore, commitmentStore, COMMITMENT_LABELS } from './commitment';
 export type { Commitment, CommitmentType, CommitmentState } from './commitment';
 export { computeConfidence, aggregateConfidence, ReputationProjection } from './confidence-engine';
 export type { ConfidenceResult } from './confidence-engine';

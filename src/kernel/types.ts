@@ -757,6 +757,9 @@ export interface ObligationSummary {
   priority: string;
   obligorId: string;
   obligeeId: string;
+  currentFulfillerId: string;
+  escrowId?: string;
+  deadline: number;
   amount?: number;
   currency?: string;
   dueAt: number;
