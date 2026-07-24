@@ -61,6 +61,9 @@ import { createEvidence, type Evidence as KernelEvidence } from './evidence';
 import { obligation, obligationStore, transitionObligation, type Obligation } from './obligation';
 import { createClaim, supportClaim, validateClaim, claimsStore, type Claim } from './claims';
 import { exposureManager } from '@/protocol/economics/exposure-allocation';
+import { exposureLeaseManager } from '@/protocol/economics/exposure-lease';
+import { commitment, commitmentStore, acceptCommitment, activateCommitment, completeCommitment, type Commitment } from './commitment';
+import { ReputationProjection } from './confidence-engine';
 import { settlementEscrowContract, collateralVaultContract, lpRegistryContract, merchantRegistryContract, twinTokenContract, liquidityPoolContract } from '@/protocol/contracts';
 import { computeAuthorizedExposure, defaultExposureFactors } from '@/protocol/economics/authorized-exposure';
 import { computeLPReputation, defaultLPReputation } from '@/protocol/economics/reputation';
@@ -473,6 +476,55 @@ export class SimulationEngine {
       allocationCount: e.allocations.length,
     }));
 
+    // 24. Commitments — LPs commit to settling; activation creates obligations.
+    commitmentStore.reset();
+    const commitments: import('./types').CommitmentSummary[] = [];
+    for (const draw of plan.sourceDraws) {
+      let cm = commitment({
+        type: 'settlement',
+        committerId: `lp:${draw.sourceId}`,
+        beneficiaryId: 'wallet:merchant',
+        amount: draw.drawn,
+        currency: scenario.transaction.merchant.currency,
+        ttlMs: 300000,
+      });
+      cm = acceptCommitment(cm);
+      // Activate → creates obligation (link to the obligation created above)
+      const matchingObl = obligations.find((o) => o.obligorId === `lp:${draw.sourceId}`);
+      if (matchingObl) {
+        cm = activateCommitment(cm, matchingObl.id);
+      }
+      if (out.settled) cm = completeCommitment(cm);
+      commitmentStore.register(cm);
+      commitments.push({
+        id: cm.id, type: cm.type, state: cm.state,
+        committerId: cm.committerId, beneficiaryId: cm.beneficiaryId,
+        amount: cm.amount, currency: cm.currency,
+        expiresAt: cm.expiresAt, activatedAt: cm.activatedAt, obligationId: cm.obligationId,
+      });
+    }
+
+    // 25. Exposure Leases — capacity leased per transaction.
+    exposureLeaseManager.reset();
+    for (const lp of scenario.liquidityProviders) {
+      if (lp.online) {
+        const capacity = computeAuthorizedExposure(defaultExposureFactors(lp.tradingCapacity * 0.2, lp.tradingCapacity));
+        exposureLeaseManager.registerCapacity(lp.id, capacity, scenario.transaction.merchant.currency);
+      }
+    }
+    const leases: import('./types').LeaseSummary[] = [];
+    for (const draw of plan.sourceDraws) {
+      const lease = exposureLeaseManager.lease(draw.sourceId, plan.id, draw.drawn, scenario.transaction.merchant.currency);
+      if (lease) {
+        if (out.settled) exposureLeaseManager.consume(lease.id);
+        leases.push({
+          id: lease.id, lpId: lease.lpId, transactionId: lease.transactionId,
+          capacity: lease.capacity, currency: lease.currency, state: lease.state,
+          expiresAt: lease.expiresAt, renewalCount: lease.renewalCount,
+        });
+      }
+    }
+
     const resultHash = hashMetrics({
       costPercent: plan.metrics.costPercent,
       settlementTimeMs: plan.metrics.settlementTimeMs,
@@ -523,6 +575,8 @@ export class SimulationEngine {
       obligations: obligations ?? [],
       claims: claims ?? [],
       exposureAllocations: exposureAllocations ?? [],
+      commitments: commitments ?? [],
+      leases: leases ?? [],
     };
   }
 

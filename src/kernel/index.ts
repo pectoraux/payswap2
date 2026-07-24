@@ -37,6 +37,10 @@ export { obligation, transitionObligation, isOverdue, isActive, ObligationStore,
 export type { Obligation, ObligationType, ObligationState, ObligationPriority } from './obligation';
 export { createClaim, supportClaim, validateClaim, executeClaim, breachClaim, ClaimsStore, claimsStore, CLAIM_LABELS } from './claims';
 export type { Claim, ClaimType, ClaimState } from './claims';
+export { commitment, acceptCommitment, activateCommitment, completeCommitment, expireCommitment, withdrawCommitment, breachCommitment, canActivate, CommitmentStore, commitmentStore, COMMITMENT_LABELS } from './commitment';
+export type { Commitment, CommitmentType, CommitmentState } from './commitment';
+export { computeConfidence, aggregateConfidence, ReputationProjection } from './confidence-engine';
+export type { ConfidenceResult } from './confidence-engine';
 export { PlanExecutor } from './plan-executor';
 export { LedgerEngine } from './ledger';
 export { ReserveEngine } from './reserve';

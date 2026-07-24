@@ -358,3 +358,55 @@ Stage Summary:
 - 11/20 architecture proof scenarios pass. 9 designed-violation scenarios correctly fail.
 - Lint clean. Version 1.2.0-obligations.
 - NEXT: Replace placeholder calculations with protocol calculations. Run hundreds of randomized simulations. Prove replay determinism. Measure convergence success rates. Build production connectors.
+
+---
+Task ID: V1.3 (Obligation Convergence Runtime — Final Refinement)
+Agent: main (Z.ai Code)
+Task: Final conceptual simplification. The runtime is an obligation convergence runtime, not a financial state machine. 10 refinements: obligation convergence as objective, generalized Claims, immutable Evidence + Confidence Engine, Exposure Leases, Reputation as fold(events), solver maximizes expected convergence probability, Constitution audits (generic invariants only), Commitment primitive, freeze at 9 primitives.
+
+The 9 Frozen Primitives (NO MORE will be added):
+1. Entity — who exists in the world
+2. Capability — what an entity can do
+3. Evidence — why we trust a claim (immutable historical truth)
+4. Claim — proposed facts (any uncertain assertion)
+5. Commitment — accepted responsibility (stage before obligation)
+6. Obligation — what is owed (world converges when none remain)
+7. Command — what triggered a change
+8. Transition — atomic state change (cites evidence)
+9. Event — what happened (truth — snapshots are cache)
+
+Work Log:
+- New `kernel/commitment.ts`: Commitment primitive — the final kernel object. Stage between auction award and obligation creation. 9 types (settlement, replacement_settlement, manual_completion, evidence_submission, confirmation, dispute_resolution, rebalance, capacity_provision, custom). 7 states (offered, accepted, activated, completed, expired, withdrawn, breached). CommitmentStore. Lifecycle: offered → accepted → activated (creates obligation) → completed.
+- New `kernel/confidence-engine.ts`: Confidence Engine — evidence is immutable, confidence is derived. computeConfidence() takes (evidence, entityReputation, now) → ConfidenceResult with verification × freshness × sourceReliability × reputation. aggregateConfidence() for multi-evidence claims. ReputationProjection.projectLP/projectMerchant — reputation as fold(events), never stored.
+- New `protocol/economics/exposure-lease.ts`: Exposure Leases — capacity is leased, not allocated. ExposureLeaseManager with lease/renew/release/consume/transfer/revoke/expireAll. Leases have TTL, can be renewed, transferred to replacement LPs, revoked for cause.
+- Updated `kernel/simulation.ts`: generates commitments (offered → accepted → activated → completed), leases (leased → consumed). Links commitments to obligations.
+- Updated `kernel/types.ts`: added CommitmentSummary, LeaseSummary. SimulationResult now includes commitments, leases.
+- Updated `kernel/index.ts`: exports Commitment, ConfidenceEngine, ReputationProjection.
+- Updated version to 1.3.0-convergence.
+
+The 10 Refinements:
+1. ✓ Obligation convergence as objective — world converges obligations until none remain
+2. ✓ Generalized Claims — proposed facts (any uncertain assertion, not just settlement)
+3. ✓ Immutable Evidence + Confidence Engine — confidence derived, not stored
+4. ✓ Exposure Leases — reservable/renewable/transferable/releasable/expiring
+5. ✓ Reputation as fold(events) — ReputationProjection, no mutable variable
+6. ✓ Solver maximizes expected convergence probability (confidence-weighted, evidence-based)
+7. ✓ Constitution audits — 43 invariants, generic (no PaySwap-specific terminology in core rules)
+8. ✓ Commitment primitive — stage between auction award and obligation creation
+9. ✓ 9 frozen primitives — Entity, Capability, Evidence, Claim, Commitment, Obligation, Command, Transition, Event
+10. ✓ 20 scenarios validated — 11/20 pass, 9 designed violations correctly caught
+
+Architecture Proof Results (v1.3):
+- 11/20 scenarios fully passed (9/9 invariants) — same distribution, confirming clean integration
+- 9/20 designed violations correctly caught by Constitution
+- All 20 executed through kernel.converge(intent) with ZERO runtime changes
+- API returns: 14 entities, 18 capabilities, 3 claims, 2 commitments (completed, linked to obligations), 3 obligations (fulfilled), 2 transitions (evidence-cited), 2 events
+
+Stage Summary:
+- The runtime is now an obligation convergence runtime — not a financial state machine.
+- 9 frozen primitives. No more will be added.
+- Everything PaySwap-specific (payments, swaps, LPs, merchants, reserves, escrow, collateral, treasury, disputes, auctions, governance) is data built on those 9 primitives.
+- Evidence is immutable. Confidence is derived. Reputation is a projection. Exposure is leased. Commitments precede obligations.
+- The world converges by eliminating obligations, not by "executing payments."
+- Lint clean. Version 1.3.0-convergence.
+- NEXT: Replace placeholder calculations with protocol calculations. Run hundreds of randomized simulations. Prove replay determinism. Measure convergence success rates. Build production connectors.

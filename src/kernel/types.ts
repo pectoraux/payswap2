@@ -722,6 +722,32 @@ export interface SimulationResult {
   obligations: ObligationSummary[];
   claims: ClaimSummary[];
   exposureAllocations: ExposureAllocationSummary[];
+  commitments: CommitmentSummary[];
+  leases: LeaseSummary[];
+}
+
+export interface CommitmentSummary {
+  id: string;
+  type: string;
+  state: string;
+  committerId: string;
+  beneficiaryId: string;
+  amount?: number;
+  currency?: string;
+  expiresAt: number;
+  activatedAt: number | null;
+  obligationId?: string;
+}
+
+export interface LeaseSummary {
+  id: string;
+  lpId: string;
+  transactionId: string;
+  capacity: number;
+  currency: string;
+  state: string;
+  expiresAt: number;
+  renewalCount: number;
 }
 
 export interface ObligationSummary {
