@@ -842,3 +842,69 @@ Verification:
 - Zero kernel changes
 
 Next: Dispute Resolution, Manual Settlement, Liquidity Auctions, Net Settlement, Treasury, Merchant Trust Tiers
+
+---
+Task ID: PROTOCOL-2 (Dispute Engine + Manual Settlement + Merchant Registry + Treasury)
+Agent: main (Z.ai Code)
+Task: Continue building the complete PaySwap protocol on the frozen kernel. Four more production protocol modules: Dispute Resolution, Manual Settlement, Merchant Trust Tiers, Treasury. No kernel changes.
+
+New Protocol Modules:
+
+5. `protocol/settlement/dispute-engine.ts` — Dispute Resolution Engine
+   - Full lifecycle: opened → evidence_collection → voting → adjudicated → (lp_wins | merchant_wins | collateral_slash) → resolved
+   - Evidence submission from any party (lp, merchant, community, payswap)
+   - Community voting with weighted votes
+   - PaySwap adjudication (weighted by merchant tier)
+   - Fraud classification: settlement_timeout, unable_to_prove, forged_evidence, repeated_fraud
+   - Escalating penalties: reputation -0.05 → -0.10 → -0.25 + suspension → LP slash
+   - Integrates with: SettlementEscrow (refund/slash/transfer), CollateralVault (slash), LPLifecycle (reputation/suspend/slash)
+   - Replacement LP support (merchant wins → transfer escrow to new LP)
+   - Emits kernel events on every state change
+
+6. `protocol/settlement/manual-settlement.ts` — Manual Settlement Workflow
+   - Lifecycle: awaiting_lp_settlement → lp_notified → proof_submitted → (confirmed | disputed | timed_out)
+   - LP notified → LP submits proof → merchant confirms OR disputes
+   - Auto-timeout opens dispute automatically (settlement_timeout fraud type)
+   - No duplicated settlement (escrow state machine prevents double release)
+   - Integrates with: SettlementEscrow (release on confirm), DisputeEngine (on dispute/timeout)
+
+7. `protocol/merchant-registry.ts` — Merchant Trust Tiers
+   - 4 tiers: unverified → verified → trusted → premium
+   - Bond-based tier classification (0 → 1k → 5k → 20k)
+   - Tier determines: routingPriority, disputeWeight, claimSpeed, settlementConfidence, requiredCollateralReduction
+   - Bond slashing for fraudulent claims (auto-downgrade tier)
+   - Volume tracking, fraud history, refund/chargeback rates
+   - recordSettlement() updates volume + reputation
+   - Emits kernel events
+
+8. `protocol/treasury.ts` — Treasury Module
+   - NOT free liquidity — autonomous but requires approval for execution
+   - Position tracking: stablecoinBalance, emergencyBalance, fiatBalance
+   - Actions: convert_stablecoin, borrow_lp_liquidity, rebalance, replenish_reserve
+   - generateRecommendations() — analyzes reserve health and produces prioritized recommendations
+   - executeRecommendation() — executes (with events)
+   - Alert levels: alert_low_reserve (50%), replenish_reserve (70%), alert_emergency (below threshold)
+   - Stablecoin conversion only when economically justified (excess > 3x reserve)
+   - Emits kernel events
+
+Verification:
+- PaySwap: 11/20 (no regression)
+- Supply Chain: 5/5 (no regression)
+- Infrastructure: 4/5 (no regression)
+- Lint clean
+- Browser: no errors
+- Zero kernel changes
+- Protocol files: 24 (was 20 — added 4 new production modules)
+
+Complete Protocol Module List (8 of ~10):
+1. ✓ Settlement Escrow (freeze/release/dispute/refund/slash/transfer/expire)
+2. ✓ Collateral Vault (lock/slash/release/increase)
+3. ✓ Settlement Capacity Vault (stake/unstake/rebalance/yield/fees)
+4. ✓ LP Lifecycle Manager (invite/apply/activate/pause/drain/exit/suspend/slash)
+5. ✓ Dispute Resolution Engine (evidence/voting/adjudication/fraud-classification/slashing)
+6. ✓ Manual Settlement Workflow (notify/proof/confirm/dispute/timeout)
+7. ✓ Merchant Trust Tiers (register/upgrade/slash/record-settlement)
+8. ✓ Treasury (positions/recommendations/convert/borrow/rebalance)
++ Existing: Auctions, Net Settlement, Economics (exposure/reputation/expected-cost/attestation)
+
+Remaining: Wire all modules into simulation engine + Digital Twin UI, remove placeholder implementations

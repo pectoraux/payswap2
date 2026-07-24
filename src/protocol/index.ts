@@ -14,9 +14,6 @@ export { obligation, transitionObligation, transferFulfiller, isOverdue, isActiv
 export type { Obligation, ObligationType, ObligationState, ObligationPriority } from './obligation';
 
 export { settlementEscrowContract, collateralVaultContract, lpRegistryContract, merchantRegistryContract, twinTokenContract, liquidityPoolContract } from './contracts';
-export { disputeEngine } from './settlement/disputes';
-export { auctionEngine } from './settlement/auctions';
-export { netSettlementEngine } from './settlement/net-settlement';
 export { settlementEscrow, SettlementEscrow } from './settlement/escrow';
 export type { EscrowEntry, EscrowState, EscrowTransition } from './settlement/escrow';
 export { collateralVault, CollateralVault } from './settlement/collateral-vault';
@@ -25,6 +22,16 @@ export { settlementCapacityVault, SettlementCapacityVault } from './settlement/c
 export type { StakePosition } from './settlement/capacity-vault';
 export { lpLifecycle, LPLifecycle } from './lp-lifecycle-manager';
 export type { LPRecord, LPLifecycleState } from './lp-lifecycle-manager';
+export { disputeEngine, DisputeEngine } from './settlement/dispute-engine';
+export type { Dispute, DisputeState, DisputeOutcome, FraudType, DisputeEvidence } from './settlement/dispute-engine';
+export { manualSettlementEngine, ManualSettlementEngine } from './settlement/manual-settlement';
+export type { ManualSettlement, ManualSettlementState } from './settlement/manual-settlement';
+export { merchantRegistry, MerchantRegistry } from './merchant-registry';
+export type { MerchantRecord, MerchantTier, TierConfig } from './merchant-registry';
+export { treasury, Treasury } from './treasury';
+export type { TreasuryPosition, TreasuryRecommendation, TreasuryAction } from './treasury';
+export { auctionEngine } from './settlement/auctions';
+export { netSettlementEngine } from './settlement/net-settlement';
 export { computeAuthorizedExposure, defaultExposureFactors } from './economics/authorized-exposure';
 export { computeLPReputation, defaultLPReputation } from './economics/reputation';
 export { computeExpectedCost, defaultExpectedCost } from './economics/expected-cost';
