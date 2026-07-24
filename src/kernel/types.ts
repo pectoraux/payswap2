@@ -715,6 +715,18 @@ export interface SimulationResult {
   transitions: TransitionSummary[];
   capabilities: string[];
   eventLog: EventLogEntry[];
+  protocol: ProtocolSummary;
+}
+
+export interface ProtocolSummary {
+  escrowEntries: { id: string; transactionId: string; lpId: string; merchantId: string; amount: number; currency: string; state: string }[];
+  collateralEntries: { id: string; lpId: string; amount: number; currency: string; state: string; slashAmount: number }[];
+  lpRegistry: { lpId: string; authorizedExposure: number; reputation: number; tier: string }[];
+  merchantRegistry: { merchantId: string; tier: string; bond: number; reputation: number }[];
+  disputes: { id: string; state: string; outcome: string | null; fraudType: string | null; lpId: string; merchantId: string }[];
+  auctions: { id: string; amount: number; currency: string; status: string; winnerCount: number }[];
+  netSettlement: { corridors: { fromCountry: string; toCountry: string; balance: number; currency: string }[]; grossVolume: number; netVolume: number };
+  twinTokenSupply: { currency: string; supply: number }[];
 }
 
 export interface SolverCandidateSummary {

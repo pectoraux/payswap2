@@ -57,6 +57,13 @@ import { Commands } from './command';
 import { ConstraintSolver } from './solver';
 import { capabilityRegistry, ALL_CAPABILITIES } from './capabilities';
 import { createEventSourcedWorld, appendTransition, currentWorld, type EventSourcedWorld } from './event-sourced-world';
+import { settlementEscrowContract, collateralVaultContract, lpRegistryContract, merchantRegistryContract, twinTokenContract, liquidityPoolContract } from '@/protocol/contracts';
+import { computeAuthorizedExposure, defaultExposureFactors } from '@/protocol/economics/authorized-exposure';
+import { computeLPReputation, defaultLPReputation } from '@/protocol/economics/reputation';
+import { disputeEngine } from '@/protocol/settlement/disputes';
+import { auctionEngine } from '@/protocol/settlement/auctions';
+import { netSettlementEngine } from '@/protocol/settlement/net-settlement';
+import type { ProtocolSummary } from './types';
 
 export interface SimulationOptions {
   actorId?: string;
@@ -353,6 +360,9 @@ export class SimulationEngine {
     // 19. Capabilities (the solver queried these — they're first-class).
     const capabilities = ALL_CAPABILITIES;
 
+    // 20. Protocol state — the real PaySwap protocol economics.
+    const protocol = this.buildProtocolState(scenario, plan);
+
     const resultHash = hashMetrics({
       costPercent: plan.metrics.costPercent,
       settlementTimeMs: plan.metrics.settlementTimeMs,
@@ -396,6 +406,56 @@ export class SimulationEngine {
       transitions,
       capabilities,
       eventLog,
+      protocol,
+    };
+  }
+
+  /**
+   * Build protocol state — the real PaySwap protocol economics.
+   * Escrow, collateral, LP registry, merchant registry, disputes, auctions,
+   * net settlement, twin token supply.
+   */
+  private buildProtocolState(scenario: SimulationScenario, plan: import('./types').LiquidityExecutionPlan): ProtocolSummary {
+    const cur = scenario.transaction.merchant.currency;
+    const amount = scenario.transaction.amount;
+
+    // Freeze escrow for this transaction
+    const escrow = settlementEscrowContract.freeze(plan.id, scenario.liquidityProviders[0]?.id ?? 'lp_1', 'merchant_1', amount, cur, amount);
+
+    // Lock collateral for each LP
+    for (const lp of scenario.liquidityProviders) {
+      if (lp.online) {
+        collateralVaultContract.lock(lp.id, lp.tradingCapacity * 0.2, cur);
+        lpRegistryContract.register(lp.id);
+        const exposure = computeAuthorizedExposure(defaultExposureFactors(lp.tradingCapacity * 0.2, lp.tradingCapacity));
+        lpRegistryContract.updateExposure(lp.id, exposure);
+        const rep = computeLPReputation(defaultLPReputation());
+        lpRegistryContract.updateReputation(lp.id, rep);
+      }
+    }
+
+    // Register merchant
+    merchantRegistryContract.register('merchant_1', 5000);
+
+    // Mint twin tokens
+    twinTokenContract.mint(cur, amount);
+
+    // Record corridor obligation for net settlement
+    netSettlementEngine.record(scenario.transaction.buyer.country, scenario.transaction.merchant.country, cur, amount);
+
+    return {
+      escrowEntries: settlementEscrowContract.all().map((e) => ({ id: e.id, transactionId: e.transactionId, lpId: e.lpId, merchantId: e.merchantId, amount: e.amount, currency: e.currency, state: e.state })),
+      collateralEntries: collateralVaultContract.all().map((c) => ({ id: c.id, lpId: c.lpId, amount: c.amount, currency: c.currency, state: c.state, slashAmount: c.slashAmount })),
+      lpRegistry: lpRegistryContract.all().map((r) => ({ lpId: r.lpId, authorizedExposure: r.authorizedExposure, reputation: r.reputation, tier: r.tier })),
+      merchantRegistry: merchantRegistryContract.all().map((m) => ({ merchantId: m.merchantId, tier: m.tier, bond: m.bond, reputation: m.reputation })),
+      disputes: disputeEngine.all().map((d) => ({ id: d.id, state: d.state, outcome: d.outcome, fraudType: d.fraudType, lpId: d.lpId, merchantId: d.merchantId })),
+      auctions: auctionEngine.all().map((a) => ({ id: a.id, amount: a.amount, currency: a.currency, status: a.status, winnerCount: a.winnerBids.length })),
+      netSettlement: {
+        corridors: netSettlementEngine.all().map((c) => ({ fromCountry: c.fromCountry, toCountry: c.toCountry, balance: c.balance, currency: c.currency })),
+        grossVolume: netSettlementEngine.grossVolume(),
+        netVolume: netSettlementEngine.netVolume(),
+      },
+      twinTokenSupply: [{ currency: cur, supply: twinTokenContract.supplyOf(cur) }],
     };
   }
 

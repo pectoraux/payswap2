@@ -19,6 +19,7 @@ import { OptimizationPanel } from '@/components/simulator/optimization-panel';
 import { StateMachinePanel } from '@/components/simulator/state-machine-panel';
 import { ReasoningPanel } from '@/components/simulator/reasoning-panel';
 import { SolverPanel, TransitionsPanel } from '@/components/simulator/solver-panel';
+import { ProtocolPanel } from '@/components/simulator/protocol-panel';
 import { ExecutionGraphDAG } from '@/components/simulator/execution-graph-dag';
 import { EntityRegistry } from '@/components/simulator/entity-registry';
 import { RuntimeServicesPanel } from '@/components/simulator/runtime-services';
@@ -234,10 +235,11 @@ export default function Home() {
 
                 {/* 6-view Financial Control Center */}
                 <Tabs value={activeTab} onValueChange={setActiveTab}>
-                  <TabsList className="grid w-full grid-cols-3 lg:grid-cols-6 h-auto">
+                  <TabsList className="grid w-full grid-cols-4 lg:grid-cols-7 h-auto">
                     <TabsTrigger value="world" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Globe className="h-3 w-3" />World</TabsTrigger>
-                    <TabsTrigger value="optimization" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Cpu className="h-3 w-3" />Optimization</TabsTrigger>
+                    <TabsTrigger value="optimization" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Cpu className="h-3 w-3" />Solver</TabsTrigger>
                     <TabsTrigger value="execution" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Clock className="h-3 w-3" />Execution</TabsTrigger>
+                    <TabsTrigger value="protocol" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Shield className="h-3 w-3" />Protocol</TabsTrigger>
                     <TabsTrigger value="accounting" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><BookOpen className="h-3 w-3" />Accounting</TabsTrigger>
                     <TabsTrigger value="infrastructure" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Network className="h-3 w-3" />Infra</TabsTrigger>
                     <TabsTrigger value="governance" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Shield className="h-3 w-3" />Governance</TabsTrigger>
@@ -269,6 +271,11 @@ export default function Home() {
                     <ExecutionGraphDAG graph={result.executionGraph} />
                     {result.amendments.length > 0 && <AmendmentsPanel amendments={result.amendments} />}
                     <ReplayStepper key={result.runId} replay={result.replay} currency={result.scenario.transaction.currency} />
+                  </TabsContent>
+
+                  {/* 4. Protocol */}
+                  <TabsContent value="protocol" className="space-y-4 mt-4">
+                    <ProtocolPanel protocol={result.protocol} />
                   </TabsContent>
 
                   {/* 4. Accounting */}

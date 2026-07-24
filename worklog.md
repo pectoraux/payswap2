@@ -195,3 +195,51 @@ Stage Summary:
 - 43 constitution rules, 10 reasoning capabilities, 9 state machines — all preserved.
 - Lint clean. Agent Browser verified: Solver panel (5 candidates, WINNER), Transitions panel, v1.0 title. No errors.
 - NEXT: Prove the architecture by implementing real financial workflows (payments, loans, LP ops, insurance, treasury, governance) as converge(intent) calls.
+
+---
+Task ID: PROTO-1 (PaySwap Protocol v1 — Replace Placeholder Logic)
+Agent: main (Z.ai Code)
+Task: Phase 1 architecture document + Phase 2 implementation of protocol economics. Replace placeholder financial logic with real PaySwap protocol: escrow, collateral vault, disputes (no insurance), LP authorized exposure, reputation, expected cost routing, auctions, net settlement, extension platform. All flows through kernel.converge(intent).
+
+Phase 1 — Architecture Document (ARCHITECTURE.md, 716 lines):
+- Design constraints (frozen runtime, no new layers)
+- Protocol economics model (on-chain vs off-chain, escrow/collateral/pool separation, dispute resolution, fraud classification, merchant trust tiers, dynamic LP exposure, expected cost routing, hybrid routing, auctions, net settlement)
+- 8 smart contract interfaces
+- Extension platform architecture (manifest, lifecycle, security, SDK, event contracts)
+- Mapping 20 success criteria to converge(intent)
+- 7 design challenges + weaknesses + improvements
+- Folder structure
+- 12-step implementation plan
+
+Phase 2 — Implementation (protocol/ + extensions/):
+- `protocol/contracts/index.ts`: 6 smart contract interfaces (TwinToken, LiquidityPool, SettlementEscrow, CollateralVault, LPRegistry, MerchantRegistry). Escrow freeze/release/dispute/slash/refund/transfer. Collateral lock/slash/release. LP registry with dynamic exposure + reputation. Merchant registry with tiers + bonds.
+- `protocol/economics/authorized-exposure.ts`: 10-factor dynamic LP exposure computation (collateral, liquidity, completedSettlements, activeDisputes, fraudHistory, countryRisk, reserveUtilization, outstandingObligations, manualSettlementRatio, protocolReputation).
+- `protocol/economics/reputation.ts`: LP + merchant reputation scoring (7 + 5 factors).
+- `protocol/economics/expected-cost.ts`: 8-component expected cost model (fee + delay + failure + manual + FX + reputation + depletion + collateral).
+- `protocol/economics/trust-tiers.ts`: 4 merchant tiers (unverified/verified/trusted/premium) with bond-based classification.
+- `protocol/settlement/disputes.ts`: Full dispute lifecycle (opened → evidence → voting → adjudicated → LP wins / merchant wins / collateral slash). Fraud classification (timeout, unable_to_prove, forged_evidence, repeated_fraud) with escalating penalties. Escrow is the guarantee — no insurance pool.
+- `protocol/settlement/auctions.ts`: Liquidity auctions (open → bid → close → award). Greedy cheapest-first selection.
+- `protocol/settlement/net-settlement.ts`: Corridor netting (record obligations, compute net, settle). 2.35M gross → 50k net = 97.9% reduction.
+- `extensions/platform/index.ts`: Extension platform (manifest, lifecycle: submitted→approved→installed→enabled→disabled→suspended→removed, SDK with converge/query/emit).
+
+Integration:
+- Updated `kernel/simulation.ts`: builds protocol state (escrow, collateral, LP registry, merchant registry, disputes, auctions, net settlement, twin token supply) for every simulation.
+- Updated `kernel/types.ts`: added ProtocolSummary type.
+- New UI: `protocol-panel.tsx` (escrow, collateral vault, LP registry, merchant registry, disputes, net settlement, twin token supply).
+- Updated page.tsx: 7th tab "Protocol" showing real protocol economics.
+
+Verification:
+- All protocol modules tested via direct tsx script: escrow freezes, collateral locks, exposure computed (15k from 150k base), reputation scored (0.845), expected cost computed (887.55 vs 245 fee), dispute resolved (collateral_slash for forged_evidence), auction awarded (3 LPs), net settlement (97.9% reduction), extension platform lifecycle works.
+- API returns protocol state: 1 escrow, 3 collateral, 3 LP registry, 1 merchant registry, 1 corridor, 25k TwinGHS.
+- Agent Browser verified: Protocol tab shows escrow/collateral/LP registry/merchant registry/net settlement. Lint clean. No errors.
+
+Stage Summary:
+- Placeholder financial logic replaced with real PaySwap protocol economics.
+- Escrow replaces insurance (frozen Twin Tokens are the guarantee).
+- Dynamic LP authorization (10-factor model, not stake × multiplier).
+- Expected cost routing (8 components, not just fee).
+- Disputes with fraud classification + escalating penalties.
+- Liquidity auctions + corridor netting.
+- Extension platform with manifest + lifecycle + SDK.
+- All flows through kernel.converge(intent) — no special-case code.
+- Architecture remains frozen at v1.0.0-stable.
