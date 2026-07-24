@@ -23,27 +23,13 @@
 import type { CurrencyCode, LiquiditySourceKind, FinancialOperatorType } from './types';
 import { uid } from './support';
 
-export type EntityType =
-  | 'reserve'
-  | 'lp'
-  | 'merchant'
-  | 'customer'
-  | 'wallet'
-  | 'treasury'
-  | 'stablecoin'
-  | 'twin_token'
-  | 'insurance_pool'
-  | 'financial_operator'
-  | 'country'
-  | 'bank'
-  | 'psp'
-  | 'loan'
-  | 'invoice'
-  | 'governance_proposal'
-  | 'extension'
-  | 'ai_agent'
-  | 'bridge'
-  | 'fx_corridor';
+/**
+ * Entity type is a free-form string — the kernel doesn't know what types exist.
+ * PaySwap defines 'reserve', 'lp', 'merchant', etc.
+ * Supply chain defines 'container', 'truck', 'warehouse', etc.
+ * The kernel only cares about capabilities, not types.
+ */
+export type EntityType = string;
 
 export type EntityState = string; // free-form — governed by state machines
 
@@ -253,7 +239,12 @@ export function entitiesFromScenario(scenario: import('./types').SimulationScena
 }
 
 /** Entity type display metadata. */
-export const ENTITY_META: Record<EntityType, { label: string; icon: string; color: string }> = {
+/**
+ * Entity metadata registry — domains register their entity types.
+ * The kernel provides a default for unknown types.
+ */
+export const ENTITY_META: Record<string, { label: string; icon: string; color: string }> = {
+  // PaySwap types (registered by the PaySwap domain)
   reserve: { label: 'Reserve', icon: '🏦', color: 'text-amber-500' },
   lp: { label: 'Liquidity Provider', icon: '💧', color: 'text-emerald-500' },
   merchant: { label: 'Merchant', icon: '🏪', color: 'text-rose-500' },
@@ -275,3 +266,13 @@ export const ENTITY_META: Record<EntityType, { label: string; icon: string; colo
   bridge: { label: 'Bridge', icon: '🌉', color: 'text-cyan-500' },
   fx_corridor: { label: 'FX Corridor', icon: '💱', color: 'text-cyan-500' },
 };
+
+/** Register entity metadata for a domain (e.g., supply chain). */
+export function registerEntityMeta(type: string, meta: { label: string; icon: string; color: string }): void {
+  ENTITY_META[type] = meta;
+}
+
+/** Get entity metadata with a default for unknown types. */
+export function getEntityMeta(type: string): { label: string; icon: string; color: string } {
+  return ENTITY_META[type] ?? { label: type, icon: '📦', color: 'text-muted-foreground' };
+}
