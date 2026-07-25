@@ -42,3 +42,94 @@ export type { Attestation, AttestationKind } from './economics/attestation';
 export { protocolScenarios, CONSTITUTIONAL_TESTS } from './scenarios';
 export { runProtocolScenario, runAllProtocolScenarios, verifyConstitutional } from './runner';
 export { fuzz } from './fuzz';
+
+// Blockchain adapters ----------------------------------------------------------
+export { blockchainRegistry, BlockchainAdapterRegistry } from './blockchains/adapter';
+export type { BlockchainAdapter } from './blockchains/adapter';
+export { stellarAdapter, StellarAdapter } from './blockchains/stellar/adapter';
+
+// Twin Token engine ------------------------------------------------------------
+export { twinTokenEngine, TwinTokenEngine } from './twin-token/engine';
+export type {
+  TwinTokenAsset,
+  TwinTokenBalance,
+  TwinTokenOperation,
+  TwinTokenOperationType,
+  TwinTokenEscrowRecord,
+  TwinTokenOperationFilter,
+} from './twin-token/engine';
+
+// Wallet service ---------------------------------------------------------------
+export { walletService, WalletService } from './wallets/wallet-service';
+export type {
+  PaySwapAccount,
+  Wallet,
+  BlockchainAccount,
+  WalletTransaction,
+  WalletTransactionType,
+  AccountType,
+  WalletEventLike,
+} from './wallets/wallet-service';
+
+// Webhook engine ---------------------------------------------------------------
+export { webhookEngine, WebhookEngine, DEFAULT_WEBHOOK_EVENTS, WEBHOOK_SIGNATURE_HEADER, WEBHOOK_SIGNATURE_PREFIX } from './webhooks/engine';
+export type { WebhookEndpoint, WebhookDelivery, WebhookDeliveryStatus } from './webhooks/engine';
+
+// QR service -------------------------------------------------------------------
+export { qrService, QRService } from './qr/qr-service';
+export type { QRCode, QRType, QRInterval } from './qr/qr-service';
+
+// Merchant platform ------------------------------------------------------------
+export { merchantPlatform, MerchantPlatform, DEFAULT_API_KEY_SCOPES, DEFAULT_WEBHOOK_EVENT_TYPES } from './merchant/platform';
+export type {
+  MerchantAccount,
+  MerchantState,
+  ApiKey,
+  TeamMember,
+  Product,
+  Invoice,
+  InvoiceItem,
+  InvoiceState,
+  Customer,
+  Refund,
+  RefundState,
+  MerchantSettings,
+  MerchantAnalytics,
+} from './merchant/platform';
+
+// Payout service ---------------------------------------------------------------
+export { payoutService, PayoutService } from './payouts/payout-service';
+export type {
+  PayoutMethod,
+  PayoutState,
+  PayoutQuote,
+  Payout,
+  PayoutDestination,
+  PayoutStats,
+} from './payouts/payout-service';
+
+// Ledger module ----------------------------------------------------------------
+export { ledgerEngine, LedgerEngine } from './ledger/engine';
+export type {
+  JournalFilter,
+  AccountTrialBalance,
+  TrialBalance,
+  BalanceSheet,
+  BalanceSheetGroup,
+  IncomeStatement,
+  IntegrityReport,
+} from './ledger/engine';
+export {
+  reconcileTwinTokenBacking,
+  reconcileEscrow,
+  reconcilePayouts,
+  reconcileMerchant,
+  reconcileTreasury,
+  dailyReconciliation,
+} from './ledger/reconciliation';
+export type {
+  ReconcileResult,
+  ReconcileDiscrepancy,
+  DailyReconciliationInput,
+  DailyReconciliationReport,
+} from './ledger/reconciliation';

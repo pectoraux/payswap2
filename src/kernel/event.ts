@@ -51,4 +51,8 @@ export class EventEngine {
   }
 }
 
-export const eventEngine = new EventEngine();
+// Global singleton — ensures one EventEngine instance across Next.js dev
+// module re-instantiation (same pattern as db.ts uses for Prisma).
+const _globalForEvent = globalThis as unknown as { __PAYSWAP_EVENT_ENGINE?: EventEngine };
+export const eventEngine = _globalForEvent.__PAYSWAP_EVENT_ENGINE ?? new EventEngine();
+if (!_globalForEvent.__PAYSWAP_EVENT_ENGINE) _globalForEvent.__PAYSWAP_EVENT_ENGINE = eventEngine;

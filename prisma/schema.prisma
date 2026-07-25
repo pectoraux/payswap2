@@ -131,3 +131,55 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+// ---------------------------------------------------------------------------
+// PaySwap PRODUCTION-3+ — Persistent Event Store + Snapshots
+//
+// The event stream is the single source of truth. Every state change emits
+// an event that is appended here. On restart, the entire protocol state is
+// rebuilt by replaying the event stream (fast-forwarded via snapshots).
+//
+// Snapshots are point-in-time ledger states taken periodically so projection
+// rebuilds are O(post-snapshot events) instead of O(all events).
+// ---------------------------------------------------------------------------
+
+model EventRecord {
+  id        String   @id @default(cuid())
+  eventId   String   @unique
+  type      String
+  payload   String   // JSON-encoded
+  ts        BigInt
+  frame     Int      @default(0)
+  seq       Int      @default(0)  // monotonic sequence for strict ordering
+  createdAt DateTime @default(now())
+
+  @@index([type])
+  @@index([ts])
+  @@index([seq])
+}
+
+model LedgerSnapshotRecord {
+  id           String   @id @default(cuid())
+  snapshotId   String   @unique
+  asOfTs       BigInt
+  asOfSeq      Int      // last event seq included in this snapshot
+  accounts     String   // JSON-encoded Record<accountCode, {debit, credit, balance}>
+  trialBalance String   // JSON-encoded {totalDebits, totalCredits, balanced}
+  entryCount   Int
+  eventCount   Int      // events replayed to produce this snapshot
+  durationMs   Int
+  createdAt    DateTime @default(now())
+
+  @@index([asOfTs])
+  @@index([asOfSeq])
+}
+
+model CheckpointRecord {
+  id              String   @id @default(cuid())
+  name            String   @unique  // e.g. "event_store", "ledger_snapshot"
+  lastSeq         Int      @default(0)
+  lastTs          BigInt   @default(0)
+  lastSnapshotId  String?
+  totalCount      Int      @default(0)
+  updatedAt       DateTime @updatedAt
+}

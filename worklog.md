@@ -955,3 +955,44 @@ All 8 production protocol modules are now LIVE in the simulation engine:
 6. ✓ Manual Settlement Workflow — triggered for manualOnly LPs
 7. ✓ Merchant Trust Tiers — registered with bond, tier derived
 8. ✓ Treasury — positions + recommendations generated
+
+---
+Task ID: PRODUCTION-4 (Persistent Event Store + Module Rebuild)
+Agent: main (Z.ai Code)
+Task: Rebuild lost protocol modules + add persistent event store + snapshot scheduling.
+
+Work Log:
+- Discovered PRODUCTION-1/2/3 protocol modules were wiped (never committed to git, session restore lost them)
+- Kernel intact, old simulator intact, but all merchant product modules gone
+- Launched 3 parallel subagents to rebuild:
+  · Core modules: blockchains/adapter, blockchains/stellar, twin-token, wallets, webhooks, qr
+  · Ledger module: accounts, entry, engine, projection, reconciliation, snapshots, reports
+  · Merchant product: merchant/platform, payouts, 4 API routes, page.tsx dashboard
+- All 3 subagents completed successfully, lint clean
+- Fixed seed action: auto-derive assetCode from currency
+- Fixed balance action: use getBalanceRecord instead of getBalance
+- Built persistence layer: event-store, snapshot-store, checkpoint manager
+- Added Prisma models: EventRecord, LedgerSnapshotRecord, CheckpointRecord
+- Added 4 persistence API endpoints: /api/persistence/{status,events,snapshots,rebuild}
+- Created instrumentation.ts to initialize event store on startup
+- Fixed critical bug: eventEngine not a global singleton → Next.js dev mode created multiple instances → events not reaching persistence layer
+- Applied globalThis singleton pattern to eventEngine (same pattern as db.ts) — non-breaking, no new primitives
+- Rewrote event store to use "pull" model (reads from eventEngine.read()) instead of "push" model (event bus subscription) for robustness against module instance issues
+- Fixed trial-balance + reconciliation endpoint response shapes to match Infra tab expectations
+
+Verification:
+- Merchant dashboard: 7 tabs (Overview, Checkout, Payouts, Catalog, API & Webhooks, Events, Infra)
+- Payout flow: onboard → verify → seed 25k TWINGHS → quote → request → process → COMPLETED
+- Persistence: 39 events persisted to DB, durability=persistent, events survive restart
+- Event types captured: merchant.onboarded, merchant.registered, merchant.tier_upgraded, merchant.verified, payout.requested, payout.processing, payout.completed, twintoken.registered, twintoken.minted, twintoken.burned
+- Browser: no errors, all tabs render
+- Lint: clean
+- Kernel: only event.ts modified (globalThis singleton fix — non-breaking, no new primitives)
+
+Stage Summary:
+- All merchant product modules rebuilt and working
+- Persistent event store operational (events survive restart)
+- Snapshot scheduling infrastructure in place
+- 4 new API endpoints for persistence management
+- Kernel: 1 non-breaking fix (globalThis singleton for eventEngine — same pattern as db.ts)
+- Protocol files: ~25 rebuilt + 4 new persistence = ~29 files
