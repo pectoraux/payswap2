@@ -588,6 +588,42 @@ model AuditLog {
   @@index([createdAt])
 }
 
+// ═══════ INCIDENT MANAGEMENT ═══════
+
+model Incident {
+  id              String   @id @default(cuid())
+  title           String
+  description     String?
+  severity        String   @default("P2") // P1, P2, P3, P4
+  status          String   @default("open") // open, investigating, identified, monitoring, resolved
+  component       String?  // api, payments, payouts, webhooks, connectors, blockchain
+  createdBy       String
+  assignedTo      String?
+  acknowledgedAt  DateTime?
+  resolvedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  updates         IncidentUpdate[]
+
+  @@index([status])
+  @@index([severity])
+  @@index([createdAt])
+}
+
+model IncidentUpdate {
+  id              String   @id @default(cuid())
+  incidentId      String
+  authorId        String
+  message         String
+  status          String   // investigating, identified, monitoring, resolved
+  createdAt       DateTime @default(now())
+
+  incident        Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId])
+}
+
 // ═══════ LEGACY ═══════
 
 model SimulationRun {

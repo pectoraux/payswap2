@@ -61,7 +61,7 @@ const globalForPrisma = globalThis as unknown as {
   prismaSchemaVersion?: string
 }
 
-const SCHEMA_VERSION = 'extensions-relations-2025-07-25'
+const SCHEMA_VERSION = 'incidents-2025-07-25'
 
 function createClient() {
   return new PrismaClient({

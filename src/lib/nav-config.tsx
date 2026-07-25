@@ -38,6 +38,8 @@ import {
   Compass,
   FlaskConical,
   Activity,
+  AlertTriangle,
+  Terminal,
 } from 'lucide-react';
 
 /**
@@ -292,6 +294,9 @@ export const opsNav: NavGroup[] = [
       { label: 'Health', href: '/ops/health', icon: <HeartPulse className="h-4 w-4" /> },
       { label: 'Connectors', href: '/ops/connectors', icon: <Plug className="h-4 w-4" /> },
       { label: 'Metrics', href: '/ops/metrics', icon: <BarChart3 className="h-4 w-4" /> },
+      { label: 'Incidents', href: '/ops/incidents', icon: <AlertTriangle className="h-4 w-4" /> },
+      { label: 'Status', href: '/ops/status', icon: <Activity className="h-4 w-4" /> },
+      { label: 'SRE', href: '/ops/sre', icon: <Terminal className="h-4 w-4" /> },
     ],
   },
 ];
