@@ -2,7 +2,7 @@ import { Badge } from '@/components/ui/badge';
 
 const SUCCESS = new Set([
   'COMPLETED', 'ACTIVE', 'APPROVED', 'PAID', 'SUCCEEDED', 'VERIFIED',
-  'JOINED', 'SETTLED', 'LIVE',
+  'JOINED', 'SETTLED', 'LIVE', 'CONVERTED',
 ]);
 const WARN = new Set([
   'PENDING', 'REQUESTED', 'DRAFT', 'PROCESSING', 'SENT', 'INVITED',
