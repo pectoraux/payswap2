@@ -12,16 +12,17 @@ import {
 import { StatusBadge } from '@/components/status-badge';
 import {
   Building2,
-  Mail,
-  Phone,
   Globe,
   Coins,
-  FileText,
 } from 'lucide-react';
+import {
+  EditSettingsForm,
+  type MerchantSettings,
+} from '@/components/merchant/edit-settings-form';
 
 export const dynamic = 'force-dynamic';
 
-function Field({
+function ReadOnlyField({
   icon,
   label,
   value,
@@ -61,6 +62,15 @@ export default async function SettingsPage() {
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: merchant.currency }).format(n);
 
+  const settings: MerchantSettings = {
+    id: merchant.id,
+    name: merchant.name,
+    email: merchant.email,
+    phone: merchant.phone,
+    description: merchant.description,
+    website: merchant.website,
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -79,25 +89,7 @@ export default async function SettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field icon={<Building2 className="h-4 w-4" />} label="Merchant name" value={merchant.name} />
-              <Field icon={<Mail className="h-4 w-4" />} label="Email" value={merchant.email} />
-              <Field icon={<Phone className="h-4 w-4" />} label="Phone" value={merchant.phone} />
-              <Field icon={<Globe className="h-4 w-4" />} label="Country" value={merchant.country} />
-              <Field icon={<Coins className="h-4 w-4" />} label="Currency" value={merchant.currency} />
-              <Field icon={<Building2 className="h-4 w-4" />} label="Business type" value={merchant.businessType} />
-            </div>
-            <div className="mt-3 rounded-lg border bg-card/50 p-3">
-              <div className="flex items-center gap-2">
-                <FileText className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Description
-                </span>
-              </div>
-              <p className="mt-1.5 text-sm text-muted-foreground">
-                {merchant.description || 'No description provided.'}
-              </p>
-            </div>
+            <EditSettingsForm merchant={settings} />
           </CardContent>
         </Card>
 
@@ -138,20 +130,18 @@ export default async function SettingsPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Legal</CardTitle>
+              <CardTitle className="text-base">Read-only details</CardTitle>
+              <CardDescription>
+                Country, currency, and registration data. Contact support to
+                change these.
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Registration #</span>
-                <span className="font-medium">{merchant.registrationNumber || '—'}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Tax ID</span>
-                <span className="font-medium">{merchant.taxId || '—'}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Website</span>
-                <span className="font-medium truncate max-w-[12rem]">{merchant.website || '—'}</span>
+            <CardContent className="space-y-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <ReadOnlyField icon={<Globe className="h-4 w-4" />} label="Country" value={merchant.country} />
+                <ReadOnlyField icon={<Coins className="h-4 w-4" />} label="Currency" value={merchant.currency} />
+                <ReadOnlyField icon={<Building2 className="h-4 w-4" />} label="Business type" value={merchant.businessType} />
+                <ReadOnlyField icon={<Building2 className="h-4 w-4" />} label="Registration #" value={merchant.registrationNumber} />
               </div>
             </CardContent>
           </Card>
@@ -160,3 +150,4 @@ export default async function SettingsPage() {
     </div>
   );
 }
+

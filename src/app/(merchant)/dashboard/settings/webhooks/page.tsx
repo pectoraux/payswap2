@@ -10,8 +10,8 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { StatusBadge } from '@/components/status-badge';
-import { Button } from '@/components/ui/button';
-import { Webhook, Plus, Link as LinkIcon } from 'lucide-react';
+import { Webhook, Link as LinkIcon } from 'lucide-react';
+import { CreateWebhookDialog } from '@/components/merchant/create-webhook-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,9 +39,7 @@ export default async function WebhooksPage() {
             Receive real-time event notifications at your endpoints.
           </p>
         </div>
-        <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-          <Plus className="mr-2 h-4 w-4" /> Add endpoint
-        </Button>
+        <CreateWebhookDialog />
       </div>
 
       {webhooks.length === 0 ? (

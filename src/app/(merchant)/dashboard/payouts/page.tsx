@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/status-badge';
 import { ArrowDownToLine } from 'lucide-react';
+import { CreatePayoutDialog } from '@/components/merchant/create-payout-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -57,6 +58,7 @@ export default async function PayoutsPage() {
             Track funds disbursed from your merchant account.
           </p>
         </div>
+        <CreatePayoutDialog />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">

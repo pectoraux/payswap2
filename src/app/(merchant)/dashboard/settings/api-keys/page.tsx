@@ -18,8 +18,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/status-badge';
-import { Button } from '@/components/ui/button';
-import { KeyRound, Plus } from 'lucide-react';
+import { KeyRound } from 'lucide-react';
+import { CreateApiKeyDialog } from '@/components/merchant/create-api-key-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,9 +50,7 @@ export default async function ApiKeysPage() {
             Authenticate API requests from your applications.
           </p>
         </div>
-        <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-          <Plus className="mr-2 h-4 w-4" /> Create key
-        </Button>
+        <CreateApiKeyDialog />
       </div>
 
       <Card>

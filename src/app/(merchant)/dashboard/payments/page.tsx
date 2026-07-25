@@ -18,8 +18,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/status-badge';
-import { Button } from '@/components/ui/button';
-import { CreditCard, Plus } from 'lucide-react';
+import { CreditCard } from 'lucide-react';
+import { CreatePaymentDialog } from '@/components/merchant/create-payment-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,9 +58,7 @@ export default async function PaymentsPage() {
             Track all incoming payments to your merchant account.
           </p>
         </div>
-        <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-          <Plus className="mr-2 h-4 w-4" /> New payment link
-        </Button>
+        <CreatePaymentDialog />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
