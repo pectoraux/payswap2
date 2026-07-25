@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { requireAdmin } from '@/lib/auth-guards';
 import { KernelRuntimeConsole } from '@/components/admin/kernel-runtime-console';
 import { WorldSimulator } from '@/components/admin/world-simulator';
+import { ScenarioBuilder } from '@/components/admin/scenario-builder';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +13,7 @@ export default async function AdminRuntimePage() {
   return (
     <div className="space-y-6">
       <WorldSimulator />
+      <ScenarioBuilder />
       <KernelRuntimeConsole />
     </div>
   );

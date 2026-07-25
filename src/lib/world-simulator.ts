@@ -22,10 +22,48 @@ import { v4 as uuidv4 } from 'uuid';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
+export interface CustomSimParams {
+  successRate?: number;          // 0-1
+  refundRate?: number;           // 0-1
+  webhookFailureRate?: number;   // 0-1
+  complianceAlertRate?: number;  // 0-1
+  highValueRate?: number;        // 0-1
+  payoutFrequency?: number;      // 0-1
+}
+
+export interface ActorFilter {
+  merchantIds?: string[];
+  lpIds?: string[];
+}
+
 export interface SimulationParams {
   duration: '1h' | '1d' | '1w' | '1m';
-  scenario: 'normal' | 'holiday' | 'outage' | 'growth' | 'stress';
+  scenario: 'normal' | 'holiday' | 'outage' | 'growth' | 'stress' | 'custom';
   environment?: string;
+  customParams?: CustomSimParams;
+  actorFilter?: ActorFilter;
+}
+
+export interface NetworkSnapshot {
+  totalPayments: number;
+  totalVolume: number;
+  totalLpRevenue: number;
+  amlAlerts: number;
+  webhooksDelivered: number;
+  webhooksFailed: number;
+}
+
+export interface NetworkImpact {
+  before: NetworkSnapshot;
+  after: NetworkSnapshot;
+  delta: {
+    payments: number;
+    volume: number;
+    lpRevenue: number;
+    amlAlerts: number;
+    webhooksDelivered: number;
+    webhooksFailed: number;
+  };
 }
 
 export interface SimulationResult {
@@ -45,6 +83,7 @@ export interface SimulationResult {
   errors: string[];
   duration_ms: number;
   events: WorldEvent[];
+  networkImpact?: NetworkImpact;
 }
 
 export interface WorldEvent {
@@ -495,25 +534,86 @@ async function buildActorPool(env: string) {
 
 // ─── Main Simulator ─────────────────────────────────────────────────────────
 
+/**
+ * Capture a snapshot of the live network state from the DB.
+ * Used before/after a simulation to compute Network Impact.
+ */
+async function captureNetworkSnapshot(env: string): Promise<NetworkSnapshot> {
+  const [paymentAgg, lpRevAgg, amlCount, whDelivered, whFailed] = await Promise.all([
+    db.payment.aggregate({
+      where: { environment: env, status: 'COMPLETED' },
+      _sum: { amount: true },
+      _count: true,
+    }),
+    db.payment.aggregate({
+      where: { environment: env, status: 'COMPLETED' },
+      _sum: { fee: true },
+    }),
+    db.aMLAlert.count({ where: { environment: env } }),
+    db.webhookDelivery.count({ where: { status: 'DELIVERED' } }),
+    db.webhookDelivery.count({ where: { status: 'FAILED' } }),
+  ]);
+
+  return {
+    totalPayments: paymentAgg._count,
+    totalVolume: Math.round((paymentAgg._sum.amount || 0) * 100) / 100,
+    totalLpRevenue: Math.round((lpRevAgg._sum.fee || 0) * 100) / 100,
+    amlAlerts: amlCount,
+    webhooksDelivered: whDelivered,
+    webhooksFailed: whFailed,
+  };
+}
+
 export async function runWorldSimulation(params: SimulationParams): Promise<SimulationResult> {
   const start = Date.now();
   const runId = uuidv4();
-  const probs = SCENARIO_MODIFIERS[params.scenario] ?? BASE_PROBS;
+  const baseProbs = SCENARIO_MODIFIERS[params.scenario] ?? BASE_PROBS;
+
+  // Apply custom probability overrides if provided
+  const probs = params.customParams
+    ? {
+        ...baseProbs,
+        ...(params.customParams.successRate !== undefined ? { paymentSuccess: params.customParams.successRate } : {}),
+        ...(params.customParams.refundRate !== undefined ? { refund: params.customParams.refundRate } : {}),
+        ...(params.customParams.webhookFailureRate !== undefined ? { webhookFailure: params.customParams.webhookFailureRate } : {}),
+        ...(params.customParams.complianceAlertRate !== undefined ? { complianceAlert: params.customParams.complianceAlertRate } : {}),
+        ...(params.customParams.highValueRate !== undefined ? { highValueTransaction: params.customParams.highValueRate } : {}),
+        ...(params.customParams.payoutFrequency !== undefined ? { merchantPayout: params.customParams.payoutFrequency } : {}),
+      }
+    : baseProbs;
+
   const count = DURATION_MULTIPLIERS[params.duration] ?? 10;
   const env = params.environment || 'sandbox';
   const errors: string[] = [];
   const events: WorldEvent[] = [];
 
+  // Capture BEFORE snapshot for Network Impact
+  const before = await captureNetworkSnapshot(env);
+
   // Load actors
   const { merchantProfiles, lpProfiles, customerProfiles } = await buildActorPool(env);
 
-  if (merchantProfiles.length === 0) {
+  // Apply actor filter (select only specified merchants / LPs if provided)
+  const filteredMerchants = params.actorFilter?.merchantIds && params.actorFilter.merchantIds.length > 0
+    ? merchantProfiles.filter(m => params.actorFilter!.merchantIds!.includes(m.id))
+    : merchantProfiles;
+  const filteredLps = params.actorFilter?.lpIds && params.actorFilter.lpIds.length > 0
+    ? lpProfiles.filter(lp => params.actorFilter!.lpIds!.includes(lp.id))
+    : lpProfiles;
+
+  if (filteredMerchants.length === 0 || filteredLps.length === 0) {
     return {
       runId, scenario: params.scenario, duration: params.duration,
       paymentsCreated: 0, payoutsCreated: 0, refundsCreated: 0, invoicesCreated: 0,
       webhooksCreated: 0, ledgerEntries: 0, auditLogs: 0, complianceAlerts: 0,
-      lpRevenue: 0, totalVolume: 0, errors: ['No active merchants found. Seed the database first.'],
+      lpRevenue: 0, totalVolume: 0,
+      errors: ['No active merchants or LPs match the selected filter. Seed the database or widen the actor selection.'],
       duration_ms: Date.now() - start, events: [],
+      networkImpact: {
+        before,
+        after: before,
+        delta: { payments: 0, volume: 0, lpRevenue: 0, amlAlerts: 0, webhooksDelivered: 0, webhooksFailed: 0 },
+      },
     };
   }
 
@@ -536,8 +636,8 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
   for (let i = 0; i < count; i++) {
     try {
       // Pick actors based on their profiles
-      const merchant = merchantProfiles[Math.floor(Math.random() * merchantProfiles.length)];
-      const lp = lpProfiles[Math.floor(Math.random() * lpProfiles.length)];
+      const merchant = filteredMerchants[Math.floor(Math.random() * filteredMerchants.length)];
+      const lp = filteredLps[Math.floor(Math.random() * filteredLps.length)];
       const customer = customerProfiles[Math.floor(Math.random() * customerProfiles.length)];
 
       // Skip dormant customers most of the time
@@ -747,6 +847,22 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
     },
   });
 
+  // Capture AFTER snapshot for Network Impact
+  const after = await captureNetworkSnapshot(env);
+
+  const networkImpact: NetworkImpact = {
+    before,
+    after,
+    delta: {
+      payments: after.totalPayments - before.totalPayments,
+      volume: Math.round((after.totalVolume - before.totalVolume) * 100) / 100,
+      lpRevenue: Math.round((after.totalLpRevenue - before.totalLpRevenue) * 100) / 100,
+      amlAlerts: after.amlAlerts - before.amlAlerts,
+      webhooksDelivered: after.webhooksDelivered - before.webhooksDelivered,
+      webhooksFailed: after.webhooksFailed - before.webhooksFailed,
+    },
+  };
+
   return {
     runId, scenario: params.scenario, duration: params.duration,
     paymentsCreated, payoutsCreated, refundsCreated, invoicesCreated,
@@ -755,5 +871,6 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
     totalVolume: Math.round(totalVolume * 100) / 100,
     errors, duration_ms: Date.now() - start,
     events: events.sort((a, b) => a.ts - b.ts),
+    networkImpact,
   };
 }

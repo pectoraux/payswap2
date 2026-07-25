@@ -167,6 +167,8 @@ export const adminNav: NavGroup[] = [
     label: 'System',
     items: [
       { label: 'Runtime', href: '/admin/runtime', icon: <Globe className="h-4 w-4" /> },
+      { label: 'Network', href: '/admin/network', icon: <Globe className="h-4 w-4" /> },
+      { label: 'Simulations', href: '/admin/simulations', icon: <History className="h-4 w-4" /> },
       { label: 'Audit Trail', href: '/admin/audit', icon: <Shield className="h-4 w-4" /> },
     ],
   },
