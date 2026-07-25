@@ -1,20 +1,22 @@
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { TrendingUp, CreditCard, Users, ArrowDownToLine, Package } from 'lucide-react';
 
-export default async function MerchantDashboard() {
-  const session = await getServerSession(authOptions);
-  const userId = (session?.user as any)?.id;
-  const userRole = await db.userRole.findFirst({ where: { userId, role: { in: ['MERCHANT', 'MERCHANT_STAFF'] } } });
-  const merchantId = userRole?.merchantId;
-  if (!merchantId) return <div>No merchant account found.</div>;
+export const dynamic = 'force-dynamic';
 
-  const merchant = await db.merchant.findUnique({ where: { id: merchantId } });
-  if (!merchant) return <div>Merchant not found.</div>;
+export default async function MerchantDashboard() {
+  let merchantId: string;
+  let merchant: any;
+  try {
+    const result = await requireMerchant();
+    merchantId = result.merchantId;
+    merchant = result.merchant;
+  } catch (e) {
+    return <div className="text-sm text-muted-foreground">No merchant account found.</div>;
+  }
 
   const [payments, payouts, customers, products] = await Promise.all([
     db.payment.findMany({ where: { merchantId }, orderBy: { createdAt: 'desc' }, take: 10 }),
@@ -33,8 +35,6 @@ export default async function MerchantDashboard() {
         <h1 className="text-2xl font-bold tracking-tight">Welcome back, {merchant.name}</h1>
         <p className="text-sm text-muted-foreground">Here's what's happening with your business today.</p>
       </div>
-
-      {/* KPIs */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card><CardContent className="p-5">
           <div className="flex items-center justify-between"><span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Revenue</span><TrendingUp className="h-4 w-4 text-emerald-500" /></div>
@@ -57,8 +57,6 @@ export default async function MerchantDashboard() {
           <div className="text-[10px] text-muted-foreground mt-1">{products} products</div>
         </CardContent></Card>
       </div>
-
-      {/* Recent payments */}
       <Card>
         <CardHeader><CardTitle className="text-base">Recent Payments</CardTitle><CardDescription>Your latest transactions</CardDescription></CardHeader>
         <CardContent>
