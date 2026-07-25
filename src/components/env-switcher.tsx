@@ -53,6 +53,27 @@ function writeStoredMode(next: EnvMode) {
 }
 
 /**
+ * Imperatively set the environment mode. Persists to localStorage and
+ * notifies all subscribers (including the `useEnvMode` hook and any mounted
+ * `<EnvSwitcher />`).
+ *
+ * This is exported so that other surfaces — e.g. the global command palette —
+ * can toggle the environment without remounting the switcher.
+ */
+export function setEnvMode(next: EnvMode): void {
+  writeStoredMode(next);
+}
+
+/**
+ * React hook that returns the current environment mode and re-renders when it
+ * changes. Uses the same external store as `<EnvSwitcher />`, so the two are
+ * always in sync.
+ */
+export function useEnvMode(): EnvMode {
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+}
+
+/**
  * Sandbox / Live environment toggle that lives in the unified shell header.
  *
  * - Violet "Sandbox" badge or sky-blue "Live" badge.
@@ -63,7 +84,7 @@ function writeStoredMode(next: EnvMode) {
 export function EnvSwitcher() {
   // useSyncExternalStore handles SSR/hydration: the server snapshot is always
   // 'sandbox', and after hydration the client reads the real stored value.
-  const mode = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const mode = useEnvMode();
 
   const toggle = useCallback(() => {
     const next: EnvMode = mode === 'sandbox' ? 'live' : 'sandbox';

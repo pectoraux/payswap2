@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
-import { useMemo, useState } from 'react';
-import { Bell, ChevronDown, LogOut, Menu, Search, Settings, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Bell, ChevronDown, Command as CommandIcon, LogOut, Menu, Search, Settings, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -16,16 +16,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { RoleSwitcher } from '@/components/role-switcher';
 import { EnvSwitcher } from '@/components/env-switcher';
+import { CommandPalette } from '@/components/command-palette';
 import type { NavGroup } from '@/lib/nav-config';
 import { cn } from '@/lib/utils';
 
@@ -60,11 +53,22 @@ export function UnifiedShell({
   settingsHref,
 }: UnifiedShellProps) {
   const pathname = usePathname();
-  const router = useRouter();
   const { data: session } = useSession();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Global Cmd+K / Ctrl+K shortcut → open the command palette. Lives in the
+  // shell so the listener is attached once on every authenticated page.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   const rootPath = basePath ?? navGroups[0]?.items[0]?.href ?? '/';
   const resolvedSettingsHref = settingsHref ?? rootPath;
@@ -81,31 +85,9 @@ export function UnifiedShell({
     return pathname === href || pathname.startsWith(href + '/');
   };
 
-  // Flatten nav items for the search dialog.
-  const flatItems = useMemo(
-    () =>
-      navGroups.flatMap((g) =>
-        g.items.map((i) => ({ ...i, group: g.label })),
-      ),
-    [navGroups],
-  );
-
-  const filteredItems = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return flatItems;
-    return flatItems.filter(
-      (i) =>
-        i.label.toLowerCase().includes(q) ||
-        i.href.toLowerCase().includes(q) ||
-        i.group.toLowerCase().includes(q),
-    );
-  }, [flatItems, searchQuery]);
-
-  const handleSearchSelect = (href: string) => {
-    setSearchOpen(false);
-    setSearchQuery('');
+  const openPalette = () => {
+    setPaletteOpen(true);
     setSidebarOpen(false);
-    router.push(href);
   };
 
   return (
@@ -241,11 +223,23 @@ export function UnifiedShell({
             <Menu className="h-4 w-4" />
           </Button>
           <div className="flex-1" />
+          <button
+            type="button"
+            onClick={openPalette}
+            aria-label="Open command palette"
+            className="hidden h-8 items-center gap-2 rounded-md border bg-background px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:flex"
+          >
+            <Search className="h-3.5 w-3.5" />
+            <span>Search…</span>
+            <kbd className="ml-1 inline-flex items-center gap-0.5 rounded border bg-muted px-1 py-0.5 font-mono text-[9px] font-semibold">
+              <CommandIcon className="h-2.5 w-2.5" />K
+            </kbd>
+          </button>
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8"
-            onClick={() => setSearchOpen(true)}
+            className="h-8 w-8 sm:hidden"
+            onClick={openPalette}
             aria-label="Search"
           >
             <Search className="h-4 w-4" />
@@ -264,54 +258,13 @@ export function UnifiedShell({
         <main className="flex-1 p-4 lg:p-6">{children}</main>
       </div>
 
-      {/* Search dialog */}
-      <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
-        <DialogContent className="gap-0 p-0 sm:max-w-md">
-          <DialogHeader className="sr-only">
-            <DialogTitle>Search</DialogTitle>
-            <DialogDescription>
-              Search across {roleLabel} navigation
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex items-center border-b px-3">
-            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <Input
-              autoFocus
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && filteredItems[0]) {
-                  handleSearchSelect(filteredItems[0].href);
-                }
-              }}
-              placeholder="Search pages..."
-              className="h-11 border-0 bg-transparent px-3 shadow-none focus-visible:ring-0"
-            />
-          </div>
-          <div className="max-h-72 overflow-y-auto p-1">
-            {filteredItems.length === 0 ? (
-              <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                No results for &ldquo;{searchQuery}&rdquo;
-              </div>
-            ) : (
-              filteredItems.map((item) => (
-                <button
-                  key={item.href}
-                  type="button"
-                  onClick={() => handleSearchSelect(item.href)}
-                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
-                >
-                  <span className="text-muted-foreground">{item.icon}</span>
-                  <span className="flex-1 truncate font-medium">{item.label}</span>
-                  <span className="truncate text-[10px] uppercase tracking-wide text-muted-foreground">
-                    {item.group}
-                  </span>
-                </button>
-              ))
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Global command palette (Cmd+K / Ctrl+K) */}
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        navGroups={navGroups}
+        currentRole={currentRole}
+      />
     </div>
   );
 }

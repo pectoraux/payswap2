@@ -37,6 +37,7 @@ import {
   BookOpen,
   Compass,
   FlaskConical,
+  Activity,
 } from 'lucide-react';
 
 /**
@@ -108,6 +109,7 @@ export const merchantNav: NavGroup[] = [
     label: 'Overview',
     items: [
       { label: 'Dashboard', href: '/dashboard', icon: <LayoutDashboard className="h-4 w-4" /> },
+      { label: 'Activity', href: '/dashboard/activity', icon: <Activity className="h-4 w-4" /> },
       { label: 'Analytics', href: '/dashboard/analytics', icon: <BarChart3 className="h-4 w-4" /> },
       { label: 'Reports', href: '/dashboard/reports', icon: <FileBarChart className="h-4 w-4" /> },
     ],
