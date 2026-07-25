@@ -54,6 +54,7 @@ export function UnifiedShell({
   basePath,
   currentRole,
   settingsHref,
+  organizations,
 }: UnifiedShellProps) {
   const pathname = usePathname();
   const { data: session } = useSession();
