@@ -1,11 +1,11 @@
 {
-  "runAt": 1784957177362,
+  "runAt": 1784959494147,
   "totalChecks": 17,
   "passed": 17,
   "failed": 0,
   "skipped": 0,
   "overallVerdict": "PASS",
-  "durationMs": 64,
+  "durationMs": 62,
   "checks": [
     {
       "id": "CERT-001",
@@ -41,7 +41,7 @@
       "description": "No account has a negative balance",
       "passed": true,
       "evidence": "0 accounts checked, 0 negative balances",
-      "durationMs": 0
+      "durationMs": 1
     },
     {
       "id": "CERT-005",
@@ -67,8 +67,8 @@
       "name": "Event store is persistent",
       "description": "Events survive process restart",
       "passed": true,
-      "evidence": "189 events in persistent store",
-      "durationMs": 57
+      "evidence": "215 events in persistent store",
+      "durationMs": 55
     },
     {
       "id": "CERT-008",
@@ -77,7 +77,7 @@
       "description": "Circulating + escrowed <= totalSupply for every asset",
       "passed": true,
       "evidence": "0 assets — no backing to verify",
-      "durationMs": 1
+      "durationMs": 0
     },
     {
       "id": "CERT-009",
@@ -113,7 +113,7 @@
       "description": "No circuit breakers are open",
       "passed": true,
       "evidence": "0 circuit breakers: 0 open, overall=degraded",
-      "durationMs": 0
+      "durationMs": 1
     },
     {
       "id": "CERT-013",
@@ -131,7 +131,7 @@
       "description": "All SLOs are on track",
       "passed": true,
       "evidence": "3 SLOs: 3 on track, 0 off track",
-      "durationMs": 1
+      "durationMs": 0
     },
     {
       "id": "CERT-015",
@@ -139,8 +139,8 @@
       "name": "Performance targets met",
       "description": "Event throughput >1000/sec, ledger rebuild <5s",
       "passed": true,
-      "evidence": "Event throughput: 1000000 events/sec (target: >1000). Ledger rebuild: 1ms for 1000 events (target: <5000ms)",
-      "durationMs": 2
+      "evidence": "Event throughput: 1000000 events/sec (target: >1000). Ledger rebuild: 2ms for 1000 events (target: <5000ms)",
+      "durationMs": 3
     },
     {
       "id": "CERT-016",

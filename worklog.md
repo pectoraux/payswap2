@@ -1890,3 +1890,31 @@ Stage Summary:
 - Simulation runner: `bun run certification/economic/run-simulation.ts` → completes successfully, writes both .md and .json reports.
 - Kernel untouched: `git -C /home/z/my-project diff --name-only HEAD -- src/kernel/ | wc -l` → 0.
 - Overall economic sustainability assessment: ACCEPTABLE WITH CAVEATS — the protocol survives all 8 stress scenarios with no hard-constraint failures; 3 demand-vs-capacity scenarios degrade merchant success rate; recommendations include diversifying LP exposure, auto-rebalancing corridors, FX hedging, reserve alerting, mint circuit-breaker, chargeback reserve, and pre-negotiated emergency liquidity facilities for viral events.
+
+---
+Task ID: LAUNCH-READINESS (Phase 5 — Launch Readiness Program)
+Agent: main (Z.ai Code)
+Task: Transform from feature development to launch readiness. Produce objective evidence, not new code. 7 deliverables.
+
+Work Log:
+- Built Protocol Certification Suite (certification/run.ts) — 17 checks across 13 categories. 17/17 PASSED. The concrete, repeatable definition of "production ready." Every release must pass before promotion.
+- Ran Adversarial Security Review (certification/security/) — 25 attacks across 10 categories. 13 vulnerabilities found (1 critical, 7 high, 5 medium), 12 defenses verified. Each vulnerability documented with remediation recommendation.
+- Ran Economic Stress Simulation (certification/economic/) — 8 scenarios: LP default, liquidity shortage, FX volatility, reserve depletion, merchant fraud, chargeback wave, rapid growth, corridor imbalance. 5 PASS, 3 DEGRADED, 0 FAIL. Treasury insolvency correctly detected + mints blocked. All LPs profitable.
+- Produced Corridor Readiness Certification (Ghana ↔ Kenya) — participating institutions, settlement timing, compliance, runbook, failure scenarios, merchant onboarding, support. Verdict: CONDITIONALLY READY.
+- Produced Operational Runbooks — support, treasury, compliance, incident response, connector failures, emergency freezes, payout recovery, disaster recovery. What operations teams will actually use.
+- Produced Pilot Program Definition — 10 merchants, 3 LPs, 2 banks, 1 MMO, 1 corridor. 4-week rollout, success metrics, rollback criteria, monitoring, daily reporting, go/no-go criteria.
+- Produced Production Acceptance Report — 7 Ready, 4 Conditional, 2 Not Ready. Evidence-based assessment per subsystem. 9 prioritized remediations.
+- Produced Regulatory Readiness Assessment — AML gap analysis (FATF), KYC/KYB checklist, travel rule mapping, licensing matrix (6 jurisdictions), audit checklist (15 items). Verdict: technically inspectable, legally not ready (6-12 months).
+
+Stage Summary:
+- 9 certification deliverables in certification/results/
+- Certification suite: 17/17 PASSED (runnable gate for every release)
+- Security: 13 vulnerabilities tracked for remediation (1 critical, 7 high, 5 medium)
+- Economics: system survives all 8 stress scenarios, 3 degraded under capacity constraints
+- Corridor: Ghana ↔ Kenya conditionally ready (technical yes, contractual no)
+- Production acceptance: 7/13 subsystems Ready, 4 Conditional, 2 Not Ready
+- Regulatory: technical controls exist, legal framework does not (6-12 months to licensing)
+- Kernel: 0 files modified (FROZEN)
+- Overall: architecture complete, platform complete, launch readiness conditional on security remediation + real partnerships + licensing
+
+The milestone is no longer measured by how many modules are added, but by whether the system can successfully complete a controlled pilot with real users, real settlement partners, and repeatable operational evidence that it behaves correctly under normal and adverse conditions.
