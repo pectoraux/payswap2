@@ -18,8 +18,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/status-badge';
-import { Button } from '@/components/ui/button';
-import { FileText, Plus } from 'lucide-react';
+import { FileText } from 'lucide-react';
+import { CreateInvoiceDialog } from '@/components/merchant/create-invoice-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,9 +58,7 @@ export default async function InvoicesPage() {
             Bill customers and track payment status.
           </p>
         </div>
-        <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-          <Plus className="mr-2 h-4 w-4" /> New invoice
-        </Button>
+        <CreateInvoiceDialog />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">

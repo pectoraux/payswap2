@@ -18,8 +18,8 @@ import {
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { RotateCcw, Plus } from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
+import { CreateRefundDialog } from '@/components/merchant/create-refund-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +33,14 @@ export default async function RefundsPage() {
     orderBy: { createdAt: 'desc' },
     take: 100,
     include: { payment: true },
+  });
+
+  // Recent payments the merchant can issue refunds against.
+  const recentPayments = await db.payment.findMany({
+    where: { merchantId, status: { in: ['SUCCESS', 'COMPLETED', 'SETTLED', 'SUCCEEDED'] } },
+    orderBy: { createdAt: 'desc' },
+    take: 25,
+    select: { id: true, reference: true, amount: true, currency: true },
   });
 
   const fmt = (n: number, c: string = merchant?.currency || 'GHS') =>
@@ -54,9 +62,7 @@ export default async function RefundsPage() {
             Track and manage refunds issued to your customers.
           </p>
         </div>
-        <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-          <Plus className="mr-2 h-4 w-4" /> New refund
-        </Button>
+        <CreateRefundDialog payments={recentPayments} />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">

@@ -18,6 +18,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Users } from 'lucide-react';
+import { CreateCustomerDialog } from '@/components/merchant/create-customer-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,6 +53,7 @@ export default async function CustomersPage() {
             People who have paid you through PaySwap.
           </p>
         </div>
+        <CreateCustomerDialog />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">

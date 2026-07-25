@@ -17,8 +17,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/status-badge';
-import { Button } from '@/components/ui/button';
-import { Link2, Plus, ExternalLink } from 'lucide-react';
+import { Link2, ExternalLink } from 'lucide-react';
+import { CreatePaymentLinkDialog } from '@/components/merchant/create-payment-link-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,9 +50,7 @@ export default async function PaymentLinksPage() {
             Reusable links your customers can pay through anytime.
           </p>
         </div>
-        <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-          <Plus className="mr-2 h-4 w-4" /> Create payment link
-        </Button>
+        <CreatePaymentLinkDialog />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">

@@ -10,8 +10,8 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { StatusBadge } from '@/components/status-badge';
-import { Button } from '@/components/ui/button';
-import { Package, Plus } from 'lucide-react';
+import { Package } from 'lucide-react';
+import { CreateProductDialog } from '@/components/merchant/create-product-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,9 +43,7 @@ export default async function ProductsPage() {
             Catalog items your customers can purchase.
           </p>
         </div>
-        <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-          <Plus className="mr-2 h-4 w-4" /> Add product
-        </Button>
+        <CreateProductDialog />
       </div>
 
       {products.length === 0 ? (
