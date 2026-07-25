@@ -1,0 +1,22 @@
+# =============================================================================
+# PaySwap — Kubernetes Pod Disruption Budget
+# =============================================================================
+# Ensures that voluntary disruptions (node drain, cluster autoscaler)
+# never take more than 1 replica offline at a time. Combined with the
+# anti-affinity rules in the Deployment, this guarantees zero-downtime
+# during node maintenance.
+# =============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payswap-api
+  namespace: payswap
+  labels:
+    app.kubernetes.io/name: payswap
+    app.kubernetes.io/component: api
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payswap
+      app.kubernetes.io/component: api

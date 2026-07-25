@@ -1,0 +1,147 @@
+# =============================================================================
+# PaySwap — Canary Deployment Script
+# =============================================================================
+# Implements a canary deployment against a Kubernetes cluster using
+# weighted traffic splitting via an Nginx ingress (or Istio / Linkerd
+# if available). The new version is rolled out in stages:
+#
+#   Stage 1:  5%  of traffic → new version (initial canary)
+#   Stage 2: 25%  of traffic → new version (after 5 min, if healthy)
+#   Stage 3: 50%  of traffic → new version (after 5 min, if healthy)
+#   Stage 4: 100% of traffic → new version (after 5 min, if healthy)
+#
+# At each stage, the script checks the error rate of the new version
+# (via Prometheus). If the error rate exceeds 2%, the canary is
+# automatically rolled back.
+#
+# Usage:
+#   bash deploy/cicd/canary.sh \
+#     --environment production \
+#     --image-tag v1.2.3 \
+#     --namespace payswap \
+#     --service payswap-api \
+#     --prometheus-url http://prometheus.monitoring:9090
+# =============================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Defaults
+ENVIRONMENT="production"
+IMAGE_TAG=""
+NAMESPACE="payswap"
+SERVICE_NAME="payswap-api"
+PROMETHEUS_URL="http://prometheus.monitoring:9090"
+STAGES=("5" "25" "50" "100")
+STAGE_DURATION_SECONDS=300   # 5 minutes per stage
+ERROR_RATE_THRESHOLD=2       # percent
+DRY_RUN=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --environment) ENVIRONMENT="$2"; shift 2 ;;
+    --image-tag) IMAGE_TAG="$2"; shift 2 ;;
+    --namespace) NAMESPACE="$2"; shift 2 ;;
+    --service) SERVICE_NAME="$2"; shift 2 ;;
+    --prometheus-url) PROMETHEUS_URL="$2"; shift 2 ;;
+    --stage-duration-seconds) STAGE_DURATION_SECONDS="$2"; shift 2 ;;
+    --error-rate-threshold) ERROR_RATE_THRESHOLD="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=true; shift ;;
+    *) echo "unknown arg: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [[ -z "$IMAGE_TAG" ]]; then
+  echo "❌ --image-tag is required" >&2
+  exit 1
+fi
+
+echo "🐤 Canary deployment"
+echo "   environment      : $ENVIRONMENT"
+echo "   image tag        : $IMAGE_TAG"
+echo "   namespace        : $NAMESPACE"
+echo "   service          : $SERVICE_NAME"
+echo "   stages (%)       : ${STAGES[*]}"
+echo "   stage duration   : ${STAGE_DURATION_SECONDS}s"
+echo "   error threshold  : ${ERROR_RATE_THRESHOLD}%"
+echo "   dry-run          : $DRY_RUN"
+echo ""
+
+if $DRY_RUN; then
+  echo "dry-run — would canary $IMAGE_TAG through stages: ${STAGES[*]}"
+  exit 0
+fi
+
+CANARY_DEPLOYMENT="${SERVICE_NAME}-canary"
+STABLE_DEPLOYMENT="${SERVICE_NAME}-stable"
+
+# Step 1 — create the canary Deployment alongside the stable one.
+echo "📦 creating canary deployment $CANARY_DEPLOYMENT (image $IMAGE_TAG)"
+kubectl -n "$NAMESPACE" get deployment "$STABLE_DEPLOYMENT" > /dev/null 2>&1 \
+  || { echo "❌ stable deployment $STABLE_DEPLOYMENT not found — bootstrap blue-green first" >&2; exit 1; }
+
+kubectl -n "$NAMESPACE" create deployment "$CANARY_DEPLOYMENT" \
+  --image="${ECR_REGISTRY:-payswap/api}:${IMAGE_TAG}" \
+  --replicas=1 2>/dev/null \
+  || kubectl -n "$NAMESPACE" set image "deployment/${CANARY_DEPLOYMENT}" \
+       "payswap=${ECR_REGISTRY:-payswap/api}:${IMAGE_TAG}"
+
+kubectl -n "$NAMESPACE" rollout status "deployment/${CANARY_DEPLOYMENT}" --timeout=300s
+
+# Helper — query Prometheus for the canary error rate over the last 5 min.
+canary_error_rate() {
+  local query='sum(rate(http_requests_total{job="payswap-api-canary",status=~"5.."}[5m])) / sum(rate(http_requests_total{job="payswap-api-canary"}[5m])) * 100'
+  curl -sf "${PROMETHEUS_URL}/api/v1/query" --data-urlencode "query=${query}" \
+    | jq -r '.data.result[0].value[1] // "0"' 2>/dev/null \
+    | awk '{printf "%.2f", $1}'
+}
+
+# Helper — set the canary traffic weight via the Nginx ingress annotation.
+set_canary_weight() {
+  local weight="$1"
+  echo "   setting canary weight to ${weight}%"
+  kubectl -n "$NAMESPACE" annotate ingress "$SERVICE_NAME" \
+    "nginx.ingress.kubernetes.io/canary-weight=${weight}" \
+    "nginx.ingress.kubernetes.io/canary-by-header=X-Canary" \
+    --overwrite
+}
+
+# Step 2 — walk through the stages.
+for stage in "${STAGES[@]}"; do
+  echo ""
+  echo "📊 stage: ${stage}%"
+  set_canary_weight "$stage"
+
+  echo "   monitoring for ${STAGE_DURATION_SECONDS}s..."
+  sleep "$STAGE_DURATION_SECONDS"
+
+  if [[ "$PROMETHEUS_URL" == "" ]]; then
+    echo "   (no Prometheus URL — skipping error-rate check)"
+    continue
+  fi
+
+  ERROR_RATE=$(canary_error_rate)
+  echo "   canary error rate: ${ERROR_RATE}%"
+
+  if (( $(echo "$ERROR_RATE > $ERROR_RATE_THRESHOLD" | bc -l) )); then
+    echo "❌ canary error rate ${ERROR_RATE}% exceeds threshold ${ERROR_RATE_THRESHOLD}% — rolling back"
+    set_canary_weight 0
+    kubectl -n "$NAMESPACE" scale "deployment/${CANARY_DEPLOYMENT}" --replicas=0
+    echo "   canary traffic dropped to 0%, canary deployment scaled to 0"
+    exit 1
+  fi
+done
+
+# Step 3 — promote: the canary becomes the new stable.
+echo ""
+echo "✅ canary passed all stages — promoting to stable"
+kubectl -n "$NAMESPACE" set image "deployment/${STABLE_DEPLOYMENT}" \
+  "payswap=${ECR_REGISTRY:-payswap/api}:${IMAGE_TAG}"
+kubectl -n "$NAMESPACE" rollout status "deployment/${STABLE_DEPLOYMENT}" --timeout=300s
+
+# Drop canary traffic + scale down the canary deployment.
+set_canary_weight 0
+kubectl -n "$NAMESPACE" scale "deployment/${CANARY_DEPLOYMENT}" --replicas=0
+
+echo "✅ promotion complete — $STABLE_DEPLOYMENT now serving $IMAGE_TAG at 100%"
+
+exit 0

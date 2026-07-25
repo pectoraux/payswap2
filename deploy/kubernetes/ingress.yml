@@ -1,0 +1,64 @@
+# =============================================================================
+# PaySwap — Kubernetes Ingress (TLS)
+# =============================================================================
+# Routes external HTTPS traffic to the payswap-api service. TLS is
+# terminated by the ingress controller (nginx-ingress or ALB); the cert
+# is provisioned by cert-manager (Let's Encrypt) or referenced from a
+# pre-existing Kubernetes TLS secret.
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: payswap-api
+  namespace: payswap
+  labels:
+    app.kubernetes.io/name: payswap
+    app.kubernetes.io/component: api
+  annotations:
+    # nginx-ingress annotations — tune for production traffic.
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    # Rate-limit per client IP.
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-burst: "100"
+    # CORS — allow the merchant dashboard origin.
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://dashboard.payswap.io"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    # cert-manager — request a Let's Encrypt cert automatically.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # HSTS — enforce HTTPS for 1 year.
+    nginx.ingress.kubernetes.io/server-snippet: |
+      add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.payswap.io
+        - dashboard.payswap.io
+      secretName: payswap-tls
+  rules:
+    - host: api.payswap.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: payswap-api
+                port:
+                  name: http
+    - host: dashboard.payswap.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: payswap-api
+                port:
+                  name: http
