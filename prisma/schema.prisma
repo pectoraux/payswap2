@@ -1,5 +1,4 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// PaySwap — Production Prisma Schema
 
 generator client {
   provider = "prisma-client-js"
@@ -10,17 +9,576 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ---------------------------------------------------------------------------
-// PaySwap Kernel — Global Liquidity OS persistence
-// ---------------------------------------------------------------------------
+// ═══════ AUTH & USERS ═══════
+
+model User {
+  id              String      @id @default(cuid())
+  email           String      @unique
+  passwordHash    String?
+  name            String?
+  phone           String?
+  avatarUrl       String?
+  status          String      @default("PENDING")
+  emailVerified   DateTime?
+  lastLoginAt     DateTime?
+  lastLoginIp     String?
+  mfaEnabled      Boolean     @default(false)
+  mfaSecret       String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  deletedAt       DateTime?
+
+  roles           UserRole[]
+  accounts        Account[]
+  sessions        Session[]
+  auditLogs       AuditLog[]
+  teamMemberships TeamMember[]
+
+  @@index([status])
+}
+
+model UserRole {
+  id          String   @id @default(cuid())
+  userId      String
+  role        String
+  merchantId  String?
+  permissions String?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role, merchantId])
+  @@index([merchantId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  token        String   @unique
+  expiresAt    DateTime
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model WaitlistEntry {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  company      String?
+  phone        String?
+  country      String
+  businessType String?
+  status       String   @default("PENDING")
+  notes        String?
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  createdAt    DateTime @default(now())
+
+  @@index([status])
+  @@index([country])
+}
+
+// ═══════ ACCOUNTS & MERCHANTS ═══════
+
+model Account {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  status    String   @default("PENDING")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  user      User       @relation(fields: [userId], references: [id])
+  merchant  Merchant?
+  customer  Customer?
+  lpProfile LPProfile?
+  wallets   Wallet[]
+
+  @@index([userId])
+  @@index([type, status])
+}
+
+model Merchant {
+  id                  String   @id @default(cuid())
+  accountId           String   @unique
+  name                String
+  legalName           String?
+  email               String   @unique
+  phone               String?
+  country             String
+  currency            String   @default("GHS")
+  website             String?
+  logoUrl             String?
+  description         String?
+  businessType        String?
+  registrationNumber  String?
+  taxId               String?
+  address             String?
+  tier                String   @default("UNVERIFIED")
+  bond                Float    @default(0)
+  status              String   @default("PENDING")
+  kycLevel            Int      @default(0)
+  settings            String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  deletedAt           DateTime?
+
+  account            Account           @relation(fields: [accountId], references: [id])
+  products           Product[]
+  customers          CustomerRecord[]
+  invoices           Invoice[]
+  payouts            Payout[]
+  refunds            Refund[]
+  subscriptions      Subscription[]
+  paymentLinks       PaymentLink[]
+  apiKeys            ApiKey[]
+  webhookEndpoints   WebhookEndpoint[]
+  teamMembers        TeamMember[]
+  payments           Payment[]
+
+  @@index([status])
+  @@index([tier])
+  @@index([country])
+}
+
+model Customer {
+  id              String   @id @default(cuid())
+  accountId       String?  @unique
+  name            String
+  email           String
+  phone           String?
+  country         String?
+  metadata        String?
+  totalSpent      Float    @default(0)
+  transactionCount Int     @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  account    Account?         @relation(fields: [accountId], references: [id])
+  payments   Payment[]
+  invoices   Invoice[]
+  records    CustomerRecord[]
+
+  @@index([email])
+}
+
+model CustomerRecord {
+  id              String   @id @default(cuid())
+  merchantId      String
+  customerId      String?
+  name            String
+  email           String
+  phone           String?
+  country         String?
+  metadata        String?
+  totalSpent      Float    @default(0)
+  transactionCount Int     @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  merchant  Merchant @relation(fields: [merchantId], references: [id])
+  customer  Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([merchantId])
+  @@index([email])
+}
+
+model LPProfile {
+  id          String   @id @default(cuid())
+  accountId   String   @unique
+  name        String
+  country     String
+  currencies  String
+  tier        String   @default("verified")
+  stake       Float    @default(0)
+  collateral  Float    @default(0)
+  capacity    String?
+  reputation  Float    @default(0.5)
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  account Account @relation(fields: [accountId], references: [id])
+
+  @@index([status])
+}
+
+// ═══════ WALLETS ═══════
+
+model Wallet {
+  id              String   @id @default(cuid())
+  accountId       String
+  name            String
+  currency        String
+  balance         Float    @default(0)
+  pendingBalance  Float    @default(0)
+  lockedBalance   Float    @default(0)
+  isDefault       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  account     Account           @relation(fields: [accountId], references: [id])
+  transactions WalletTransaction[]
+
+  @@index([accountId])
+  @@unique([accountId, currency])
+}
+
+model WalletTransaction {
+  id           String   @id @default(cuid())
+  walletId     String
+  type         String
+  amount       Float
+  currency     String
+  counterparty String?
+  reference    String?
+  txHash       String?
+  createdAt    DateTime @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId])
+  @@index([createdAt])
+}
+
+// ═══════ PAYMENTS & PAYOUTS ═══════
+
+model Payment {
+  id                  String   @id @default(cuid())
+  merchantId          String
+  customerId          String?
+  amount              Float
+  currency            String
+  sourceCurrency      String?
+  destinationCurrency String?
+  status              String   @default("PENDING")
+  method              String?
+  corridor            String?
+  lpId                String?
+  fee                 Float    @default(0)
+  netAmount           Float    @default(0)
+  fxRate              Float    @default(1)
+  txHash              String?
+  evidence            String?
+  reference           String?
+  description         String?
+  metadata            String?
+  failureReason       String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  settledAt           DateTime?
+
+  merchant  Merchant @relation(fields: [merchantId], references: [id])
+  customer  Customer? @relation(fields: [customerId], references: [id])
+  refunds   Refund[]
+
+  @@index([merchantId, status])
+  @@index([customerId])
+  @@index([createdAt])
+  @@index([corridor])
+}
+
+model Payout {
+  id                  String   @id @default(cuid())
+  merchantId          String
+  method              String
+  sourceAmount        Float
+  sourceAsset         String
+  sourceCurrency      String
+  destinationCurrency String
+  destination         String?
+  fxRate              Float    @default(1)
+  feeBps              Int      @default(50)
+  fee                 Float    @default(0)
+  netAmount           Float    @default(0)
+  status              String   @default("REQUESTED")
+  txHash              String?
+  evidence            String?
+  reason              String?
+  failureReason       String?
+  approvedBy          String?
+  approvedAt          DateTime?
+  createdAt           DateTime @default(now())
+  processedAt         DateTime?
+  completedAt         DateTime?
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@index([merchantId, status])
+  @@index([createdAt])
+}
+
+model Refund {
+  id          String   @id @default(cuid())
+  merchantId  String
+  paymentId   String
+  amount      Float
+  type        String
+  reason      String?
+  status      String   @default("PENDING")
+  requestedBy String
+  approvedBy  String?
+  processedAt DateTime?
+  createdAt   DateTime @default(now())
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+  payment  Payment  @relation(fields: [paymentId], references: [id])
+
+  @@index([merchantId])
+  @@index([paymentId])
+}
+
+// ═══════ PRODUCTS, INVOICES, SUBSCRIPTIONS ═══════
+
+model Product {
+  id          String   @id @default(cuid())
+  merchantId  String
+  name        String
+  description String?
+  price       Float
+  currency    String
+  type        String   @default("PHYSICAL")
+  imageUrl    String?
+  metadata    String?
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@index([merchantId, status])
+}
+
+model Invoice {
+  id          String   @id @default(cuid())
+  merchantId  String
+  customerId  String?
+  number      String
+  items       String
+  subtotal    Float
+  tax         Float    @default(0)
+  total       Float
+  currency    String
+  status      String   @default("DRAFT")
+  dueDate     DateTime?
+  sentAt      DateTime?
+  paidAt      DateTime?
+  paymentId   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+  customer  Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([merchantId, status])
+  @@index([customerId])
+}
+
+model Subscription {
+  id                  String   @id @default(cuid())
+  merchantId          String
+  customerId          String?
+  planName            String
+  amount              Float
+  currency            String
+  interval            String
+  status              String   @default("ACTIVE")
+  currentPeriodStart  DateTime?
+  currentPeriodEnd    DateTime?
+  trialEnd            DateTime?
+  canceledAt          DateTime?
+  lastPaymentAt       DateTime?
+  failedAttempts      Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@index([merchantId, status])
+}
+
+model PaymentLink {
+  id              String   @id @default(cuid())
+  merchantId      String
+  amount          Float
+  currency        String
+  description     String?
+  reference       String?
+  status          String   @default("ACTIVE")
+  url             String   @unique
+  expiresAt       DateTime?
+  paymentCount    Int      @default(0)
+  totalCollected  Float    @default(0)
+  createdAt       DateTime @default(now())
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@index([merchantId])
+}
+
+// ═══════ API KEYS & WEBHOOKS & TEAM ═══════
+
+model ApiKey {
+  id          String   @id @default(cuid())
+  merchantId  String
+  label       String
+  keyPrefix   String
+  keyHash     String   @unique
+  scopes      String
+  lastUsedAt  DateTime?
+  lastUsedIp  String?
+  status      String   @default("ACTIVE")
+  expiresAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@index([merchantId])
+}
+
+model WebhookEndpoint {
+  id          String   @id @default(cuid())
+  merchantId  String
+  url         String
+  secretHash  String
+  events      String
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now())
+
+  merchant    Merchant           @relation(fields: [merchantId], references: [id])
+  deliveries  WebhookDelivery[]
+
+  @@index([merchantId])
+}
+
+model WebhookDelivery {
+  id            String   @id @default(cuid())
+  endpointId    String
+  eventType     String
+  payload       String
+  signature     String
+  status        String   @default("PENDING")
+  attempts      Int      @default(0)
+  responseStatus Int?
+  responseBody  String?
+  nextRetryAt   DateTime?
+  deliveredAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@index([endpointId])
+  @@index([status])
+}
+
+model TeamMember {
+  id         String   @id @default(cuid())
+  merchantId String
+  email      String
+  role       String
+  status     String   @default("PENDING")
+  invitedAt  DateTime @default(now())
+  joinedAt   DateTime?
+  userId     String?
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+  user     User?     @relation(fields: [userId], references: [id])
+
+  @@index([merchantId])
+  @@unique([merchantId, email])
+}
+
+// ═══════ COMPLIANCE ═══════
+
+model ComplianceReview {
+  id          String   @id @default(cuid())
+  entityType  String
+  entityId    String
+  type        String
+  status      String   @default("PENDING")
+  data        String?
+  reviewerId  String?
+  reviewedAt  DateTime?
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([status])
+}
+
+model AMLAlert {
+  id          String   @id @default(cuid())
+  entityType  String
+  entityId    String
+  alertType   String
+  severity    String
+  score       Float
+  details     String?
+  status      String   @default("OPEN")
+  assignedTo  String?
+  createdAt   DateTime @default(now())
+  closedAt    DateTime?
+
+  @@index([status])
+  @@index([entityId])
+}
+
+model SAR {
+  id            String   @id @default(cuid())
+  caseId        String?
+  filedBy       String
+  narrative     String
+  amount        Float
+  entities      String
+  regulatoryRef String?
+  status        String   @default("DRAFT")
+  filedAt       DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([status])
+}
+
+// ═══════ AUDIT LOG ═══════
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  action       String
+  resourceType String
+  resourceId   String?
+  result       String
+  ip           String?
+  userAgent    String?
+  details      String?
+  createdAt    DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+}
+
+// ═══════ LEGACY ═══════
 
 model SimulationRun {
   id              String   @id @default(cuid())
   runId           String   @unique
   kernelVersion   String
   scenarioName    String
-  scenario        String   // JSON-encoded SimulationScenario
-  result          String   // JSON-encoded SimulationResult
+  scenario        String
+  result          String
   resultHash      String
   amount          Float
   currency        String
@@ -37,97 +595,19 @@ model SimulationRun {
   createdAt       DateTime @default(now())
 
   @@index([createdAt])
-  @@index([buyerCountry, merchantCountry])
   @@index([resultHash])
 }
 
-model LedgerEntryRecord {
-  id            String   @id @default(cuid())
-  runId         String
-  txId          String
-  accountId     String
-  accountLabel  String
-  accountType   String
-  currency      String
-  debit         Float    @default(0)
-  credit        Float    @default(0)
-  balanceAfter  Float
-  memo          String
-  frame         Int
-  ts            DateTime @default(now())
-
-  @@index([runId])
-  @@index([accountId])
-}
-
-model TwinTokenRecord {
-  id            String   @id @default(cuid())
-  runId         String
-  symbol        String
-  amount        Float
-  currency      String
-  fromCountry   String
-  toCountry     String
-  status        String
-  mintedAtFrame Int
-  burnedAtFrame Int?
-  memo          String
-  createdAt     DateTime @default(now())
-
-  @@index([runId])
-  @@index([symbol])
-}
-
-model PlanAmendmentRecord {
-  id              String   @id @default(cuid())
-  runId           String
-  failureType     String
-  failureLabel    String
-  reason          String
-  recoveryStrategy String
-  insertedAtFrame Int
-  stepCount       Int
-  createdAt       DateTime @default(now())
-
-  @@index([runId])
-}
-
-model AuditLog {
+model EventRecord {
   id        String   @id @default(cuid())
-  runId     String
-  actor     String
-  action    String
-  detail    String
-  ts        DateTime @default(now())
-
-  @@index([runId])
-  @@index([action])
-}
-
-model SavedScenarioRecord {
-  id              String   @id @default(cuid())
-  scenarioId      String   @unique
-  name            String
-  description     String
-  category        String
-  scenario        String   // JSON-encoded SimulationScenario
-  baselineHash    String
-  baselineCost    Float
-  baselineTime    Int
-  baselineRisk    Float
-  baselineConf    Float
-  lastRunAt       DateTime?
-  lastRunPassed   Boolean?
-  createdAt       DateTime @default(now())
-
-  @@index([category])
-  @@index([name])
-}
-
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
+  eventId   String   @unique
+  type      String
+  payload   String
+  ts        BigInt
+  frame     Int      @default(0)
+  seq       Int      @default(0)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+
+  @@index([type])
+  @@index([seq])
 }
