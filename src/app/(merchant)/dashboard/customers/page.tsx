@@ -90,13 +90,12 @@ export default async function CustomersPage() {
         </CardHeader>
         <CardContent>
           {customers.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10">
-                <Users className="h-6 w-6 text-emerald-500" />
-              </div>
-              <h3 className="mt-4 text-sm font-semibold">No customers yet</h3>
-              <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-                Customer records are created automatically when someone pays you.
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Users className="h-10 w-10 text-muted-foreground/50 mb-3" />
+              <p className="text-sm font-medium">No customers yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Click <span className="font-medium text-foreground">Add Customer</span> above, or
+                accept your first payment — customer records are created automatically.
               </p>
             </div>
           ) : (

@@ -26,28 +26,76 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-const curlExample = `curl https://api.payswap.io/v1/payments \\
+// Examples below target the real, same-origin PaySwap API paths the explorer
+// hits — they double as the canonical "how do I call this?" snippet.
+const curlExample = `# Create a 1,000 GHS mobile-money payment
+curl -X POST https://api.payswap.io/api/payments/create \\
   -H "Authorization: Bearer psk_live_xxx" \\
   -H "Content-Type: application/json" \\
   -d '{
     "amount": 1000,
     "currency": "GHS",
-    "reference": "order_1234",
-    "description": "Premium cocoa bag"
-  }'`;
+    "method": "mobile_money",
+    "description": "Premium cocoa bag",
+    "customerEmail": "kofi@example.com",
+    "customerName": "Kofi Mensah"
+  }'
+
+# → 201 Created
+# {
+#   "payment": {
+#     "id": "pay_2c8f1a9e4b7d6038",
+#     "reference": "PAY-2C8F1A9E",
+#     "amount": 1000,
+#     "currency": "GHS",
+#     "method": "mobile_money",
+#     "status": "PENDING",
+#     "netAmount": 1000,
+#     "createdAt": "2025-07-25T09:42:18.000Z"
+#   }
+# }`;
 
 const tsExample = `import { PaySwap } from '@payswap/sdk';
 
-const payswap = new PaySwap(process.env.PAYSWAP_SECRET_KEY);
-
-const payment = await payswap.payments.create({
-  amount: 1000,
-  currency: 'GHS',
-  reference: 'order_1234',
-  description: 'Premium cocoa bag',
+const payswap = new PaySwap({
+  apiKey: process.env.PAYSWAP_SECRET_KEY!, // psk_live_…
+  // Use https://api.payswap.io in production
+  baseUrl: process.env.PAYSWAP_BASE_URL!,
 });
 
-console.log(payment.reference, payment.status);`;
+// Create a 1,000 GHS mobile-money payment
+const { payment } = await payswap.payments.create({
+  amount: 1000,
+  currency: 'GHS',
+  method: 'mobile_money',
+  description: 'Premium cocoa bag',
+  customerEmail: 'kofi@example.com',
+  customerName: 'Kofi Mensah',
+});
+
+console.log(payment.reference, payment.status); // PAY-2C8F1A9E PENDING
+
+// Fetch a unified activity feed (payments, payouts, refunds, webhooks)
+const { items } = await payswap.activity.list({ limit: 10 });`;
+
+const webhookExample = `// Verify an incoming webhook (Node / Express)
+import { createHmac } from 'crypto';
+
+app.post('/webhooks/payswap', express.raw({ type: 'application/json' }), (req, res) => {
+  const signature = req.headers['x-payswap-signature'] as string;
+  const expected = createHmac('sha256', process.env.PAYSWAP_WEBHOOK_SECRET!)
+    .update(req.body)
+    .digest('hex');
+
+  if (signature !== expected) {
+    return res.status(401).send('invalid signature');
+  }
+
+  const event = JSON.parse(req.body.toString());
+  // event.type === 'payment.completed' | 'payment.failed' | 'payout.completed' | …
+  console.log(event.type, event.data);
+  res.json({ received: true });
+});`;
 
 export default async function DeveloperOverviewPage() {
   const session = await getServerSession(authOptions);
@@ -67,6 +115,8 @@ export default async function DeveloperOverviewPage() {
       })
     : [];
 
+  const baseUrl = 'https://api.payswap.io';
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -74,7 +124,7 @@ export default async function DeveloperOverviewPage() {
         description="Everything you need to integrate with the PaySwap API."
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="group relative overflow-hidden">
           <CardContent className="p-5">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
@@ -112,6 +162,23 @@ export default async function DeveloperOverviewPage() {
         <Card>
           <CardContent className="p-5">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-600 dark:text-cyan-400">
+              <Webhook className="h-5 w-5" />
+            </div>
+            <h3 className="mt-3 text-base font-semibold">Webhook Tester</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Send test events to your endpoints and debug delivery results.
+            </p>
+            <Button asChild variant="ghost" size="sm" className="mt-3 -ml-2 text-emerald-600 dark:text-emerald-400">
+              <Link href="/developers/webhooks">
+                Test webhooks <ArrowRight className="ml-1 h-3.5 w-3.5" />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-400">
               <FlaskConical className="h-5 w-5" />
             </div>
             <h3 className="mt-3 text-base font-semibold">Sandbox</h3>
@@ -131,7 +198,10 @@ export default async function DeveloperOverviewPage() {
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="text-base">Quick start</CardTitle>
-            <CardDescription>Make your first payment request in under a minute</CardDescription>
+            <CardDescription>
+              Make your first payment request in under a minute — base URL:{' '}
+              <code className="font-mono text-xs">{baseUrl}</code>
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -150,19 +220,40 @@ export default async function DeveloperOverviewPage() {
                 <code className="font-mono text-foreground">{tsExample}</code>
               </pre>
             </div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <Webhook className="h-3.5 w-3.5" /> Webhook verification
+              </div>
+              <pre className="overflow-x-auto rounded-lg border bg-card/50 p-4 text-[11px] leading-relaxed">
+                <code className="font-mono text-foreground">{webhookExample}</code>
+              </pre>
+            </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">API keys</CardTitle>
-            <CardDescription>Manage your credentials</CardDescription>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">API keys</CardTitle>
+              <Button asChild variant="ghost" size="sm" className="-mr-2 text-emerald-600 dark:text-emerald-400">
+                <Link href="/dashboard/settings/api-keys">
+                  Manage <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                </Link>
+              </Button>
+            </div>
+            <CardDescription>Authenticate every API request</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {apiKeys.length === 0 ? (
               <div className="rounded-lg border border-dashed p-4 text-xs text-muted-foreground">
                 <KeyRound className="mb-2 h-5 w-5 text-amber-500" />
-                No active API keys found. Generate one from your merchant settings.
+                No active API keys found. Generate one from your merchant API
+                key settings to start integrating.
+                <Button asChild variant="outline" size="sm" className="mt-3 w-full">
+                  <Link href="/dashboard/settings/api-keys">
+                    Generate API key <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+                  </Link>
+                </Button>
               </div>
             ) : (
               apiKeys.map((k) => (
@@ -186,9 +277,15 @@ export default async function DeveloperOverviewPage() {
                 <span className="font-medium">Webhooks</span>
               </div>
               <p className="mt-1 text-muted-foreground">
-                Subscribe to events like <code className="font-mono">payment.completed</code> and{' '}
+                Subscribe to events like{' '}
+                <code className="font-mono">payment.completed</code> and{' '}
                 <code className="font-mono">payout.completed</code>.
               </p>
+              <Button asChild variant="outline" size="sm" className="mt-3 w-full">
+                <Link href="/dashboard/settings/webhooks">
+                  Configure endpoints <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+                </Link>
+              </Button>
             </div>
           </CardContent>
         </Card>

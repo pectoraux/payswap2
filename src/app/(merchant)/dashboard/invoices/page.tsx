@@ -95,13 +95,12 @@ export default async function InvoicesPage() {
         </CardHeader>
         <CardContent>
           {invoices.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10">
-                <FileText className="h-6 w-6 text-emerald-500" />
-              </div>
-              <h3 className="mt-4 text-sm font-semibold">No invoices yet</h3>
-              <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-                Create an invoice to bill a customer for goods or services.
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <FileText className="h-10 w-10 text-muted-foreground/50 mb-3" />
+              <p className="text-sm font-medium">No invoices yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Click <span className="font-medium text-foreground">New Invoice</span> above to bill
+                a customer for goods or services.
               </p>
             </div>
           ) : (

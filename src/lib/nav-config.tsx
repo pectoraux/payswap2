@@ -296,6 +296,7 @@ export const developerNav: NavGroup[] = [
     items: [
       { label: 'API Docs', href: '/developers/docs', icon: <BookOpen className="h-4 w-4" /> },
       { label: 'API Explorer', href: '/developers/explorer', icon: <Compass className="h-4 w-4" /> },
+      { label: 'Webhook Tester', href: '/developers/webhooks', icon: <Webhook className="h-4 w-4" /> },
       { label: 'Sandbox', href: '/developers/sandbox', icon: <FlaskConical className="h-4 w-4" /> },
     ],
   },

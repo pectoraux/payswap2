@@ -51,13 +51,12 @@ export default async function ProductsPage() {
       {products.length === 0 ? (
         <Card>
           <CardContent className="p-0">
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10">
-                <Package className="h-6 w-6 text-emerald-500" />
-              </div>
-              <h3 className="mt-4 text-sm font-semibold">No products yet</h3>
-              <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-                Add products to start selling through PaySwap checkout.
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Package className="h-10 w-10 text-muted-foreground/50 mb-3" />
+              <p className="text-sm font-medium">No products yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Click <span className="font-medium text-foreground">New Product</span> above to add
+                your first catalog item.
               </p>
             </div>
           </CardContent>

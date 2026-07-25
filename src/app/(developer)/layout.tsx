@@ -10,7 +10,12 @@ export default async function DeveloperLayout({ children }: { children: React.Re
   const session = await getServerSession(authOptions);
   if (!session) redirect('/login');
   const roles = (session.user as any)?.roles as string[] | undefined;
-  if (!roles || !roles.some((r) => ['DEVELOPER', 'ADMIN', 'SUPER_ADMIN'].includes(r))) {
+  if (
+    !roles ||
+    !roles.some((r) =>
+      ['DEVELOPER', 'ADMIN', 'SUPER_ADMIN', 'MERCHANT', 'MERCHANT_STAFF'].includes(r),
+    )
+  ) {
     redirect('/unauthorized');
   }
   return (

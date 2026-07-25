@@ -112,13 +112,12 @@ export default async function RefundsPage() {
         </CardHeader>
         <CardContent>
           {refunds.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10">
-                <RotateCcw className="h-6 w-6 text-emerald-500" />
-              </div>
-              <h3 className="mt-4 text-sm font-semibold">No refunds yet</h3>
-              <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-                When you issue a refund to a customer, it will appear here.
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <RotateCcw className="h-10 w-10 text-muted-foreground/50 mb-3" />
+              <p className="text-sm font-medium">No refunds yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Click <span className="font-medium text-foreground">New Refund</span> above to issue
+                a refund against a completed payment.
               </p>
             </div>
           ) : (
