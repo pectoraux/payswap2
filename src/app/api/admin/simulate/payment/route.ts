@@ -1,20 +1,21 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
+import {
+  requireAdminSession,
+  forbidden,
+} from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * POST /api/admin/simulate/payment — generate a synthetic test payment.
+ *
+ * Requires ADMIN or SUPER_ADMIN role.
+ */
 export async function POST() {
-  const session = await getServerSession(authOptions);
-  if (!session) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  const roles = (session.user as any)?.roles as string[] | undefined;
-  if (!roles || !roles.some((r) => ['ADMIN', 'SUPER_ADMIN'].includes(r))) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
+  const adminSession = await requireAdminSession();
+  if (!adminSession) return forbidden();
 
   // Pick the first active merchant so the test payment has a valid FK.
   const merchant = await db.merchant.findFirst({
@@ -51,7 +52,7 @@ export async function POST() {
 
   await db.auditLog.create({
     data: {
-      userId: (session.user as any).id,
+      userId: (adminSession.user as any).id,
       action: 'SIMULATE.PAYMENT',
       resourceType: 'Payment',
       resourceId: payment.id,

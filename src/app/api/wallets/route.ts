@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { walletService } from '@/protocol/wallets/wallet-service';
 import { stellarAdapter } from '@/protocol/blockchains/stellar/adapter';
 import { blockchainRegistry } from '@/protocol/blockchains/adapter';
+import { requireSession, unauthorized } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,6 +17,9 @@ function initStellar() {
 
 /** POST /api/wallets — create account + wallet */
 export async function POST(req: NextRequest) {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
   initStellar();
   const body = await req.json();
   const { action } = body;
@@ -65,6 +69,8 @@ export async function POST(req: NextRequest) {
 
 /** GET /api/wallets — list accounts */
 export async function GET() {
+  const session = await requireSession();
+  if (!session) return unauthorized();
   initStellar();
   return NextResponse.json({ accounts: [] });
 }

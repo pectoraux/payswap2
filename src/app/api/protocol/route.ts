@@ -3,6 +3,7 @@ import { simulationEngine, type SimulationScenario } from '@/kernel';
 import { protocolScenarios, CONSTITUTIONAL_TESTS, type ProtocolScenario } from '@/protocol/scenarios';
 import { runProtocolScenario, runAllProtocolScenarios, verifyConstitutional } from '@/protocol/runner';
 import { createFiatProof, computeConfidence } from '@/protocol/economics/fiat-proof';
+import { requireSession, unauthorized } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,6 +26,9 @@ export async function GET() {
 
 /** POST /api/protocol — run a specific protocol scenario by ID, or run all. */
 export async function POST(req: NextRequest) {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
   const body = await req.json();
   const scenarioId = body?.scenarioId as string;
   const runAll = body?.runAll === true;

@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
+import {
+  requireAdminSession,
+  forbidden,
+} from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,15 +17,14 @@ const ALERT_TYPES = [
 ];
 const SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
+/**
+ * POST /api/admin/simulate/aml — generate a synthetic AML alert.
+ *
+ * Requires ADMIN or SUPER_ADMIN role.
+ */
 export async function POST() {
-  const session = await getServerSession(authOptions);
-  if (!session) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  const roles = (session.user as any)?.roles as string[] | undefined;
-  if (!roles || !roles.some((r) => ['ADMIN', 'SUPER_ADMIN'].includes(r))) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
+  const adminSession = await requireAdminSession();
+  if (!adminSession) return forbidden();
 
   const merchant = await db.merchant.findFirst({
     where: { deletedAt: null },
@@ -55,7 +56,7 @@ export async function POST() {
 
   await db.auditLog.create({
     data: {
-      userId: (session.user as any).id,
+      userId: (adminSession.user as any).id,
       action: 'SIMULATE.AML_ALERT',
       resourceType: 'AMLAlert',
       resourceId: alert.id,

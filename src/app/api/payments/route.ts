@@ -6,6 +6,7 @@ import { merchantRegistry } from '@/protocol/merchant-registry';
 import { OpenBankingConnector, MpesaConnector, EthereumConnector, ExchangeRateConnector, connectorRegistry } from '@/protocol/connectors/adapters';
 import { createEntity } from '@/kernel/entity';
 import type { Entity, Evidence } from '@/kernel';
+import { requireSession, unauthorized } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,6 +24,9 @@ function initConnectors() {
 
 /** POST /api/payments — create and execute a payment end-to-end */
 export async function POST(req: NextRequest) {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
   initConnectors();
 
   const body = await req.json();
@@ -134,5 +138,7 @@ export async function POST(req: NextRequest) {
 
 /** GET /api/payments — list all payments */
 export async function GET() {
+  const session = await requireSession();
+  if (!session) return unauthorized();
   return NextResponse.json({ payments: transactionEngine.listPayments() });
 }

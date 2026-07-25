@@ -1,16 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { qrService } from '@/protocol/qr/qr-service';
+import {
+  requireSession,
+  requireMerchantId,
+  unauthorized,
+  forbidden,
+  isAdmin,
+} from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** POST /api/merchant/qr — generate a QR code for payment */
+/**
+ * POST /api/merchant/qr — generate a QR code for payment.
+ *
+ * The `merchant` field in the body must match the caller's merchantId (admins
+ * may generate QR codes for any merchant).
+ */
 export async function POST(req: NextRequest) {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
   const body = await req.json();
   const { type, merchant, wallet, currency, amount, reference, expiresMs, interval } = body;
 
   if (!merchant || !currency) {
     return NextResponse.json({ error: 'merchant and currency required' }, { status: 400 });
+  }
+
+  // Ownership check: the caller must own `merchant` (or be an admin).
+  const callerMerchantId = await requireMerchantId();
+  const admin = await isAdmin();
+  if (!admin && callerMerchantId !== merchant) {
+    return forbidden();
   }
 
   let qr;
@@ -52,7 +74,20 @@ export async function POST(req: NextRequest) {
   });
 }
 
-/** GET /api/merchant/qr — list all QR codes */
+/**
+ * GET /api/merchant/qr — list all QR codes.
+ *
+ * Returns only the QR codes for the caller's merchant. Admins see all.
+ */
 export async function GET() {
-  return NextResponse.json({ codes: qrService.all() });
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
+  const callerMerchantId = await requireMerchantId();
+  const admin = await isAdmin();
+  if (!admin && !callerMerchantId) return forbidden();
+
+  const all = qrService.all();
+  const codes = admin ? all : all.filter((q: any) => q.payload?.merchant === callerMerchantId);
+  return NextResponse.json({ codes });
 }

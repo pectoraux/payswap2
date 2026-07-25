@@ -13,6 +13,7 @@ import {
   type SimulationResult,
   type AIDecision,
 } from '@/kernel';
+import { requireSession, unauthorized } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,6 +32,9 @@ export async function GET() {
 
 /** POST /api/simulate — run a scenario through the kernel Digital Twin. */
 export async function POST(req: NextRequest) {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
   let scenario: SimulationScenario;
   try {
     const body = await req.json();

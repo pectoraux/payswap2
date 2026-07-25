@@ -6,6 +6,13 @@ import { webhookEngine } from '@/protocol/webhooks/engine';
 import { eventEngine } from '@/kernel/event';
 import { stellarAdapter } from '@/protocol/blockchains/stellar/adapter';
 import { blockchainRegistry } from '@/protocol/blockchains/adapter';
+import {
+  requireSession,
+  requireMerchantId,
+  unauthorized,
+  forbidden,
+  isAdmin,
+} from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,28 +27,28 @@ function initStellar() {
 /**
  * GET /api/merchant/state?merchantId=...
  *
- * Returns the complete merchant dashboard state in a single round-trip:
- *   - merchant account
- *   - API keys
- *   - team
- *   - products
- *   - invoices
- *   - customers
- *   - refunds
- *   - analytics
- *   - twin token balance + asset info
- *   - recent twin token operations
- *   - payouts (list + stats)
- *   - webhook endpoints + recent deliveries
- *   - recent protocol events (merchant.* / payout.* / twintoken.*)
+ * Returns the complete merchant dashboard state in a single round-trip.
+ *
+ * The `merchantId` query parameter MUST match the caller's merchantId, unless
+ * the caller is an admin (in which case any merchantId is allowed).
  */
 export async function GET(req: NextRequest) {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
   initStellar();
   const url = new URL(req.url);
   const merchantId = url.searchParams.get('merchantId');
 
   if (!merchantId) {
     return NextResponse.json({ error: 'merchantId required' }, { status: 400 });
+  }
+
+  // Ownership / admin check.
+  const callerMerchantId = await requireMerchantId();
+  const admin = await isAdmin();
+  if (!admin && callerMerchantId !== merchantId) {
+    return forbidden();
   }
 
   const merchant = merchantPlatform.getMerchant(merchantId);

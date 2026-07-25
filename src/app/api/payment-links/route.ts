@@ -6,6 +6,7 @@ import { merchantRegistry } from '@/protocol/merchant-registry';
 import { connectorRegistry, OpenBankingConnector, MpesaConnector, EthereumConnector, ExchangeRateConnector } from '@/protocol/connectors/adapters';
 import { createEntity } from '@/kernel/entity';
 import type { Entity, Evidence } from '@/kernel';
+import { requireSession, unauthorized } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,6 +23,9 @@ function initConnectors() {
 
 /** POST /api/payment-links — create a payment link (hosted checkout) */
 export async function POST(req: NextRequest) {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
   initConnectors();
   const body = await req.json();
   const { merchantId, amount, currency, reference, priority = 'cheapest' } = body;

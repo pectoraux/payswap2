@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { simulationEngine, ScenarioLibrary, type SimulationScenario, type SimulationResult } from '@/kernel';
+import { requireSession, unauthorized } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** GET /api/scenarios — list all saved scenarios. */
 export async function GET() {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
   // Load from DB into the in-memory library.
   const records = await db.savedScenarioRecord.findMany({ orderBy: { createdAt: 'desc' } });
   for (const r of records) {
@@ -21,6 +25,9 @@ export async function GET() {
 
 /** POST /api/scenarios — save a scenario (runs it first to capture baseline). */
 export async function POST(req: NextRequest) {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
   const body = await req.json();
   const scenario = body?.scenario as SimulationScenario;
   const category = (body?.category as string) ?? 'Custom';
@@ -67,6 +74,9 @@ export async function POST(req: NextRequest) {
 
 /** DELETE /api/scenarios?id=... — remove a saved scenario. */
 export async function DELETE(req: NextRequest) {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
   ScenarioLibrary.remove(id);

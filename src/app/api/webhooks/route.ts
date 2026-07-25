@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { webhookEngine } from '@/protocol/webhooks/engine';
+import { requireSession, unauthorized } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** POST /api/webhooks — register a webhook endpoint */
 export async function POST(req: NextRequest) {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+
   const body = await req.json();
   const { action } = body;
 
@@ -42,5 +46,7 @@ export async function POST(req: NextRequest) {
 
 /** GET /api/webhooks — list all endpoints */
 export async function GET() {
+  const session = await requireSession();
+  if (!session) return unauthorized();
   return NextResponse.json({ endpoints: webhookEngine.allDeliveries() });
 }

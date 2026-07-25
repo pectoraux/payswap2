@@ -1,13 +1,22 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import {
+  requireAdminSession,
+  unauthorized,
+  forbidden,
+} from '@/lib/api-auth';
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * GET /api/admin/stats — platform-wide aggregate stats.
+ *
+ * Requires ADMIN or SUPER_ADMIN role.
+ */
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const adminSession = await requireAdminSession();
+  if (!adminSession) return forbidden();
   const [merchants, users, payments, waitlist] = await Promise.all([
     db.merchant.count(),
     db.user.count(),
