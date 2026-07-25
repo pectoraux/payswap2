@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
@@ -24,7 +25,11 @@ import { CreateRefundDialog } from '@/components/merchant/create-refund-dialog';
 
 export const dynamic = 'force-dynamic';
 
-export default async function RefundsPage() {
+export default async function RefundsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ paymentId?: string }>;
+}) {
   const ctx = await requireMerchant().catch(() => null);
   if (!ctx) redirect('/unauthorized');
   const { merchantId, merchant } = ctx;
@@ -50,6 +55,15 @@ export default async function RefundsPage() {
     select: { id: true, reference: true, amount: true, currency: true },
   });
 
+  // When the user clicks "Create Refund" on a payment detail page we link
+  // here with ?paymentId=… — pre-select that payment in the dialog so they
+  // don't have to find it in the dropdown.
+  const sp = await searchParams;
+  const preselectPaymentId =
+    typeof sp?.paymentId === 'string' && sp.paymentId.trim()
+      ? sp.paymentId.trim()
+      : '';
+
   const fmt = (n: number, c: string = merchant?.currency || 'GHS') =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: c }).format(n);
   const fmtDate = (d: Date) =>
@@ -69,7 +83,10 @@ export default async function RefundsPage() {
             Track and manage refunds issued to your customers.
           </p>
         </div>
-        <CreateRefundDialog payments={recentPayments} />
+        <CreateRefundDialog
+          payments={recentPayments}
+          defaultPaymentId={preselectPaymentId}
+        />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -137,7 +154,14 @@ export default async function RefundsPage() {
                   const ref = r.payment?.reference || r.paymentId.slice(0, 12);
                   return (
                     <TableRow key={r.id}>
-                      <TableCell className="font-mono text-xs">{ref}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        <Link
+                          href={`/dashboard/payments/${encodeURIComponent(r.paymentId)}`}
+                          className="hover:text-emerald-600 hover:underline dark:hover:text-emerald-400"
+                        >
+                          {ref}
+                        </Link>
+                      </TableCell>
                       <TableCell className="font-semibold tabular-nums">
                         {fmt(r.amount, r.payment?.currency)}
                       </TableCell>

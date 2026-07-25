@@ -33,18 +33,31 @@ interface PaymentOption {
 
 interface CreateRefundDialogProps {
   payments?: PaymentOption[];
+  /**
+   * Optional payment ID to pre-select. When provided AND present in the
+   * `payments` list (or even when not — we still set the value), the dialog
+   * opens with this payment already chosen so the merchant can jump straight
+   * to "Request refund" from a payment detail page.
+   */
+  defaultPaymentId?: string;
+  /** Optional label override for the trigger button. */
+  triggerLabel?: string;
 }
 
-export function CreateRefundDialog({ payments = [] }: CreateRefundDialogProps) {
+export function CreateRefundDialog({
+  payments = [],
+  defaultPaymentId = '',
+  triggerLabel,
+}: CreateRefundDialogProps) {
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [paymentId, setPaymentId] = useState('');
+  const [paymentId, setPaymentId] = useState(defaultPaymentId);
   const [amount, setAmount] = useState('');
   const [type, setType] = useState<string>('FULL');
   const [reason, setReason] = useState('');
 
   function reset() {
-    setPaymentId('');
+    setPaymentId(defaultPaymentId);
     setAmount('');
     setType('FULL');
     setReason('');
@@ -104,7 +117,7 @@ export function CreateRefundDialog({ payments = [] }: CreateRefundDialogProps) {
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset(); }}>
       <DialogTrigger asChild>
         <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-          <RotateCcw className="mr-2 h-4 w-4" /> New Refund
+          <RotateCcw className="mr-2 h-4 w-4" /> {triggerLabel || 'New Refund'}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">

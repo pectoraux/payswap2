@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -19,7 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/status-badge';
-import { ArrowDownToLine } from 'lucide-react';
+import { ArrowDownToLine, ExternalLink } from 'lucide-react';
 import { CreatePayoutDialog } from '@/components/merchant/create-payout-dialog';
 
 export const dynamic = 'force-dynamic';
@@ -123,13 +124,19 @@ export default async function PayoutsPage() {
                   <TableHead>Fee</TableHead>
                   <TableHead>Net</TableHead>
                   <TableHead>Date</TableHead>
+                  <TableHead className="text-right">View</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {payouts.map((p) => (
-                  <TableRow key={p.id}>
+                  <TableRow key={p.id} className="cursor-pointer">
                     <TableCell className="font-semibold tabular-nums">
-                      {fmt(p.sourceAmount, p.sourceCurrency)}
+                      <Link
+                        href={`/dashboard/payouts/${encodeURIComponent(p.id)}`}
+                        className="hover:text-emerald-600 hover:underline dark:hover:text-emerald-400"
+                      >
+                        {fmt(p.sourceAmount, p.sourceCurrency)}
+                      </Link>
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {p.method}
@@ -145,6 +152,16 @@ export default async function PayoutsPage() {
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {fmtDate(p.createdAt)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Link
+                        href={`/dashboard/payouts/${encodeURIComponent(p.id)}`}
+                        className="inline-flex h-7 items-center gap-1 rounded-md border bg-background px-2.5 text-xs font-medium shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground"
+                        aria-label={`View payout ${p.id.slice(0, 8)}`}
+                      >
+                        View
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
                     </TableCell>
                   </TableRow>
                 ))}

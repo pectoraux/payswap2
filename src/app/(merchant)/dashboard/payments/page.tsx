@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -19,12 +20,16 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/status-badge';
-import { CreditCard } from 'lucide-react';
+import { CreditCard, ExternalLink } from 'lucide-react';
 import { CreatePaymentDialog } from '@/components/merchant/create-payment-dialog';
 
 export const dynamic = 'force-dynamic';
 
-export default async function PaymentsPage() {
+export default async function PaymentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ customer?: string }>;
+}) {
   const session = await getServerSession(authOptions);
   if (!session) redirect('/login');
   const userId = (session?.user as any)?.id;
@@ -36,8 +41,25 @@ export default async function PaymentsPage() {
 
   const merchant = await db.merchant.findUnique({ where: { id: merchantId } });
   const env = await getEnvironment();
+
+  // The customer detail page links here with ?customer=<id> — when that
+  // param is present, we filter the payment list to rows whose metadata
+  // references that customer record (the create-payment flow stores
+  // customerRecordId in metadata).
+  const sp = await searchParams;
+  const customerFilterId =
+    typeof sp?.customer === 'string' && sp.customer.trim()
+      ? sp.customer.trim()
+      : null;
+
   const payments = await db.payment.findMany({
-    where: { merchantId, environment: env },
+    where: {
+      merchantId,
+      environment: env,
+      ...(customerFilterId
+        ? { metadata: { contains: customerFilterId } }
+        : {}),
+    },
     orderBy: { createdAt: 'desc' },
     take: 100,
   });
@@ -57,7 +79,9 @@ export default async function PaymentsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Payments</h1>
           <p className="text-sm text-muted-foreground">
-            Track all incoming payments to your merchant account.
+            {customerFilterId
+              ? 'Payments filtered for the selected customer.'
+              : 'Track all incoming payments to your merchant account.'}
           </p>
         </div>
         <CreatePaymentDialog />
@@ -98,9 +122,22 @@ export default async function PaymentsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">All payments</CardTitle>
+          <CardTitle className="text-base">
+            {customerFilterId ? 'Customer payments' : 'All payments'}
+          </CardTitle>
           <CardDescription>
             {payments.length} payment{payments.length === 1 ? '' : 's'} recorded
+            {customerFilterId && (
+              <>
+                {' '}—{' '}
+                <Link
+                  href="/dashboard/payments"
+                  className="text-emerald-600 hover:underline dark:text-emerald-400"
+                >
+                  clear filter
+                </Link>
+              </>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -122,13 +159,19 @@ export default async function PaymentsPage() {
                   <TableHead>Method</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Date</TableHead>
+                  <TableHead className="text-right">View</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {payments.map((p) => (
-                  <TableRow key={p.id}>
+                  <TableRow key={p.id} className="cursor-pointer">
                     <TableCell className="font-mono text-xs">
-                      {p.reference || p.id.slice(0, 12)}
+                      <Link
+                        href={`/dashboard/payments/${encodeURIComponent(p.id)}`}
+                        className="hover:text-emerald-600 hover:underline dark:hover:text-emerald-400"
+                      >
+                        {p.reference || p.id.slice(0, 12)}
+                      </Link>
                     </TableCell>
                     <TableCell className="font-semibold tabular-nums">
                       {fmt(p.amount, p.currency)}
@@ -141,6 +184,16 @@ export default async function PaymentsPage() {
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {fmtDate(p.createdAt)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Link
+                        href={`/dashboard/payments/${encodeURIComponent(p.id)}`}
+                        className="inline-flex h-7 items-center gap-1 rounded-md border bg-background px-2.5 text-xs font-medium shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground"
+                        aria-label={`View payment ${p.reference || p.id.slice(0, 12)}`}
+                      >
+                        View
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
                     </TableCell>
                   </TableRow>
                 ))}

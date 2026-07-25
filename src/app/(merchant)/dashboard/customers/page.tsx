@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -18,7 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Users } from 'lucide-react';
+import { Users, ExternalLink } from 'lucide-react';
 import { CreateCustomerDialog } from '@/components/merchant/create-customer-dialog';
 
 export const dynamic = 'force-dynamic';
@@ -107,12 +108,20 @@ export default async function CustomersPage() {
                   <TableHead>Phone</TableHead>
                   <TableHead className="text-right">Total spent</TableHead>
                   <TableHead className="text-right">Transactions</TableHead>
+                  <TableHead className="text-right">View</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {customers.map((c) => (
-                  <TableRow key={c.id}>
-                    <TableCell className="font-medium">{c.name}</TableCell>
+                  <TableRow key={c.id} className="cursor-pointer">
+                    <TableCell className="font-medium">
+                      <Link
+                        href={`/dashboard/customers/${encodeURIComponent(c.id)}`}
+                        className="hover:text-emerald-600 hover:underline dark:hover:text-emerald-400"
+                      >
+                        {c.name}
+                      </Link>
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {c.email}
                     </TableCell>
@@ -124,6 +133,16 @@ export default async function CustomersPage() {
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {c.transactionCount}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Link
+                        href={`/dashboard/customers/${encodeURIComponent(c.id)}`}
+                        className="inline-flex h-7 items-center gap-1 rounded-md border bg-background px-2.5 text-xs font-medium shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground"
+                        aria-label={`View customer ${c.name}`}
+                      >
+                        View
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
                     </TableCell>
                   </TableRow>
                 ))}
