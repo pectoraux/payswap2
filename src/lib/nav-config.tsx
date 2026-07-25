@@ -131,6 +131,7 @@ export const merchantNav: NavGroup[] = [
       { label: 'Invoices', href: '/dashboard/invoices', icon: <FileText className="h-4 w-4" /> },
       { label: 'Subscriptions', href: '/dashboard/subscriptions', icon: <Repeat className="h-4 w-4" /> },
       { label: 'Refunds', href: '/dashboard/refunds', icon: <RefreshCcw className="h-4 w-4" /> },
+      { label: 'Disputes', href: '/dashboard/disputes', icon: <ShieldAlert className="h-4 w-4" /> },
       { label: 'Payouts', href: '/dashboard/payouts', icon: <ArrowDownToLine className="h-4 w-4" /> },
     ],
   },

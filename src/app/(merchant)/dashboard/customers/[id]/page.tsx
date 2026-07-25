@@ -44,9 +44,14 @@ import {
   ArrowDownToLine,
   History,
   Inbox,
+  Crown,
+  Repeat,
+  ShieldAlert,
+  TrendingUp,
 } from 'lucide-react';
 import { CreateInvoiceDialog } from '@/components/merchant/create-invoice-dialog';
 import { CreatePaymentDialog } from '@/components/merchant/create-payment-dialog';
+import { CustomerNotes } from '@/components/merchant/customer-notes';
 
 export const dynamic = 'force-dynamic';
 
@@ -97,6 +102,31 @@ export default async function CustomerDetailPage({ params }: PageProps) {
         orderBy: { createdAt: 'desc' },
         take: 25,
         include: { payment: { select: { reference: true, currency: true } } },
+      })
+    : [];
+
+  // ── AML risk scan ─────────────────────────────────────────────────
+  // Look for OPEN AML alerts that reference this customer record, its
+  // email, or any of its payments. This powers the risk badge.
+  const amlEntityIds = [customer.id, customer.email, ...paymentIds].filter(
+    Boolean,
+  );
+  const amlAlerts = amlEntityIds.length
+    ? await db.aMLAlert.findMany({
+        where: {
+          environment: env,
+          status: 'OPEN',
+          entityId: { in: amlEntityIds },
+        },
+        select: {
+          id: true,
+          alertType: true,
+          severity: true,
+          score: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
       })
     : [];
 
@@ -169,6 +199,76 @@ export default async function CustomerDetailPage({ params }: PageProps) {
   const totalRefunded = refunds
     .filter((r) => ['COMPLETED', 'APPROVED'].includes(r.status.toUpperCase()))
     .reduce((s, r) => s + r.amount, 0);
+  const hasPendingRefund = refunds.some(
+    (r) => r.status.toUpperCase() === 'PENDING',
+  );
+
+  // ── Customer tags ─────────────────────────────────────────────────
+  const isVip = customer.totalSpent > 500;
+  const isFrequent = customer.transactionCount > 5;
+  const isAtRisk = hasPendingRefund;
+  const tags: { label: string; icon: typeof Crown; tone: string }[] = [];
+  if (isVip) {
+    tags.push({
+      label: 'VIP',
+      icon: Crown,
+      tone:
+        'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
+    });
+  }
+  if (isFrequent) {
+    tags.push({
+      label: 'Frequent',
+      icon: Repeat,
+      tone:
+        'bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20',
+    });
+  }
+  if (isAtRisk) {
+    tags.push({
+      label: 'At Risk',
+      icon: ShieldAlert,
+      tone:
+        'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
+    });
+  }
+
+  // ── Lifetime value monthly series (last 6 months) ─────────────────
+  const months: { key: string; label: string; total: number }[] = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    months.push({
+      key,
+      label: d.toLocaleDateString('en-US', { month: 'short' }),
+      total: 0,
+    });
+  }
+  const monthMap = new Map(months.map((m) => [m.key, m]));
+  for (const p of completedPayments) {
+    const key = `${p.createdAt.getFullYear()}-${String(p.createdAt.getMonth() + 1).padStart(2, '0')}`;
+    const m = monthMap.get(key);
+    if (m) m.total += p.amount;
+  }
+  const maxMonthly = Math.max(...months.map((m) => m.total), 1);
+
+  // ── Parse existing notes from metadata ────────────────────────────
+  let notesText = '';
+  let notesUpdatedAt: string | null = null;
+  if (customer.metadata) {
+    try {
+      const parsed = JSON.parse(customer.metadata);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const m = parsed as Record<string, unknown>;
+        if (typeof m.notes === 'string') notesText = m.notes;
+        if (typeof m.notesUpdatedAt === 'string')
+          notesUpdatedAt = m.notesUpdatedAt;
+      }
+    } catch {
+      // ignore malformed metadata
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -212,9 +312,32 @@ export default async function CustomerDetailPage({ params }: PageProps) {
                   <Users className="h-5 w-5" />
                 </div>
                 <div className="min-w-0">
-                  <h1 className="text-xl font-bold tracking-tight break-words">
-                    {customer.name}
-                  </h1>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h1 className="text-xl font-bold tracking-tight break-words">
+                      {customer.name}
+                    </h1>
+                    {/* Customer tags */}
+                    {tags.map((t) => {
+                      const Icon = t.icon;
+                      return (
+                        <span
+                          key={t.label}
+                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${t.tone}`}
+                        >
+                          <Icon className="h-3 w-3" />
+                          {t.label}
+                        </span>
+                      );
+                    })}
+                    {/* AML risk badge */}
+                    {amlAlerts.length > 0 && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] font-medium text-rose-600 dark:text-rose-400">
+                        <ShieldAlert className="h-3 w-3" />
+                        {amlAlerts.length} AML alert
+                        {amlAlerts.length === 1 ? '' : 's'}
+                      </span>
+                    )}
+                  </div>
                   <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     <span className="inline-flex items-center gap-1">
                       <Mail className="h-3 w-3" />
@@ -295,6 +418,94 @@ export default async function CustomerDetailPage({ params }: PageProps) {
         </CardContent>
       </Card>
 
+      {/* ───────── AML risk banner (only when alerts exist) ───────── */}
+      {amlAlerts.length > 0 && (
+        <Card className="border-rose-500/30">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base text-rose-600 dark:text-rose-400">
+              <ShieldAlert className="h-4 w-4" />
+              Compliance risk detected
+            </CardTitle>
+            <CardDescription>
+              {amlAlerts.length} open AML alert
+              {amlAlerts.length === 1 ? '' : 's'} reference this customer.
+              Review before processing further transactions.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {amlAlerts.map((a) => (
+                <div
+                  key={a.id}
+                  className="flex items-center gap-2 rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2"
+                >
+                  <Badge className="border-transparent bg-rose-500/15 text-[10px] font-medium text-rose-600 hover:bg-rose-500/15 dark:text-rose-400">
+                    {a.severity}
+                  </Badge>
+                  <span className="text-xs font-medium">{a.alertType}</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    score {a.score.toFixed(2)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ───────── Lifetime value chart ───────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <TrendingUp className="h-4 w-4 text-emerald-500" />
+            Lifetime value
+          </CardTitle>
+          <CardDescription>
+            Monthly completed payment volume over the last 6 months.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {lifetimeValue === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 text-center">
+              <TrendingUp className="h-8 w-8 text-muted-foreground/40 mb-2" />
+              <p className="text-sm font-medium">No completed payments yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Once this customer has completed payments, their monthly value
+                will appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="flex h-44 items-end gap-3 sm:gap-4">
+              {months.map((m) => {
+                const heightPct = (m.total / maxMonthly) * 100;
+                return (
+                  <div
+                    key={m.key}
+                    className="group flex flex-1 flex-col items-center gap-2"
+                    title={`${m.label}: ${fmt(m.total)}`}
+                  >
+                    <div className="flex w-full flex-1 items-end">
+                      <div
+                        className="w-full rounded-t-md bg-gradient-to-t from-emerald-500 to-teal-400 transition-all group-hover:from-emerald-600 group-hover:to-teal-500"
+                        style={{ height: `${Math.max(heightPct, 2)}%` }}
+                      />
+                    </div>
+                    <div className="text-center">
+                      <div className="text-[10px] font-medium tabular-nums text-muted-foreground">
+                        {m.total > 0 ? fmt(m.total) : '—'}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground">
+                        {m.label}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* ───────── Two-column section ───────── */}
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Payment history — spans 2 columns */}
@@ -369,8 +580,28 @@ export default async function CustomerDetailPage({ params }: PageProps) {
           </CardContent>
         </Card>
 
-        {/* Right column: wallet + refunds + activity */}
+        {/* Right column: notes + wallet + refunds + activity */}
         <div className="space-y-6">
+          {/* Notes */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <History className="h-4 w-4 text-emerald-500" />
+                Notes
+              </CardTitle>
+              <CardDescription>
+                Keep private context on this customer.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <CustomerNotes
+                customerId={customer.id}
+                initialNotes={notesText}
+                initialUpdatedAt={notesUpdatedAt}
+              />
+            </CardContent>
+          </Card>
+
           {/* Wallet */}
           {wallets.length > 0 && (
             <Card>
@@ -514,6 +745,12 @@ export default async function CustomerDetailPage({ params }: PageProps) {
               <Link href="/dashboard/refunds">
                 <RotateCcw className="h-4 w-4" />
                 Refunds
+              </Link>
+            </Button>
+            <Button asChild variant="outline" size="sm" className="gap-1.5">
+              <Link href="/dashboard/disputes">
+                <ShieldAlert className="h-4 w-4" />
+                Disputes
               </Link>
             </Button>
             <Button asChild variant="outline" size="sm" className="gap-1.5">

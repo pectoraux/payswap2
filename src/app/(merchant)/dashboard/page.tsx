@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { TrendingUp, CreditCard, Users, ArrowDownToLine, ExternalLink } from 'lucide-react';
 import { OnboardingChecklist } from '@/components/merchant/onboarding-checklist';
+import { HealthScore } from '@/components/merchant/health-score';
 
 export const dynamic = 'force-dynamic';
 
@@ -143,6 +144,9 @@ export default async function MerchantDashboard() {
           <div className="text-[10px] text-muted-foreground mt-1">{products} products</div>
         </CardContent></Card>
       </div>
+
+      <HealthScore />
+
       <Card>
         <CardHeader><CardTitle className="text-base">Recent Payments</CardTitle><CardDescription>Your latest transactions</CardDescription></CardHeader>
         <CardContent>
