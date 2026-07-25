@@ -161,6 +161,7 @@ export const adminNav: NavGroup[] = [
       { label: 'Waitlist', href: '/admin/waitlist', icon: <Users className="h-4 w-4" /> },
       { label: 'Users', href: '/admin/users', icon: <Users className="h-4 w-4" /> },
       { label: 'Merchants', href: '/admin/merchants', icon: <Package className="h-4 w-4" /> },
+      { label: 'Extensions', href: '/admin/extensions', icon: <Boxes className="h-4 w-4" /> },
     ],
   },
   {
@@ -307,6 +308,7 @@ export const developerNav: NavGroup[] = [
     items: [
       { label: 'API Docs', href: '/developers/docs', icon: <BookOpen className="h-4 w-4" /> },
       { label: 'API Explorer', href: '/developers/explorer', icon: <Compass className="h-4 w-4" /> },
+      { label: 'Extension Builder', href: '/developers/extensions', icon: <Boxes className="h-4 w-4" /> },
       { label: 'Webhook Tester', href: '/developers/webhooks', icon: <Webhook className="h-4 w-4" /> },
       { label: 'Sandbox', href: '/developers/sandbox', icon: <FlaskConical className="h-4 w-4" /> },
     ],

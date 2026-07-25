@@ -708,3 +708,67 @@ model DeviceSession {
 
   @@index([userId])
 }
+
+// ═══════ EXTENSION MARKETPLACE ═══════
+
+model Extension {
+  id              String   @id @default(cuid())
+  slug            String   @unique
+  name            String
+  description     String
+  developerId     String   // user who created it
+  category        String   // payments, analytics, compliance, accounting, crm, marketing, shipping, other
+  iconUrl         String?
+  version         String   @default("1.0.0")
+  status          String   @default("draft") // draft, submitted, review, approved, rejected, published, suspended
+  permissions     String   // JSON array
+  pricing         String   @default("free") // free, paid, freemium
+  price           Float    @default(0)
+  config          String?  // JSON - configuration schema
+  changelog       String?  // JSON array of {version, date, changes}
+  installCount    Int      @default(0)
+  rating          Float    @default(0)
+  reviewCount     Int      @default(0)
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  reviewNotes     String?
+  publishedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  installs        ExtensionInstall[]
+  reviews         ExtensionReview[]
+
+  @@index([status])
+  @@index([category])
+  @@index([developerId])
+}
+
+model ExtensionInstall {
+  id              String   @id @default(cuid())
+  extensionId     String
+  merchantId      String
+  status          String   @default("active") // active, disabled
+  config          String?  // JSON - merchant-specific configuration
+  installedAt     DateTime @default(now())
+
+  extension       Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+
+  @@unique([extensionId, merchantId])
+  @@index([merchantId])
+  @@index([extensionId])
+}
+
+model ExtensionReview {
+  id              String   @id @default(cuid())
+  extensionId     String
+  userId          String
+  rating          Int      // 1-5
+  comment         String?
+  createdAt       DateTime @default(now())
+
+  extension       Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+
+  @@index([extensionId])
+}

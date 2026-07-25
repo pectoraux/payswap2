@@ -56,12 +56,29 @@ loadEnvOverrides()
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
+  // Increment this whenever a Prisma schema migration adds new models so the
+  // dev server picks up the regenerated client without a manual restart.
+  prismaSchemaVersion?: string
 }
 
-export const db =
-  globalForPrisma.prisma ??
-  new PrismaClient({
+const SCHEMA_VERSION = 'extensions-relations-2025-07-25'
+
+function createClient() {
+  return new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
   })
+}
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
+// Reuse the cached client only when it was created with the current schema
+// version. This lets `prisma generate` + a schema bump invalidate the cached
+// client on the next module load without requiring a hard dev-server restart.
+let db: PrismaClient
+if (globalForPrisma.prisma && globalForPrisma.prismaSchemaVersion === SCHEMA_VERSION) {
+  db = globalForPrisma.prisma
+} else {
+  db = createClient()
+  globalForPrisma.prisma = db
+  globalForPrisma.prismaSchemaVersion = SCHEMA_VERSION
+}
+
+export { db }
