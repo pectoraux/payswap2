@@ -24,31 +24,31 @@ const endpoints: { group: string; items: EndpointDoc[] }[] = [
   {
     group: 'Payments',
     items: [
-      { method: 'POST', path: '/v1/payments', title: 'Create payment', description: 'Initiate a new payment intent for a customer.' },
-      { method: 'GET', path: '/v1/payments', title: 'List payments', description: 'Paginated list of payments for the merchant.' },
-      { method: 'GET', path: '/v1/payments/{id}', title: 'Retrieve payment', description: 'Fetch a single payment by ID or reference.' },
-      { method: 'POST', path: '/v1/payments/{id}/refund', title: 'Refund payment', description: 'Issue a full or partial refund.' },
+      { method: 'POST', path: '/api/payments/create', title: 'Create payment', description: 'Initiate a new payment intent for a customer.' },
+      { method: 'GET', path: '/api/payments', title: 'List payments', description: 'Paginated list of payments for the merchant.' },
+      { method: 'GET', path: '/api/payments/{id}', title: 'Retrieve payment', description: 'Fetch a single payment by ID or reference.' },
+      { method: 'POST', path: '/api/refunds/create', title: 'Refund payment', description: 'Issue a full or partial refund against a payment.' },
     ],
   },
   {
     group: 'Payouts',
     items: [
-      { method: 'POST', path: '/v1/payouts', title: 'Create payout', description: 'Send funds to a bank or mobile money account.' },
-      { method: 'GET', path: '/v1/payouts', title: 'List payouts', description: 'Paginated list of payouts.' },
+      { method: 'POST', path: '/api/payouts/create', title: 'Create payout', description: 'Send funds to a bank or mobile money account.' },
+      { method: 'GET', path: '/api/merchant/payout', title: 'List payouts', description: 'Paginated list of payouts for the merchant.' },
     ],
   },
   {
-    group: 'Wallets',
+    group: 'Activity & Wallets',
     items: [
-      { method: 'GET', path: '/v1/wallets', title: 'List wallets', description: 'Balances across the merchant currency wallets.' },
-      { method: 'GET', path: '/v1/wallets/{id}/transactions', title: 'Wallet transactions', description: 'Transaction history for a wallet.' },
+      { method: 'GET', path: '/api/activity', title: 'Activity feed', description: 'Unified activity feed (payments, payouts, refunds, webhooks).' },
+      { method: 'GET', path: '/api/wallets', title: 'List wallets', description: 'Balances across the merchant currency wallets.' },
     ],
   },
   {
     group: 'Webhooks',
     items: [
-      { method: 'POST', path: '/v1/webhook-endpoints', title: 'Create endpoint', description: 'Register a webhook URL to receive events.' },
-      { method: 'GET', path: '/v1/webhook-endpoints', title: 'List endpoints', description: 'List configured webhook endpoints.' },
+      { method: 'POST', path: '/api/webhooks/create', title: 'Create endpoint', description: 'Register a webhook URL to receive events.' },
+      { method: 'GET', path: '/api/webhooks', title: 'List endpoints', description: 'List configured webhook endpoints.' },
     ],
   },
 ];

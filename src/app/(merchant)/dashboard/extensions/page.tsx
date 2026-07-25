@@ -1,13 +1,6 @@
 import { redirect } from 'next/navigation';
 import { requireMerchant } from '@/lib/auth-guards';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { db } from '@/lib/db';
 import { Badge } from '@/components/ui/badge';
 import {
   BookOpen,
@@ -17,21 +10,12 @@ import {
   ShoppingBag,
   Store,
   Puzzle,
-  Check,
 } from 'lucide-react';
+import { ExtensionsGrid, type ExtensionDef } from './extensions-grid';
 
 export const dynamic = 'force-dynamic';
 
 type Category = 'Payments' | 'Analytics' | 'Compliance' | 'Marketing' | 'Accounting';
-
-interface Extension {
-  id: string;
-  name: string;
-  description: string;
-  category: Category;
-  icon: React.ReactNode;
-  installed?: boolean;
-}
 
 const CATEGORIES: Category[] = [
   'Payments',
@@ -41,15 +25,14 @@ const CATEGORIES: Category[] = [
   'Accounting',
 ];
 
-const EXTENSIONS: Extension[] = [
+const EXTENSIONS: ExtensionDef[] = [
   {
     id: 'quickbooks',
     name: 'QuickBooks Sync',
     description:
       'Automatically sync transactions, invoices and payouts to your QuickBooks ledger.',
     category: 'Accounting',
-    icon: <BookOpen className="h-5 w-5" />,
-    installed: true,
+    icon: 'book',
   },
   {
     id: 'mailchimp',
@@ -57,7 +40,7 @@ const EXTENSIONS: Extension[] = [
     description:
       'Add paying customers to Mailchimp audiences and trigger email journeys on payment events.',
     category: 'Marketing',
-    icon: <Mail className="h-5 w-5" />,
+    icon: 'mail',
   },
   {
     id: 'slack',
@@ -65,7 +48,7 @@ const EXTENSIONS: Extension[] = [
     description:
       'Get instant Slack alerts for new payments, refunds and failed payouts in your channels.',
     category: 'Payments',
-    icon: <MessageSquare className="h-5 w-5" />,
+    icon: 'message',
   },
   {
     id: 'zapier',
@@ -73,7 +56,7 @@ const EXTENSIONS: Extension[] = [
     description:
       'Connect PaySwap to 5,000+ apps via Zapier with no-code workflows and triggers.',
     category: 'Payments',
-    icon: <Zap className="h-5 w-5" />,
+    icon: 'zap',
   },
   {
     id: 'shopify',
@@ -81,7 +64,7 @@ const EXTENSIONS: Extension[] = [
     description:
       'Accept PaySwap at Shopify checkout with automatic order fulfillment and reconciliation.',
     category: 'Payments',
-    icon: <ShoppingBag className="h-5 w-5" />,
+    icon: 'shopping',
   },
   {
     id: 'woocommerce',
@@ -89,7 +72,7 @@ const EXTENSIONS: Extension[] = [
     description:
       'Drop-in WooCommerce gateway that lets your WordPress customers pay with PaySwap.',
     category: 'Payments',
-    icon: <Store className="h-5 w-5" />,
+    icon: 'store',
   },
 ];
 
@@ -101,12 +84,79 @@ const CATEGORY_TONES: Record<Category, string> = {
   Accounting: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
 };
 
+// Inline SVG icon helper — we render the right Lucide icon based on the
+// `icon` string stored on the extension definition. This keeps the server
+// component pure while still using the same icon vocabulary as the rest of
+// the dashboard.
+function ExtensionIcon({ icon }: { icon: ExtensionDef['icon'] }) {
+  const cls = 'h-5 w-5';
+  switch (icon) {
+    case 'book':
+      return <BookOpen className={cls} />;
+    case 'mail':
+      return <Mail className={cls} />;
+    case 'message':
+      return <MessageSquare className={cls} />;
+    case 'zap':
+      return <Zap className={cls} />;
+    case 'shopping':
+      return <ShoppingBag className={cls} />;
+    case 'store':
+      return <Store className={cls} />;
+    default:
+      return <Puzzle className={cls} />;
+  }
+}
+
+/**
+ * Parse the merchant `settings` JSON blob and return the list of installed
+ * extension IDs (stored as `settings.installedExtensions: string[]`).
+ */
+function readInstalledExtensions(settingsJson: string | null): Set<string> {
+  if (!settingsJson) return new Set();
+  try {
+    const parsed = JSON.parse(settingsJson) as {
+      installedExtensions?: unknown;
+    };
+    if (Array.isArray(parsed.installedExtensions)) {
+      return new Set(
+        parsed.installedExtensions.filter(
+          (e): e is string => typeof e === 'string',
+        ),
+      );
+    }
+  } catch {
+    // ignore malformed settings JSON
+  }
+  return new Set();
+}
+
 export default async function ExtensionsPage() {
   // Validates session + merchant role.
   const ctx = await requireMerchant().catch(() => null);
   if (!ctx) redirect('/unauthorized');
+  const { merchantId, merchant } = ctx;
 
-  const installedCount = EXTENSIONS.filter((e) => e.installed).length;
+  // Pull the live installed-extension IDs from the merchant's `settings` JSON.
+  const fresh = await db.merchant.findUnique({
+    where: { id: merchantId },
+    select: { settings: true },
+  });
+  const installed = readInstalledExtensions(fresh?.settings ?? null);
+
+  // Decorate each marketplace extension with its current install state.
+  const extensions: (ExtensionDef & {
+    installed: boolean;
+    tone: string;
+    iconNode: React.ReactNode;
+  })[] = EXTENSIONS.map((e) => ({
+    ...e,
+    installed: installed.has(e.id),
+    tone: CATEGORY_TONES[e.category as Category] ?? CATEGORY_TONES.Payments,
+    iconNode: <ExtensionIcon icon={e.icon} />,
+  }));
+
+  const installedCount = extensions.filter((e) => e.installed).length;
 
   return (
     <div className="space-y-6">
@@ -125,7 +175,7 @@ export default async function ExtensionsPage() {
         </Badge>
       </div>
 
-      {/* Category filter chips (non-functional visual) */}
+      {/* Category filter chips (visual only — kept for marketplace feel) */}
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
@@ -144,49 +194,7 @@ export default async function ExtensionsPage() {
         ))}
       </div>
 
-      {/* Grid of extension cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {EXTENSIONS.map((e) => (
-          <Card key={e.id} className="flex flex-col">
-            <CardHeader>
-              <div className="flex items-start gap-3">
-                <div
-                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${CATEGORY_TONES[e.category]}`}
-                >
-                  {e.icon}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <CardTitle className="text-base">{e.name}</CardTitle>
-                  <div className="mt-1">
-                    <Badge
-                      variant="secondary"
-                      className={`text-[9px] ${CATEGORY_TONES[e.category]}`}
-                    >
-                      {e.category}
-                    </Badge>
-                  </div>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="flex flex-1 flex-col gap-4">
-              <CardDescription className="flex-1 text-xs leading-relaxed">
-                {e.description}
-              </CardDescription>
-              {e.installed ? (
-                <Button variant="outline" disabled className="w-full">
-                  <Check className="mr-2 h-3.5 w-3.5 text-emerald-500" /> Installed
-                </Button>
-              ) : (
-                <Button
-                  className="w-full bg-emerald-600 text-white hover:bg-emerald-700"
-                >
-                  <Puzzle className="mr-2 h-3.5 w-3.5" /> Install
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      <ExtensionsGrid extensions={extensions} />
     </div>
   );
 }

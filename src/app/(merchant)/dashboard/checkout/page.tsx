@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Card,
   CardContent,
@@ -29,7 +29,9 @@ import {
   ShieldCheck,
   Copy,
   Check,
+  Loader2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 const CURRENCIES = ['GHS', 'USD', 'EUR', 'GBP', 'KES', 'NGN', 'ZAR'];
 const THEME_COLORS = [
@@ -41,16 +43,66 @@ const THEME_COLORS = [
   { name: 'Rose', value: '#e11d48' },
 ];
 
-export default function CheckoutBuilderPage() {
-  const [amount, setAmount] = useState('100.00');
-  const [currency, setCurrency] = useState('GHS');
-  const [title, setTitle] = useState('Pay for your order');
-  const [description, setDescription] = useState('Complete your purchase securely with PaySwap.');
-  const [buttonText, setButtonText] = useState('Pay now');
-  const [themeColor, setThemeColor] = useState('#10b981');
-  const [copied, setCopied] = useState(false);
+interface CheckoutConfig {
+  title: string;
+  description: string;
+  amount: string;
+  currency: string;
+  buttonText: string;
+  themeColor: string;
+}
 
-  const fmt = (n: number, c: string = currency) =>
+const DEFAULT_CONFIG: CheckoutConfig = {
+  amount: '100.00',
+  currency: 'GHS',
+  title: 'Pay for your order',
+  description: 'Complete your purchase securely with PaySwap.',
+  buttonText: 'Pay now',
+  themeColor: '#10b981',
+};
+
+export default function CheckoutBuilderPage() {
+  const [config, setConfig] = useState<CheckoutConfig>(DEFAULT_CONFIG);
+  const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Load any previously saved checkout configuration from the merchant's
+  // `settings` JSON on first mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/merchant/settings', {
+          cache: 'no-store',
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const saved = data?.merchant?.settings?.checkout;
+        if (!cancelled && saved && typeof saved === 'object') {
+          setConfig((prev) => ({
+            ...prev,
+            ...DEFAULT_CONFIG,
+            ...(saved as Partial<CheckoutConfig>),
+          }));
+        }
+      } catch {
+        // Non-fatal — fall back to defaults.
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setField = <K extends keyof CheckoutConfig>(
+    key: K,
+    value: CheckoutConfig[K],
+  ) => setConfig((c) => ({ ...c, [key]: value }));
+
+  const fmt = (n: number, c: string = config.currency) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: c }).format(
       Number.isFinite(n) ? n : 0,
     );
@@ -58,12 +110,12 @@ export default function CheckoutBuilderPage() {
   const embedCode = `<script
   src="https://cdn.payswap.io/checkout/v1/checkout.js"
   data-merchant="merchant_001"
-  data-amount="${amount || '0'}"
-  data-currency="${currency}"
-  data-title="${title}"
-  data-description="${description}"
-  data-button="${buttonText}"
-  data-theme="${themeColor}"
+  data-amount="${config.amount || '0'}"
+  data-currency="${config.currency}"
+  data-title="${config.title}"
+  data-description="${config.description}"
+  data-button="${config.buttonText}"
+  data-theme="${config.themeColor}"
   async>
 </script>`;
 
@@ -77,6 +129,45 @@ export default function CheckoutBuilderPage() {
     }
   };
 
+  async function handleSave() {
+    setSaving(true);
+    try {
+      // Merge the new checkout config into any existing settings so we don't
+      // clobber unrelated keys (e.g. installed extensions).
+      const existing = await fetch('/api/merchant/settings', {
+        cache: 'no-store',
+      });
+      const existingData = existing.ok ? await existing.json() : null;
+      const existingSettings =
+        existingData?.merchant?.settings &&
+        typeof existingData.merchant.settings === 'object'
+          ? (existingData.merchant.settings as Record<string, unknown>)
+          : {};
+
+      const nextSettings = {
+        ...existingSettings,
+        checkout: config,
+      };
+
+      const res = await fetch('/api/merchant/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: nextSettings }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to save configuration');
+      }
+      toast.success('Checkout configuration saved');
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to save configuration',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -86,8 +177,20 @@ export default function CheckoutBuilderPage() {
             Design a hosted checkout page and embed it on your site.
           </p>
         </div>
-        <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-          <Save className="mr-2 h-4 w-4" /> Save configuration
+        <Button
+          onClick={handleSave}
+          disabled={saving || loading}
+          className="bg-emerald-600 text-white hover:bg-emerald-700"
+        >
+          {saving ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving…
+            </>
+          ) : (
+            <>
+              <Save className="mr-2 h-4 w-4" /> Save configuration
+            </>
+          )}
         </Button>
       </div>
 
@@ -113,13 +216,16 @@ export default function CheckoutBuilderPage() {
                   id="amount"
                   type="number"
                   step="0.01"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  value={config.amount}
+                  onChange={(e) => setField('amount', e.target.value)}
                 />
               </div>
               <div className="space-y-2">
                 <Label>Currency</Label>
-                <Select value={currency} onValueChange={setCurrency}>
+                <Select
+                  value={config.currency}
+                  onValueChange={(v) => setField('currency', v)}
+                >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select currency" />
                   </SelectTrigger>
@@ -138,8 +244,8 @@ export default function CheckoutBuilderPage() {
               <Label htmlFor="title">Page title</Label>
               <Input
                 id="title"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                value={config.title}
+                onChange={(e) => setField('title', e.target.value)}
               />
             </div>
 
@@ -148,8 +254,8 @@ export default function CheckoutBuilderPage() {
               <Textarea
                 id="description"
                 rows={3}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                value={config.description}
+                onChange={(e) => setField('description', e.target.value)}
               />
             </div>
 
@@ -157,8 +263,8 @@ export default function CheckoutBuilderPage() {
               <Label htmlFor="button-text">Button text</Label>
               <Input
                 id="button-text"
-                value={buttonText}
-                onChange={(e) => setButtonText(e.target.value)}
+                value={config.buttonText}
+                onChange={(e) => setField('buttonText', e.target.value)}
               />
             </div>
 
@@ -169,9 +275,9 @@ export default function CheckoutBuilderPage() {
                   <button
                     key={c.value}
                     type="button"
-                    onClick={() => setThemeColor(c.value)}
+                    onClick={() => setField('themeColor', c.value)}
                     className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-                      themeColor === c.value
+                      config.themeColor === c.value
                         ? 'border-emerald-500/50 bg-emerald-500/10'
                         : 'border-border hover:bg-muted/50'
                     }`}
@@ -251,7 +357,7 @@ export default function CheckoutBuilderPage() {
                   <div className="flex items-center gap-2">
                     <div
                       className="flex h-8 w-8 items-center justify-center rounded-lg text-white"
-                      style={{ backgroundColor: themeColor }}
+                      style={{ backgroundColor: config.themeColor }}
                     >
                       <Lock className="h-4 w-4" />
                     </div>
@@ -267,10 +373,10 @@ export default function CheckoutBuilderPage() {
                   </div>
 
                   <h3 className="mt-4 text-base font-semibold text-slate-900 dark:text-slate-100">
-                    {title || 'Pay for your order'}
+                    {config.title || 'Pay for your order'}
                   </h3>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    {description || '—'}
+                    {config.description || '—'}
                   </p>
 
                   <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900">
@@ -278,17 +384,17 @@ export default function CheckoutBuilderPage() {
                       Amount due
                     </div>
                     <div className="mt-0.5 text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-                      {fmt(Number(amount) || 0)}
+                      {fmt(Number(config.amount) || 0)}
                     </div>
                   </div>
 
                   <button
                     type="button"
                     className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90"
-                    style={{ backgroundColor: themeColor }}
+                    style={{ backgroundColor: config.themeColor }}
                   >
                     <CreditCard className="h-4 w-4" />
-                    {buttonText || 'Pay now'}
+                    {config.buttonText || 'Pay now'}
                   </button>
 
                   <div className="mt-4 flex items-center justify-center gap-1.5 text-[10px] text-slate-400 dark:text-slate-500">

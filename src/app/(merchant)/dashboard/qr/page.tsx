@@ -19,7 +19,16 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { QrCode, Plus, Trash2, Download } from 'lucide-react';
+import {
+  QrCode,
+  Plus,
+  Trash2,
+  Loader2,
+  Copy,
+  Check,
+  ExternalLink,
+} from 'lucide-react';
+import { toast } from 'sonner';
 
 type QrType = 'STATIC' | 'DYNAMIC' | 'CHECKOUT';
 
@@ -28,10 +37,12 @@ interface GeneratedQr {
   type: QrType;
   amount: number;
   reference: string;
+  url: string;
   payload: string;
-  createdAt: Date;
+  createdAt: string;
 }
 
+const QR_PAY_BASE_URL = 'https://payswap2.vercel.app/pay/';
 const QR_SIZE = 21;
 
 /** FNV-1a hash → 32-bit unsigned int. */
@@ -154,31 +165,78 @@ export default function QrPaymentsPage() {
   const [reference, setReference] = useState('');
   const [qr, setQr] = useState<GeneratedQr | null>(null);
   const [history, setHistory] = useState<GeneratedQr[]>([]);
+  const [generating, setGenerating] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const handleGenerate = () => {
-    const ref = reference.trim() || `QR-${Date.now().toString(36).toUpperCase()}`;
-    const amt = Number(amount) || 0;
-    const payload = `PAYSWAP|${type}|${amt.toFixed(2)}|${ref}|${Date.now()}`;
-    const created: GeneratedQr = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      type,
-      amount: amt,
-      reference: ref,
-      payload,
-      createdAt: new Date(),
-    };
-    setQr(created);
-    setHistory((h) => [created, ...h].slice(0, 12));
-  };
+  async function handleGenerate() {
+    setGenerating(true);
+    try {
+      const amt = type === 'DYNAMIC' ? 0 : Number(amount) || 0;
+      const ref =
+        reference.trim() ||
+        `QR-${Date.now().toString(36).toUpperCase()}`;
+
+      // Create a real Payment (status PENDING) — the Payment *is* the QR.
+      // Scanning the QR opens /pay/{paymentId}, which lets the customer pay.
+      const res = await fetch('/api/payments/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: amt > 0 ? amt : 1, // Payment requires amount > 0; dynamic QRs default to 1
+          currency: 'GHS',
+          method: 'QR_CODE',
+          description: `${TYPE_LABELS[type]} QR payment`,
+          customerName: 'QR Customer',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to create QR payment');
+      }
+
+      const paymentId: string = data.payment.id;
+      const url = `${QR_PAY_BASE_URL}${paymentId}`;
+      const payload = `${url}|${type}|${amt.toFixed(2)}|${ref}`;
+      const created: GeneratedQr = {
+        id: paymentId,
+        type,
+        amount: amt,
+        reference: ref,
+        url,
+        payload,
+        createdAt: new Date().toISOString(),
+      };
+      setQr(created);
+      setHistory((h) => [created, ...h].slice(0, 12));
+      toast.success('QR code generated');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to generate QR');
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   const handleDelete = (id: string) => {
     setHistory((h) => h.filter((x) => x.id !== id));
     if (qr?.id === id) setQr(null);
   };
 
+  async function handleCopyUrl(url: string, id: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 1800);
+      toast.success('Payment URL copied');
+    } catch {
+      toast.error('Could not copy URL');
+    }
+  }
+
   const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'GHS' }).format(n);
-  const fmtDate = (d: Date) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'GHS' }).format(
+      n,
+    );
+  const fmtDate = (d: string) =>
     new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
   const matrix = qr ? buildQrMatrix(qr.payload) : null;
@@ -254,9 +312,18 @@ export default function QrPaymentsPage() {
 
             <Button
               onClick={handleGenerate}
+              disabled={generating}
               className="w-full bg-emerald-600 text-white hover:bg-emerald-700"
             >
-              <Plus className="mr-2 h-4 w-4" /> Generate QR code
+              {generating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating…
+                </>
+              ) : (
+                <>
+                  <Plus className="mr-2 h-4 w-4" /> Generate QR code
+                </>
+              )}
             </Button>
           </CardContent>
         </Card>
@@ -287,15 +354,43 @@ export default function QrPaymentsPage() {
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-muted-foreground">Amount</span>
-                    <span className="font-semibold tabular-nums">{fmt(qr.amount)}</span>
+                    <span className="font-semibold tabular-nums">
+                      {qr.amount > 0 ? fmt(qr.amount) : 'Customer enters'}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-muted-foreground">Reference</span>
                     <span className="font-mono text-xs">{qr.reference}</span>
                   </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      Payment URL
+                    </span>
+                    <a
+                      href={qr.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-1 truncate font-mono text-[11px] text-emerald-600 hover:underline dark:text-emerald-400"
+                    >
+                      <ExternalLink className="h-3 w-3 shrink-0" />
+                      <span className="truncate">{qr.url}</span>
+                    </a>
+                  </div>
                 </div>
-                <Button variant="outline" className="w-full">
-                  <Download className="mr-2 h-4 w-4" /> Download PNG
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => handleCopyUrl(qr.url, qr.id)}
+                >
+                  {copiedId === qr.id ? (
+                    <>
+                      <Check className="mr-2 h-4 w-4 text-emerald-500" /> Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="mr-2 h-4 w-4" /> Copy URL
+                    </>
+                  )}
                 </Button>
               </div>
             ) : (
@@ -358,17 +453,33 @@ export default function QrPaymentsPage() {
                       {h.reference}
                     </div>
                     <div className="text-sm font-semibold tabular-nums">
-                      {fmt(h.amount)}
+                      {h.amount > 0 ? fmt(h.amount) : 'Customer enters'}
                     </div>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-rose-500"
-                    onClick={() => handleDelete(h.id)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-emerald-600"
+                      onClick={() => handleCopyUrl(h.url, h.id)}
+                      title="Copy URL"
+                    >
+                      {copiedId === h.id ? (
+                        <Check className="h-3.5 w-3.5 text-emerald-500" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-rose-500"
+                      onClick={() => handleDelete(h.id)}
+                      title="Remove from list"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

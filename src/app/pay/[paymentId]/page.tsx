@@ -2,6 +2,7 @@ import { db } from '@/lib/db';
 import { Card, CardContent } from '@/components/ui/card';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 import { CheckoutForm } from './checkout-form';
+import { PaymentLinkCheckoutForm } from './payment-link-checkout-form';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -9,10 +10,16 @@ export const dynamic = 'force-dynamic';
 /**
  * Hosted checkout page — `/pay/[paymentId]`.
  *
- * Server component that resolves the payment + merchant from the database and
- * hands them to the client-side `CheckoutForm`. Renders dedicated states for
- * missing and already-completed payments so the customer always lands on a
- * useful screen.
+ * Resolves the route param in two steps:
+ *
+ *   1. Try to find a `Payment` by ID — this is the original checkout flow.
+ *   2. If no Payment exists, try to find a `PaymentLink` by ID — payment links
+ *      share the same URL shape (`/pay/{paymentLinkId}`) and need a slightly
+ *      different UX (they create + complete a fresh Payment when "Pay Now" is
+ *      clicked).
+ *
+ * Renders dedicated states for missing and already-completed payments so the
+ * customer always lands on a useful screen.
  */
 export default async function HostedCheckoutPage({
   params,
@@ -26,8 +33,58 @@ export default async function HostedCheckoutPage({
     include: { merchant: true },
   });
 
-  // ─── 1. Payment not found ───────────────────────────────────────────────
+  // ─── Try a PaymentLink if no Payment matched ────────────────────────────
   if (!payment || !payment.merchant) {
+    const link = await db.paymentLink.findUnique({
+      where: { id: paymentId },
+      include: { merchant: true },
+    });
+
+    if (link && link.merchant && link.status === 'ACTIVE') {
+      // Honour the link's own expiry.
+      const expired =
+        link.expiresAt && new Date(link.expiresAt).getTime() < Date.now();
+
+      if (expired) {
+        return (
+          <div className="flex min-h-screen items-center justify-center bg-background p-4">
+            <Card className="w-full max-w-md">
+              <CardContent className="flex flex-col items-center gap-4 p-8 text-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-amber-500/10">
+                  <AlertCircle className="h-8 w-8 text-amber-500" />
+                </div>
+                <h1 className="text-lg font-semibold">Payment link expired</h1>
+                <p className="max-w-xs text-sm text-muted-foreground">
+                  This payment link is no longer accepting payments. Please
+                  contact the merchant for a new link.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        );
+      }
+
+      return (
+        <PaymentLinkCheckoutForm
+          link={{
+            id: link.id,
+            amount: link.amount,
+            currency: link.currency,
+            description: link.description,
+            reference: link.reference,
+          }}
+          merchant={{
+            id: link.merchant.id,
+            name: link.merchant.name,
+            email: link.merchant.email,
+            logoUrl: link.merchant.logoUrl,
+            country: link.merchant.country,
+          }}
+        />
+      );
+    }
+
+    // ─── Neither Payment nor PaymentLink found ───────────────────────────
     return (
       <div className="flex min-h-screen items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md">

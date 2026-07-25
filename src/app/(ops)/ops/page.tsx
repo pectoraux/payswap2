@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -9,6 +10,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -23,15 +25,20 @@ import {
   EmptyState,
   PageHeader,
   fmtNumber,
+  fmtDate,
 } from '@/components/role-ui';
 import {
   HeartPulse,
   Plug,
-  Activity,
   Gauge,
   Cpu,
   MemoryStick,
   Clock,
+  ArrowRight,
+  FlaskConical,
+  Users,
+  CreditCard,
+  Zap,
 } from 'lucide-react';
 import { productionConnectorRegistry } from '@/protocol/connectors-v2/registry';
 import { metricsRegistry } from '@/protocol/ops/metrics';
@@ -68,53 +75,106 @@ export default async function OpsOverviewPage() {
   const sloStatuses = sloManager.evaluate(metricsRegistry);
   const onTrack = sloStatuses.filter((s) => s.onTrack).length;
 
-  // Recent events (proxy: payments created in last hour)
-  const since = new Date(Date.now() - 3600 * 1000);
-  const eventCount = await db.payment.count({ where: { createdAt: { gte: since } } });
+  // Real platform metrics from the DB
+  const [totalEvents, totalPayments, totalUsers, recentSimRuns, recentEventRate] =
+    await Promise.all([
+      db.eventRecord.count(),
+      db.payment.count(),
+      db.user.count({ where: { deletedAt: null } }),
+      db.simulationRun.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      db.payment.count({
+        where: { createdAt: { gte: new Date(Date.now() - 3600 * 1000) } },
+      }),
+    ]);
+
+  const systemHealthPct =
+    connectors.length > 0
+      ? Math.round((healthyCount / connectors.length) * 100)
+      : 100;
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Operations overview"
         description="System health, connector status and SLO posture."
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link href="/ops/connectors">
+                <Plug className="h-4 w-4" />
+                Connectors
+              </Link>
+            </Button>
+            <Button asChild size="sm" className="bg-emerald-600 text-white hover:bg-emerald-700">
+              <Link href="/ops/health">
+                <HeartPulse className="h-4 w-4" />
+                System health
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            </Button>
+          </div>
+        }
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
-          label="System health"
-          value={`${Math.round((healthyCount / Math.max(1, connectors.length)) * 100)}%`}
-          hint={`${healthyCount}/${connectors.length} connectors healthy`}
-          icon={<HeartPulse className="h-4 w-4" />}
-          tone={healthyCount === connectors.length ? 'emerald' : 'amber'}
+          label="Uptime"
+          value={formatUptime(uptimeSec)}
+          hint={`Node ${process.version}`}
+          icon={<Clock className="h-4 w-4" />}
+          tone="emerald"
         />
         <KpiCard
-          label="Connectors"
-          value={connectors.length.toString()}
-          hint="Registered"
-          icon={<Plug className="h-4 w-4" />}
+          label="Total events"
+          value={totalEvents.toLocaleString()}
+          hint={`${recentEventRate.toLocaleString()} in last hour`}
+          icon={<Zap className="h-4 w-4" />}
           tone="teal"
         />
         <KpiCard
-          label="Events (1h)"
-          value={eventCount.toLocaleString()}
-          hint="Payments in last hour"
-          icon={<Activity className="h-4 w-4" />}
+          label="Total payments"
+          value={totalPayments.toLocaleString()}
+          hint="All-time"
+          icon={<CreditCard className="h-4 w-4" />}
           tone="cyan"
         />
         <KpiCard
-          label="SLOs on track"
-          value={`${onTrack}/${sloStatuses.length}`}
-          hint="Error budget"
-          icon={<Gauge className="h-4 w-4" />}
-          tone={onTrack === sloStatuses.length ? 'emerald' : 'rose'}
+          label="Users"
+          value={totalUsers.toLocaleString()}
+          hint="Active accounts"
+          icon={<Users className="h-4 w-4" />}
+          tone="amber"
         />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle className="text-base">System health</CardTitle>
-            <CardDescription>Process resource usage</CardDescription>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-base">System health</CardTitle>
+                <CardDescription>Process resource usage</CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <StatusBadge
+                  status={
+                    systemHealthPct === 100
+                      ? 'HEALTHY'
+                      : systemHealthPct >= 80
+                      ? 'DEGRADED'
+                      : 'CRITICAL'
+                  }
+                />
+                <Button asChild variant="ghost" size="sm" className="-mr-2 text-emerald-600 dark:text-emerald-400">
+                  <Link href="/ops/health">
+                    Detail <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                  </Link>
+                </Button>
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-3">
@@ -167,8 +227,17 @@ export default async function OpsOverviewPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Connector status</CardTitle>
-            <CardDescription>Live health probes</CardDescription>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-base">Connector status</CardTitle>
+                <CardDescription>Live health probes</CardDescription>
+              </div>
+              <Button asChild variant="ghost" size="sm" className="-mr-2 text-emerald-600 dark:text-emerald-400">
+                <Link href="/ops/connectors">
+                  All <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                </Link>
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             {connectors.length === 0 ? (
@@ -204,58 +273,130 @@ export default async function OpsOverviewPage() {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">SLO status</CardTitle>
-          <CardDescription>Error budget posture</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {sloStatuses.length === 0 ? (
-            <EmptyState
-              icon={<Gauge className="h-6 w-6" />}
-              title="No SLOs registered"
-              description="SLOs will appear here once the operations runtime registers them."
-            />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>SLO</TableHead>
-                  <TableHead>Target</TableHead>
-                  <TableHead className="text-right">Good</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                  <TableHead className="text-right">Success</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-base">Recent simulation runs</CardTitle>
+                <CardDescription>
+                  Latest deterministic kernel simulations across scenarios
+                </CardDescription>
+              </div>
+              <Button asChild variant="ghost" size="sm" className="-mr-2 text-emerald-600 dark:text-emerald-400">
+                <Link href="/ops/metrics">
+                  Metrics <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                </Link>
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {recentSimRuns.length === 0 ? (
+              <EmptyState
+                icon={<FlaskConical className="h-6 w-6" />}
+                title="No simulation runs"
+                description="Deterministic kernel simulations will be recorded here as the ops harness exercises the platform."
+              />
+            ) : (
+              <div className="max-h-80 overflow-y-auto pr-1">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Scenario</TableHead>
+                      <TableHead>Result</TableHead>
+                      <TableHead className="text-right">Cost</TableHead>
+                      <TableHead className="text-right">Risk</TableHead>
+                      <TableHead className="text-right">Conf.</TableHead>
+                      <TableHead className="text-right">Latency</TableHead>
+                      <TableHead>When</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {recentSimRuns.map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell>
+                          <div className="text-xs font-semibold">{r.scenarioName}</div>
+                          <div className="font-mono text-[10px] text-muted-foreground">
+                            {r.runId.slice(0, 12)} · v{r.kernelVersion}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <StatusBadge status={r.settled ? 'SETTLED' : r.result.toUpperCase()} />
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {fmtNumber(r.costPercent, 2)}%
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {fmtNumber(r.riskScore, 2)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {fmtNumber(r.confidence, 2)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {fmtNumber(r.settlementMs, 0)} ms
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {fmtDate(r.createdAt)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">SLO status</CardTitle>
+            <CardDescription>
+              {onTrack}/{sloStatuses.length} on track
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {sloStatuses.length === 0 ? (
+              <EmptyState
+                icon={<Gauge className="h-6 w-6" />}
+                title="No SLOs registered"
+                description="SLOs will appear here once the operations runtime registers them."
+              />
+            ) : (
+              <div className="space-y-3">
                 {sloStatuses.map((s) => {
                   const successPct = s.successRate * 100;
+                  const tone =
+                    s.onTrack
+                      ? 'bg-emerald-500'
+                      : 'bg-rose-500';
                   return (
-                    <TableRow key={s.slo.id}>
-                      <TableCell>
-                        <div className="text-sm font-semibold">{s.slo.name}</div>
-                        <div className="text-[10px] text-muted-foreground">{s.slo.id}</div>
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums">
-                        {(s.slo.target * 100).toFixed(2)}%
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{s.goodCount}</TableCell>
-                      <TableCell className="text-right tabular-nums">{s.totalCount}</TableCell>
-                      <TableCell className="text-right font-semibold tabular-nums">
-                        {fmtNumber(successPct, 2)}%
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={s.onTrack ? 'HEALTHY' : 'CRITICAL'} />
-                      </TableCell>
-                    </TableRow>
+                    <div key={s.slo.id} className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-medium">{s.slo.name}</span>
+                        <span className="tabular-nums">
+                          {fmtNumber(successPct, 2)}%
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={`h-full rounded-full ${tone}`}
+                          style={{ width: `${Math.min(100, successPct)}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                        <span>target {fmtNumber(s.slo.target * 100, 2)}%</span>
+                        <span>
+                          {s.goodCount}/{s.totalCount} good
+                        </span>
+                      </div>
+                    </div>
                   );
                 })}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

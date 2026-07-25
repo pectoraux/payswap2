@@ -47,6 +47,8 @@ export async function POST() {
       netAmount: Math.round(amount * 0.985 * 100) / 100,
       fxRate: 1,
       settledAt: new Date(),
+      // Simulations are always sandbox traffic — never touch live ledgers.
+      environment: 'sandbox',
     },
   });
 

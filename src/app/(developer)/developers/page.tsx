@@ -26,6 +26,38 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+// Real, same-origin API endpoints exposed by this codebase. These double as
+// the canonical "what do I call?" reference — keep them in sync with
+// `src/app/api/*`.
+interface EndpointRef {
+  method: 'POST' | 'GET';
+  path: string;
+  description: string;
+}
+
+const ENDPOINTS: EndpointRef[] = [
+  {
+    method: 'POST',
+    path: '/api/payments/create',
+    description: 'Create a payment intent for a customer.',
+  },
+  {
+    method: 'POST',
+    path: '/api/payouts/create',
+    description: 'Request a payout to a bank or mobile money account.',
+  },
+  {
+    method: 'GET',
+    path: '/api/activity',
+    description: 'Unified activity feed (payments, payouts, refunds, webhooks).',
+  },
+  {
+    method: 'POST',
+    path: '/api/webhooks/create',
+    description: 'Register a webhook endpoint to receive event deliveries.',
+  },
+];
+
 // Examples below target the real, same-origin PaySwap API paths the explorer
 // hits — they double as the canonical "how do I call this?" snippet.
 const curlExample = `# Create a 1,000 GHS mobile-money payment
@@ -64,6 +96,7 @@ const payswap = new PaySwap({
 });
 
 // Create a 1,000 GHS mobile-money payment
+// → POST /api/payments/create
 const { payment } = await payswap.payments.create({
   amount: 1000,
   currency: 'GHS',
@@ -76,7 +109,25 @@ const { payment } = await payswap.payments.create({
 console.log(payment.reference, payment.status); // PAY-2C8F1A9E PENDING
 
 // Fetch a unified activity feed (payments, payouts, refunds, webhooks)
-const { items } = await payswap.activity.list({ limit: 10 });`;
+// → GET /api/activity
+const { items } = await payswap.activity.list({ limit: 10 });
+
+// Request a payout to a mobile money account
+// → POST /api/payouts/create
+const { payout } = await payswap.payouts.create({
+  method: 'mobile_money',
+  sourceAmount: 500,
+  sourceCurrency: 'GHS',
+  destinationCurrency: 'GHS',
+  destination: '+233241234567',
+});
+
+// Register a webhook endpoint to receive events
+// → POST /api/webhooks/create
+const { endpoint } = await payswap.webhooks.create({
+  url: 'https://example.com/webhooks/payswap',
+  events: ['payment.completed', 'payout.completed'],
+});`;
 
 const webhookExample = `// Verify an incoming webhook (Node / Express)
 import { createHmac } from 'crypto';
@@ -231,18 +282,60 @@ export default async function DeveloperOverviewPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base">API keys</CardTitle>
-              <Button asChild variant="ghost" size="sm" className="-mr-2 text-emerald-600 dark:text-emerald-400">
-                <Link href="/dashboard/settings/api-keys">
-                  Manage <ArrowRight className="ml-1 h-3.5 w-3.5" />
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Common endpoints</CardTitle>
+              <CardDescription>
+                Real API paths exposed by this server
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {ENDPOINTS.map((e) => (
+                <div
+                  key={e.path + e.method}
+                  className="rounded-lg border bg-card/50 p-3"
+                >
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant="secondary"
+                      className={`shrink-0 font-mono text-[10px] ${
+                        e.method === 'GET'
+                          ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                          : 'bg-teal-500/15 text-teal-600 dark:text-teal-400'
+                      }`}
+                    >
+                      {e.method}
+                    </Badge>
+                    <code className="truncate font-mono text-[11px] font-semibold">
+                      {e.path}
+                    </code>
+                  </div>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {e.description}
+                  </p>
+                </div>
+              ))}
+              <Button asChild variant="outline" size="sm" className="mt-1 w-full">
+                <Link href="/developers/docs">
+                  Full reference <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
                 </Link>
               </Button>
-            </div>
-            <CardDescription>Authenticate every API request</CardDescription>
-          </CardHeader>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">API keys</CardTitle>
+                <Button asChild variant="ghost" size="sm" className="-mr-2 text-emerald-600 dark:text-emerald-400">
+                  <Link href="/dashboard/settings/api-keys">
+                    Manage <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                  </Link>
+                </Button>
+              </div>
+              <CardDescription>Authenticate every API request</CardDescription>
+            </CardHeader>
           <CardContent className="space-y-3">
             {apiKeys.length === 0 ? (
               <div className="rounded-lg border border-dashed p-4 text-xs text-muted-foreground">
@@ -289,6 +382,7 @@ export default async function DeveloperOverviewPage() {
             </div>
           </CardContent>
         </Card>
+        </div>
       </div>
     </div>
   );
