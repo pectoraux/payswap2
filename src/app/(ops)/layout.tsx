@@ -1,32 +1,10 @@
 import { redirect } from 'next/navigation';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { RoleShell, type NavGroup } from '@/components/role-shell';
-import {
-  LayoutDashboard,
-  HeartPulse,
-  Plug,
-  BarChart3,
-} from 'lucide-react';
+import { RoleShell } from '@/components/role-shell';
+import { opsNav } from '@/lib/nav-config';
 
 export const dynamic = 'force-dynamic';
-
-const navGroups: NavGroup[] = [
-  {
-    label: 'Overview',
-    items: [
-      { label: 'Overview', href: '/ops', icon: <LayoutDashboard className="h-4 w-4" /> },
-    ],
-  },
-  {
-    label: 'Operations',
-    items: [
-      { label: 'Health', href: '/ops/health', icon: <HeartPulse className="h-4 w-4" /> },
-      { label: 'Connectors', href: '/ops/connectors', icon: <Plug className="h-4 w-4" /> },
-      { label: 'Metrics', href: '/ops/metrics', icon: <BarChart3 className="h-4 w-4" /> },
-    ],
-  },
-];
 
 export default async function OpsLayout({ children }: { children: React.ReactNode }) {
   const session = await getServerSession(authOptions);
@@ -36,7 +14,12 @@ export default async function OpsLayout({ children }: { children: React.ReactNod
     redirect('/unauthorized');
   }
   return (
-    <RoleShell roleLabel="Operations" navGroups={navGroups} basePath="/ops">
+    <RoleShell
+      roleLabel="Operations"
+      navGroups={opsNav}
+      basePath="/ops"
+      currentRole="OPERATIONS"
+    >
       {children}
     </RoleShell>
   );

@@ -1,32 +1,10 @@
 import { redirect } from 'next/navigation';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { RoleShell, type NavGroup } from '@/components/role-shell';
-import {
-  LayoutDashboard,
-  Vault,
-  Route,
-  FileBarChart,
-} from 'lucide-react';
+import { RoleShell } from '@/components/role-shell';
+import { treasuryNav } from '@/lib/nav-config';
 
 export const dynamic = 'force-dynamic';
-
-const navGroups: NavGroup[] = [
-  {
-    label: 'Overview',
-    items: [
-      { label: 'Overview', href: '/treasury', icon: <LayoutDashboard className="h-4 w-4" /> },
-    ],
-  },
-  {
-    label: 'Treasury',
-    items: [
-      { label: 'Reserves', href: '/treasury/reserves', icon: <Vault className="h-4 w-4" /> },
-      { label: 'Corridors', href: '/treasury/corridors', icon: <Route className="h-4 w-4" /> },
-      { label: 'Reports', href: '/treasury/reports', icon: <FileBarChart className="h-4 w-4" /> },
-    ],
-  },
-];
 
 export default async function TreasuryLayout({ children }: { children: React.ReactNode }) {
   const session = await getServerSession(authOptions);
@@ -36,7 +14,12 @@ export default async function TreasuryLayout({ children }: { children: React.Rea
     redirect('/unauthorized');
   }
   return (
-    <RoleShell roleLabel="Treasury" navGroups={navGroups} basePath="/treasury">
+    <RoleShell
+      roleLabel="Treasury"
+      navGroups={treasuryNav}
+      basePath="/treasury"
+      currentRole="TREASURY"
+    >
       {children}
     </RoleShell>
   );
