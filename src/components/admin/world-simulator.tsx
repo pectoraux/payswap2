@@ -10,8 +10,17 @@ import { toast } from 'sonner';
 import {
   Globe, Play, Loader2, CheckCircle2, AlertTriangle,
   TrendingUp, CreditCard, ArrowDownToLine, FileText, Webhook,
-  Shield, BarChart3, Database,
+  Shield, BarChart3, Database, RefreshCcw,
 } from 'lucide-react';
+
+interface WorldEvent {
+  ts: number;
+  actor: string;
+  action: string;
+  description: string;
+  resourceType?: string;
+  resourceId?: string;
+}
 
 interface SimResult {
   runId: string;
@@ -29,6 +38,7 @@ interface SimResult {
   totalVolume: number;
   errors: string[];
   duration_ms: number;
+  events: WorldEvent[];
 }
 
 const scenarios = [
@@ -196,6 +206,35 @@ export function WorldSimulator() {
                 Analytics · Reports · Audit Trail · Webhook Logs
               </p>
             </div>
+
+            {/* World Event Timeline */}
+            {result.events && result.events.length > 0 && (
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">World Event Timeline</div>
+                <div className="max-h-64 overflow-y-auto rounded-lg border bg-muted/20 p-2 space-y-1">
+                  {result.events.slice(0, 30).map((evt, i) => (
+                    <div key={i} className="flex items-start gap-2 text-[11px] py-1 border-b border-border/30 last:border-0">
+                      <span className="font-mono text-[10px] text-muted-foreground shrink-0 w-16">
+                        {new Date(evt.ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <span className="shrink-0">
+                        {evt.action === 'payment' && <CreditCard className="h-3 w-3 text-emerald-500" />}
+                        {evt.action === 'refund' && <RefreshCcw className="h-3 w-3 text-amber-500" />}
+                        {evt.action === 'payout' && <ArrowDownToLine className="h-3 w-3 text-teal-500" />}
+                        {evt.action === 'invoice' && <FileText className="h-3 w-3 text-sky-500" />}
+                        {evt.action === 'aml_alert' && <Shield className="h-3 w-3 text-rose-500" />}
+                      </span>
+                      <span className="flex-1 min-w-0 text-muted-foreground">{evt.description}</span>
+                    </div>
+                  ))}
+                  {result.events.length > 30 && (
+                    <div className="text-[10px] text-muted-foreground text-center pt-1">
+                      ...and {result.events.length - 30} more events
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Errors */}
             {result.errors.length > 0 && (
