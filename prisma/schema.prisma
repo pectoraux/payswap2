@@ -34,6 +34,9 @@ model User {
   sessions        Session[]
   auditLogs       AuditLog[]
   teamMemberships TeamMember[]
+  organizationMembers OrganizationMember[]
+  loginHistory    LoginHistory[]
+  deviceSessions  DeviceSession[]
 
   @@index([status])
 }
@@ -623,4 +626,83 @@ model EventRecord {
 
   @@index([type])
   @@index([seq])
+}
+
+// ═══════ ORGANIZATIONS ═══════
+
+model Organization {
+  id              String   @id @default(cuid())
+  name            String
+  slug            String   @unique
+  type            String   @default("merchant") // merchant, lp, platform, developer
+  status          String   @default("active") // active, suspended, closed
+  logoUrl         String?
+  billingEmail    String?
+  taxId           String?
+  address         String?
+  country         String?
+  currency        String   @default("GHS")
+  plan            String   @default("starter") // starter, growth, scale, enterprise
+  settings        String?  // JSON
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  members         OrganizationMember[]
+
+  @@index([status])
+  @@index([type])
+}
+
+model OrganizationMember {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  role            String   @default("member") // owner, admin, developer, analyst, viewer, support, finance
+  status          String   @default("active") // pending, active, suspended
+  permissions     String?  // JSON array of granular permissions
+  invitedAt       DateTime @default(now())
+  joinedAt        DateTime?
+  invitedBy       String?
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+}
+
+model LoginHistory {
+  id              String   @id @default(cuid())
+  userId          String
+  ip              String?
+  userAgent       String?
+  success         Boolean  @default(true)
+  failureReason   String?
+  location        String?
+  createdAt       DateTime @default(now())
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model DeviceSession {
+  id              String   @id @default(cuid())
+  userId          String
+  deviceName      String?
+  deviceType      String?  // desktop, mobile, tablet
+  browser         String?
+  os              String?
+  ip              String?
+  lastActiveAt    DateTime @default(now())
+  trusted         Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  revokedAt       DateTime?
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

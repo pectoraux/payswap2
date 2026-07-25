@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { RoleSwitcher } from '@/components/role-switcher';
 import { EnvSwitcher } from '@/components/env-switcher';
+import { OrgSwitcher, type OrgOption } from '@/components/org-switcher';
 import { CommandPalette } from '@/components/command-palette';
 import type { NavGroup } from '@/lib/nav-config';
 import { cn } from '@/lib/utils';
@@ -31,6 +32,8 @@ export interface UnifiedShellProps {
    * Defaults to the first nav item href.
    */
   basePath?: string;
+  /** Optional organizations for the workspace switcher */
+  organizations?: OrgOption[];
   /**
    * The role key (e.g. "MERCHANT", "ADMIN") used by the role switcher to
    * highlight the currently-active role. Optional — if omitted, the switcher
@@ -128,6 +131,13 @@ export function UnifiedShell({
             <X className="h-4 w-4" />
           </Button>
         </div>
+
+        {/* Workspace switcher (organizations) */}
+        {organizations && organizations.length > 0 && (
+          <div className="border-b px-2 py-2">
+            <OrgSwitcher organizations={organizations} />
+          </div>
+        )}
 
         {/* Switcher row — role + sandbox/live toggle */}
         <div className="flex items-center gap-2 border-b px-3 py-2.5">
