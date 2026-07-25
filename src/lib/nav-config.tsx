@@ -206,6 +206,7 @@ export const lpNav: NavGroup[] = [
     label: 'Liquidity',
     items: [
       { label: 'Positions', href: '/lp/positions', icon: <Briefcase className="h-4 w-4" /> },
+      { label: 'Corridors', href: '/lp/corridors', icon: <Route className="h-4 w-4" /> },
       { label: 'Settlements', href: '/lp/settlements', icon: <ArrowLeftRight className="h-4 w-4" /> },
       { label: 'Profitability', href: '/lp/profitability', icon: <TrendingUp className="h-4 w-4" /> },
     ],

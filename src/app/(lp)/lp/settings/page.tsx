@@ -18,11 +18,40 @@ import {
   Star,
   ShieldCheck,
   CalendarDays,
+  Lock,
 } from 'lucide-react';
+import { LpSettingsForm, type LpSettingsData } from '@/components/lp/lp-settings-form';
 
 export const dynamic = 'force-dynamic';
 
-function Field({
+function parseList(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseMap(raw: string | null | undefined): Record<string, number> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const out: Record<string, number> = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+      }
+      return out;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function ReadOnlyField({
   icon,
   label,
   value,
@@ -60,14 +89,32 @@ export default async function LpSettingsPage() {
   const lp = account?.lpProfile ?? null;
   const user = userId ? await db.user.findUnique({ where: { id: userId } }) : null;
 
+  const lpData: LpSettingsData | null = lp
+    ? {
+        id: lp.id,
+        name: lp.name,
+        country: lp.country,
+        currencies: parseList(lp.currencies),
+        tier: lp.tier,
+        stake: lp.stake,
+        collateral: lp.collateral,
+        available: Math.max(0, lp.stake - lp.collateral),
+        capacity: parseMap(lp.capacity),
+        feeBps: parseMap(lp.feeBps),
+        settlementSpeedMs: lp.settlementSpeedMs,
+        reputation: lp.reputation,
+        status: lp.status,
+      }
+    : null;
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Settings"
-        description="Liquidity provider profile and contact information."
+        description="Manage your fee configuration, settlement preferences, and per-corridor capacity."
       />
 
-      {!lp ? (
+      {!lpData ? (
         <Card>
           <CardContent>
             <EmptyState
@@ -79,63 +126,45 @@ export default async function LpSettingsPage() {
         </Card>
       ) : (
         <div className="grid gap-6 lg:grid-cols-3">
-          <Card className="lg:col-span-2">
-            <CardHeader>
-              <CardTitle className="text-base">LP profile</CardTitle>
-              <CardDescription>Public information used for routing decisions.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field icon={<User className="h-4 w-4" />} label="Name" value={lp.name} />
-                <Field icon={<Globe className="h-4 w-4" />} label="Country" value={lp.country} />
-                <Field
-                  icon={<Coins className="h-4 w-4" />}
-                  label="Currencies"
-                  value={
-                    (() => {
-                      try {
-                        const parsed = JSON.parse(lp.currencies);
-                        return Array.isArray(parsed) ? parsed.join(', ') : lp.currencies;
-                      } catch {
-                        return lp.currencies;
-                      }
-                    })()
-                  }
-                />
-                <Field
-                  icon={<Star className="h-4 w-4" />}
-                  label="Reputation"
-                  value={lp.reputation.toFixed(2)}
-                />
-                <Field
-                  icon={<ShieldCheck className="h-4 w-4" />}
-                  label="Collateral"
-                  value={`${lp.collateral.toLocaleString('en-US')} USD`}
-                />
-                <Field
-                  icon={<Coins className="h-4 w-4" />}
-                  label="Stake"
-                  value={`${lp.stake.toLocaleString('en-US')} USD`}
-                />
-                <Field
-                  icon={<CalendarDays className="h-4 w-4" />}
-                  label="Joined"
-                  value={new Date(lp.createdAt).toLocaleDateString('en-US', {
-                    year: 'numeric',
-                    month: 'short',
-                    day: 'numeric',
-                  })}
-                />
-                <Field
-                  icon={<CalendarDays className="h-4 w-4" />}
-                  label="Updated"
-                  value={fmtDate(lp.updatedAt)}
-                />
-              </div>
-            </CardContent>
-          </Card>
+          {/* Editable settings form */}
+          <div className="space-y-6 lg:col-span-2">
+            <LpSettingsForm lp={lpData} />
+          </div>
 
+          {/* Read-only sidebar */}
           <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">LP profile</CardTitle>
+                <CardDescription>Public information used for routing decisions.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <ReadOnlyField icon={<User className="h-4 w-4" />} label="Name" value={lpData.name} />
+                  <ReadOnlyField icon={<Globe className="h-4 w-4" />} label="Country" value={lpData.country} />
+                  <ReadOnlyField
+                    icon={<Coins className="h-4 w-4" />}
+                    label="Currencies"
+                    value={lpData.currencies.length ? lpData.currencies.join(', ') : '—'}
+                  />
+                  <ReadOnlyField
+                    icon={<CalendarDays className="h-4 w-4" />}
+                    label="Joined"
+                    value={new Date(lp!.createdAt).toLocaleDateString('en-US', {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                    })}
+                  />
+                  <ReadOnlyField
+                    icon={<CalendarDays className="h-4 w-4" />}
+                    label="Updated"
+                    value={fmtDate(lp!.updatedAt)}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Account status</CardTitle>
@@ -145,13 +174,21 @@ export default async function LpSettingsPage() {
                   <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Tier
                   </span>
-                  <StatusBadge status={lp.tier} />
+                  <StatusBadge status={lpData.tier} />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Status
                   </span>
-                  <StatusBadge status={lp.status} />
+                  <StatusBadge status={lpData.status} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    <ShieldCheck className="h-3.5 w-3.5" /> Collateral
+                  </span>
+                  <span className="text-sm font-semibold tabular-nums">
+                    {lpData.collateral.toLocaleString('en-US', { maximumFractionDigits: 0 })} USD
+                  </span>
                 </div>
                 {user && (
                   <div className="flex items-center justify-between">
@@ -164,13 +201,28 @@ export default async function LpSettingsPage() {
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="border-amber-500/20 bg-amber-500/[0.02]">
               <CardHeader>
-                <CardTitle className="text-base">Need changes?</CardTitle>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  Reputation (read-only)
+                </CardTitle>
+                <CardDescription>
+                  Computed by the protocol from settlement outcomes.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="text-xs text-muted-foreground">
-                Profile changes (stake, collateral, capacity) are managed by the treasury
-                team. Reach out via your operator channel to request an update.
+              <CardContent className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Star className="h-4 w-4 text-amber-500" />
+                  <span className="text-2xl font-bold tabular-nums">
+                    {lpData.reputation.toFixed(2)}
+                  </span>
+                  <span className="text-xs text-muted-foreground">/ 1.00</span>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Reputation cannot be edited manually. It updates automatically as
+                  you settle payments and is used by the router when selecting LPs.
+                </p>
               </CardContent>
             </Card>
           </div>

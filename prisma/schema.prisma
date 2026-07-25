@@ -198,19 +198,21 @@ model CustomerRecord {
 }
 
 model LPProfile {
-  id          String   @id @default(cuid())
-  accountId   String   @unique
-  name        String
-  country     String
-  currencies  String
-  tier        String   @default("verified")
-  stake       Float    @default(0)
-  collateral  Float    @default(0)
-  capacity    String?
-  reputation  Float    @default(0.5)
-  status      String   @default("pending")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  accountId          String   @unique
+  name               String
+  country            String
+  currencies         String
+  tier               String   @default("verified")
+  stake              Float    @default(0)
+  collateral         Float    @default(0)
+  capacity           String?
+  feeBps             String?  // JSON map: { "GHS→KES": 50, "KES→UGX": 75 }
+  settlementSpeedMs  Int      @default(2000)
+  reputation         Float    @default(0.5)
+  status             String   @default("pending")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   account Account @relation(fields: [accountId], references: [id])
 
