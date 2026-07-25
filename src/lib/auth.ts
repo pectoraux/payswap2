@@ -1,6 +1,7 @@
 import type { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { db } from '@/lib/db';
+import { ensureDbInitialized } from '@/lib/db-init';
 import bcrypt from 'bcryptjs';
 
 export const authOptions: NextAuthOptions = {
@@ -13,6 +14,8 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null;
+        // Ensure DB is initialized (creates + seeds on first cold start in serverless)
+        await ensureDbInitialized();
         const user = await db.user.findUnique({
           where: { email: credentials.email.toLowerCase() },
           include: { roles: true },
