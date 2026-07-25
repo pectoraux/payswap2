@@ -116,16 +116,16 @@ function FrameDetail({ frame, currency }: { frame: ReplayFrame; currency: Curren
   }
   if (frame.type === 'events' && frame.events) {
     return (
-      <ScrollArea className="max-h-56">
+      <div className="max-h-64 overflow-y-auto rounded-md border border-border/40 p-2">
         <div className="space-y-1">
           {frame.events.map((e) => (
             <div key={e.id} className="flex items-center gap-2 rounded border border-border/60 bg-background/40 px-2 py-1 font-mono text-[10px]">
-              <Badge variant="outline" className="bg-violet-500/10 text-[9px] text-violet-600 dark:text-violet-400">{e.type}</Badge>
-              <span className="truncate text-muted-foreground">{JSON.stringify(e.payload)}</span>
+              <Badge variant="outline" className="bg-violet-500/10 text-[9px] text-violet-600 dark:text-violet-400 shrink-0">{e.type}</Badge>
+              <span className="truncate text-muted-foreground min-w-0 flex-1">{JSON.stringify(e.payload)}</span>
             </div>
           ))}
         </div>
-      </ScrollArea>
+      </div>
     );
   }
   if ((frame.type === 'mint' || frame.type === 'burn') && frame.twinToken) {
