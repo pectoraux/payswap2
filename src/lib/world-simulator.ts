@@ -233,7 +233,7 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
       const payment = await db.payment.create({
         data: {
           merchantId: merchant.id,
-          customerId: customerRecord.id,
+          customerId: null,
           amount: roundedAmount,
           currency: merchant.currency,
           sourceCurrency: merchant.currency,
