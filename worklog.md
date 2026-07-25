@@ -996,3 +996,33 @@ Stage Summary:
 - 4 new API endpoints for persistence management
 - Kernel: 1 non-breaking fix (globalThis singleton for eventEngine — same pattern as db.ts)
 - Protocol files: ~25 rebuilt + 4 new persistence = ~29 files
+
+---
+Task ID: PRODUCTION-5 (Module Rebuild + Bug Fix + Infrastructure Wiring)
+Agent: main (Z.ai Code)
+Task: Fix ledger projection bug, rebuild 3 critical PRODUCTION-3 modules (connectors-v2, ops, resilience), wire into API endpoints + Infra tab.
+
+Work Log:
+- Fixed ledger projection currency mismatch: twin-token events used different currencies for the two legs (assetCode vs fiat), causing createJournalEntry to throw "unbalanced". Fix: use fiat currency for both legs (1:1 peg). Trial balance now balances.
+- Rebuilt connectors-v2/ (16 files): production connectors with retry, idempotency, rate limiting, signed evidence, health monitoring, audit logging. 5 connectors: Open Banking, M-Pesa, FX Rate, Stellar Horizon, Ethereum RPC.
+- Rebuilt ops/ (5 files): Prometheus metrics registry (7 pre-registered metrics), alert manager (3 rules), SLO manager (3 SLOs), dashboard aggregators.
+- Rebuilt resilience/ (6 files): circuit breakers (6 pre-registered), dedup store, dead-letter queue, event replay determinism, health check aggregator.
+- Added 2 new API endpoints: /api/ops/overview, /api/ops/metrics (Prometheus format)
+- Updated /api/resilience/health to use real healthCheck() from resilience module
+- All 7 infra endpoints return 200
+
+Verification:
+- Trial balance: BALANCED (DR=153,000 CR=153,000, 13 journals, 26 legs, 4 active accounts)
+- Persistence: 39+ events persisted, durability=persistent, events survive restart
+- Ops overview: 3 SLOs tracked, 0 active alerts
+- Metrics: Prometheus text format working
+- Browser: all 7 tabs render, no errors
+- Lint: clean
+- Kernel: unchanged
+
+Stage Summary:
+- 3 critical PRODUCTION-3 modules rebuilt (27 new files)
+- 2 new API endpoints
+- 1 critical bug fix (ledger projection currency mismatch)
+- Total protocol files: ~60+ (core merchant + ledger + persistence + connectors-v2 + ops + resilience)
+- Kernel changes: 0 (event.ts globalThis fix from PRODUCTION-4 is the only kernel touch)
