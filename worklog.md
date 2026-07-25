@@ -1749,3 +1749,34 @@ Stage Summary:
   - Examples: `developer/examples/{checkout-integration,webhook-handler,recurring-billing}/README.md` (3 files, ~1400 LOC).
 - Files modified: 0 (only `worklog.md` for this append). Kernel: 0. Total new LOC: ~6,900 (code) + ~3,600 (docs/markdown).
 - All verification gates pass: lint 0 errors, kernel untouched, runtime smoke tests all green.
+
+---
+Task ID: PRODUCTION-4 (Financial Institution Readiness — COMPLETE)
+Agent: main (Z.ai Code)
+Task: Transform PaySwap from a payment application into a production financial network. 10 workstreams, all protocol-layer, kernel frozen.
+
+Work Log:
+- Wave 1 (parallel): 4-A Real Stellar SDK integration (stellar-sdk installed, mode-switchable adapter); 4-B Compliance framework (13 files: KYC/KYB/AML/sanctions/PEP/travel-rule/risk/cases/SAR)
+- Wave 2 (parallel): 4-C Production wallet infrastructure (11 files: HD/MPC/custodial/key-rotation/encrypted-storage/recovery/policies/withdrawals); 4-D Real connector framework (17 files: 13 provider adapters)
+- Wave 3 (parallel): 4-E Treasury operations center (11 files: reserves/limits/backing/forecasting/corridors/LP-profitability/stress-tests); 4-F Observability (10 files: tracing/KPIs/5 analytics services/7 dashboards)
+- Wave 4 (parallel): 4-G Disaster recovery (10 files: replication/backup/restore/RPO-RTO/chaos/simulation/failover); 4-H Production deployment (43 files: Docker/K8s/Helm/Terraform/CI-CD/feature-flags/autoscaling)
+- Wave 5 (parallel): 4-I Merchant platform expansion (12 files: subscriptions/refunds/invoices/catalogs/orgs/RBAC/OAuth/webhook-replay); 4-J Developer platform (26 files: SDK/OpenAPI/CLI/sandbox/mock-server/docs/examples)
+- Integration: 4 new API endpoints (compliance, treasury-v2, dr, developer/sandbox)
+
+Verification:
+- All 11 infrastructure endpoints return 200
+- Trial balance: balanced (DR=153,000 CR=153,000, 13 journals)
+- Persistence: 151 events, durability=persistent
+- Compliance: all gates operational (KYC/sanctions/AML/risk/cases)
+- DR: 4 regions, primary us-east-1, RPO/RTO monitoring
+- Browser: all 7 tabs render, no errors
+- Lint: 0 errors
+- Kernel: 0 files modified (FROZEN)
+
+Stage Summary:
+- 10 workstreams complete
+- ~160+ new files (protocol + infrastructure)
+- 20 protocol modules
+- 11 API endpoints
+- Kernel: UNCHANGED (7 frozen primitives)
+- Verification report: PRODUCTION-4-VERIFICATION-REPORT.md
