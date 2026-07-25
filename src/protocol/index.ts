@@ -48,6 +48,13 @@ export { blockchainRegistry, BlockchainAdapterRegistry } from './blockchains/ada
 export type { BlockchainAdapter } from './blockchains/adapter';
 export { stellarAdapter, StellarAdapter } from './blockchains/stellar/adapter';
 
+// Chain adapters (next-gen, mode-switchable) -----------------------------------
+// The new `src/protocol/chains/` module exposes a rich `ChainAdapter`
+// interface with runtime mode switching (simulation ↔ live) and auto-
+// registers Stellar as the default chain. Re-exported here for ergonomic
+// single-import access. See `./chains/index.ts` for the full surface.
+export * from './chains';
+
 // Twin Token engine ------------------------------------------------------------
 export { twinTokenEngine, TwinTokenEngine } from './twin-token/engine';
 export type {
