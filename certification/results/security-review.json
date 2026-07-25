@@ -1,0 +1,263 @@
+{
+  "runDate": "2026-07-25T05:37:47.973Z",
+  "totalAttacks": 25,
+  "passed": 12,
+  "failed": 13,
+  "failuresBySeverity": {
+    "High": 7,
+    "Medium": 5,
+    "Critical": 1
+  },
+  "results": [
+    {
+      "id": "SEC-001",
+      "category": "Payment Flow",
+      "attack": "Double-spend: debit wallet for more than its balance",
+      "tried": "Created wallet with balance=100, attempted debit of 500.",
+      "actualResult": "debit() threw: \"insufficient available balance in wallet wallet_ttiu003 (have 100, need 500)\". Balance after = 100 (unchanged).",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — wallet service enforces sufficient-balance check synchronously."
+    },
+    {
+      "id": "SEC-002",
+      "category": "Payment Flow",
+      "attack": "Replay: re-emit a wallet.credited event to double-credit",
+      "tried": "Emitted 'wallet.credited' twice with identical payload {walletId, amount:100}, then rebuilt balances from events.",
+      "actualResult": "Wallet balance after replay = 200 (expected 100 if idempotent, 200 if replayed).",
+      "status": "FAIL",
+      "severity": "High",
+      "remediation": "Event stream must deduplicate by event id (or projection must track applied event ids). Replaying a wallet.credited event currently doubles the credited amount."
+    },
+    {
+      "id": "SEC-003",
+      "category": "Payment Flow",
+      "attack": "Race condition: concurrent debits that together exceed balance",
+      "tried": "Wallet balance=100. Fired Promise.all([debit(60), debit(60)]).",
+      "actualResult": "successes=1/2; final balance=40; errors=[{\"ok\":false,\"err\":\"insufficient available balance in wallet wallet_ttiv00f (have 40, need 60)\"}].",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — wallet debit is synchronous and atomic in the JS event loop."
+    },
+    {
+      "id": "SEC-004",
+      "category": "Payout Flow",
+      "attack": "Payout without sufficient balance",
+      "tried": "Merchant has 0 TWINKES; requested bank payout of 1000; called process().",
+      "actualResult": "payout.state=failed; failureReason=\"insufficient_available_balance\".",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — twinTokenEngine.burn returns insufficient_available_balance and payout is marked failed."
+    },
+    {
+      "id": "SEC-005",
+      "category": "Payout Flow",
+      "attack": "Double-payout: process the same payout twice",
+      "tried": "Created payout (100 TWINKES). Called process() twice in sequence.",
+      "actualResult": "Second process() threw: \"payout po_ttix00y cannot transition from completed\". Final balance = 9900 (expected 9900).",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — payout state machine rejects transition from non-reviewing states."
+    },
+    {
+      "id": "SEC-006",
+      "category": "Payout Flow",
+      "attack": "Payout to compliance-frozen destination account",
+      "tried": "Froze destination holder \"dst_cchfrwqf\" (frozen=false). Attempted transfer of 100 TWINKES from unfrozen source to frozen destination.",
+      "actualResult": "transfer.success=true, (no error); destination balance after = 100.",
+      "status": "FAIL",
+      "severity": "Medium",
+      "remediation": "twinTokenEngine.transfer must check the destination holder's frozen flag, not only the source's. A frozen account receiving funds defeats the compliance freeze."
+    },
+    {
+      "id": "SEC-007",
+      "category": "QR Flow",
+      "attack": "QR replay: pay the same dynamic QR twice",
+      "tried": "Generated dynamic QR (amount=500). Called isValid() twice (simulating two payment attempts).",
+      "actualResult": "first isValid=true; second isValid=true. No consume()/markUsed() API exists on QRService — the QR remains \"valid\" until natural expiry.",
+      "status": "FAIL",
+      "severity": "Medium",
+      "remediation": "Add a `consume(qrId)` method that marks the QR as used and rejects subsequent uses. Dynamic QR must be one-shot."
+    },
+    {
+      "id": "SEC-008",
+      "category": "QR Flow",
+      "attack": "QR tampering: modify amount in QR payload",
+      "tried": "Generated dynamic QR (amount=100). Decoded payload, set amount=1, re-encoded. Checked whether the QR carries a signature/MAC field.",
+      "actualResult": "QR payload fields = {id, type, merchant, wallet, currency, amount, reference}; hasSignature=false. Stored QR amount = 100; tampered payload amount = 1. The payload is NOT signed — a merchant that decodes the QR and trusts the payload (instead of calling qrService.get(id)) would honor the tampered amount.",
+      "status": "FAIL",
+      "severity": "Medium",
+      "remediation": "Sign the QR payload (HMAC over the encoded data) using a merchant-specific secret. Provide a `decodeAndVerify(encoded, secret)` method that rejects tampered payloads. Merchants must always cross-check the decoded payload against qrService.get(id)."
+    },
+    {
+      "id": "SEC-009",
+      "category": "QR Flow",
+      "attack": "Expired QR: try to use an expired QR",
+      "tried": "Generated dynamic QR with expiresMs=1, waited 5ms, called isValid().",
+      "actualResult": "isValid=false (expected false).",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — isValid() correctly rejects expired QRs."
+    },
+    {
+      "id": "SEC-010",
+      "category": "Webhook Verification",
+      "attack": "Forged HMAC signature",
+      "tried": "Registered webhook endpoint with secret. Sent body with a forged signature (all zeros).",
+      "actualResult": "verifySignature=false (expected false).",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — HMAC-SHA256 with timingSafeEqual rejects forged signatures."
+    },
+    {
+      "id": "SEC-011",
+      "category": "Webhook Verification",
+      "attack": "Webhook replay: re-deliver a previously valid webhook",
+      "tried": "Captured a valid (body, signature) pair. Called verifySignature() twice with the same pair.",
+      "actualResult": "first verify=true; replay verify=true. Body contains no timestamp/nonce — the signature alone cannot distinguish a fresh delivery from a replay.",
+      "status": "FAIL",
+      "severity": "High",
+      "remediation": "Add a signed timestamp + nonce to the webhook body and reject deliveries older than a configurable window (e.g. 5 min) or with a previously-seen nonce."
+    },
+    {
+      "id": "SEC-012",
+      "category": "Webhook Verification",
+      "attack": "Missing signature",
+      "tried": "Sent a webhook with an empty signature header.",
+      "actualResult": "verifySignature(empty_sig)=false (expected false).",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — verifySignature returns false for empty signatures."
+    },
+    {
+      "id": "SEC-013",
+      "category": "Authentication",
+      "attack": "Invalid API key",
+      "tried": "Called validateKey with three malformed values: 'psk_live_garbage', 'not-even-a-key', ''.",
+      "actualResult": "validateKey('psk_live_garbage')=null; validateKey('not-even-a-key')=null; validateKey('')=null.",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — validateKey returns null for unrecognized keys."
+    },
+    {
+      "id": "SEC-014",
+      "category": "Authentication",
+      "attack": "Expired API key",
+      "tried": "Created API key with expiresAt=1784957866969 (1s in the past). Called validateKey().",
+      "actualResult": "validateKey=null (expected null).",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — validateKey checks expiresAt and rejects expired keys."
+    },
+    {
+      "id": "SEC-015",
+      "category": "Authentication",
+      "attack": "Scope escalation: use a read-only key for write operations",
+      "tried": "Created API key with scope ['payments:read'] only. Checked if scope enforcement prevents writes.",
+      "actualResult": "validateKey returned scopes=[\"payments:read\"]. The key does NOT have payments:write (hasWrite=false). However, NO protocol module or API route enforces scopes — there is no requireScope(key, 'payments:write') guard anywhere in the codebase.",
+      "status": "FAIL",
+      "severity": "High",
+      "remediation": "Add a `requireScope(req, scope)` middleware to every API route and protocol entry point. Scopes are currently advisory — a read-only key can perform writes if it reaches the handler."
+    },
+    {
+      "id": "SEC-016",
+      "category": "Authorization",
+      "attack": "Cross-merchant access: read another merchant's data",
+      "tried": "Onboarded Alice and Bob. From Bob's context (no auth), called merchantPlatform.getApiKeys(alice.id), getAnalytics(alice.id), getInvoices(alice.id).",
+      "actualResult": "getApiKeys(alice.id) returned 1 keys (incl. label=\"alice-key\", keyPrefix=\"psk_live_psk_l****\"). getAnalytics returned data. getInvoices returned 0 invoices. The platform does NOT verify caller identity or merchant membership.",
+      "status": "FAIL",
+      "severity": "Critical",
+      "remediation": "Every merchantPlatform / payoutService / webhookEngine accessor that takes a merchantId MUST verify the caller's API key belongs to that merchantId. API routes must call apiKeyService.validateKey() and pass the resulting merchantId — never trust a client-supplied merchantId."
+    },
+    {
+      "id": "SEC-017",
+      "category": "Authorization",
+      "attack": "Role escalation: analyst invites themselves as owner",
+      "tried": "Invited analyst@x.test as 'analyst'. Then called inviteTeamMember(..., 'analyst@x.test', 'owner') (simulating the analyst self-promoting).",
+      "actualResult": "analyst invitation: created (role=analyst). owner escalation: CREATED (role=owner). inviteTeamMember does NOT verify the caller's role — any caller can invite at any role, including owner/admin.",
+      "status": "FAIL",
+      "severity": "High",
+      "remediation": "inviteTeamMember must take a callerTeamMemberId parameter and verify the caller's role is owner/admin before allowing admin/owner invitations."
+    },
+    {
+      "id": "SEC-018",
+      "category": "Double-Spend Prevention",
+      "attack": "Concurrent transfers from the same wallet",
+      "tried": "Source holder has 100 TWINGHS. Fired Promise.all([transfer(60 to dst1), transfer(60 to dst2)]).",
+      "actualResult": "successes=1/2; src1=ok; src2=fail:insufficient_balance; source balance after = 40 (expected 40 if defended, -20 if both succeeded).",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — stellar adapter's synchronous check-then-debit prevents the race, even though twinTokenEngine's local check is non-atomic."
+    },
+    {
+      "id": "SEC-019",
+      "category": "Double-Spend Prevention",
+      "attack": "Optimistic locking bypass on balance updates",
+      "tried": "Inspected TwinTokenBalance record for version/lock fields. Performed concurrent mint+burn to confirm no CAS is enforced at the twin-token layer.",
+      "actualResult": "TwinTokenBalance fields = {holder, assetCode, balance, escrowed, frozen}. No version/updatedAt/lockToken field. Balance is mutated in-place (b.balance = round(b.balance ± amount, 7)). Defense relies entirely on stellarAdapter's synchronous check-then-debit.",
+      "status": "FAIL",
+      "severity": "Medium",
+      "remediation": "Add a `version` (or `updatedAt`) field to TwinTokenBalance and use compare-and-set on every mutation. Currently the stellar adapter is the only line of defense; if it is ever swapped for a real async adapter, the twin-token layer becomes vulnerable."
+    },
+    {
+      "id": "SEC-020",
+      "category": "Race Conditions",
+      "attack": "Concurrent payout processing (same payoutId)",
+      "tried": "Created payout (100 TWINKES). Fired Promise.all([process(p.id), process(p.id)]).",
+      "actualResult": "fulfilled states=[\"completed\"]; rejected errors=[\"payout po_ttj703d cannot transition from processing\"]; final balance=9900 (expected 9900 if defended).",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — process() synchronously transitions state to processing before any await, blocking concurrent callers."
+    },
+    {
+      "id": "SEC-021",
+      "category": "Race Conditions",
+      "attack": "Concurrent wallet ops (credit + debit on same wallet)",
+      "tried": "Wallet balance=100. Fired Promise.all([debit(60), debit(60), credit(50)]).",
+      "actualResult": "final balance=90 (expected 90 if exactly one debit of 60 succeeds + credit of 50 succeeds).",
+      "status": "PASS",
+      "severity": "Info",
+      "remediation": "No action — wallet service methods are synchronous and atomic in the JS event loop."
+    },
+    {
+      "id": "SEC-022",
+      "category": "Connector Spoofing",
+      "attack": "Forge Evidence and inject it into the system",
+      "tried": "Called createEvidence() directly with type='fiat_proof', verificationLevel='cryptographic', attestedAmount=1,000,000,000 USD, attester='forged-attacker'. Registered it in evidenceStore.",
+      "actualResult": "evidenceStore.get('evid_ttj703y') = present (amount=1000000000, level=cryptographic, attester=forged-attacker). createEvidence and evidenceStore.register perform NO attester authentication — any caller can mint cryptographic-grade evidence.",
+      "status": "FAIL",
+      "severity": "High",
+      "remediation": "evidenceStore.register must verify the evidence was produced by a registered, authenticated connector. createEvidence should be private to the connector framework, not exported to all callers."
+    },
+    {
+      "id": "SEC-023",
+      "category": "Connector Spoofing",
+      "attack": "Register a fake connector that produces malicious evidence",
+      "tried": "Subclassed ProductionConnector with a 'MaliciousConnector' (id='open_banking', endpoint='evil://attacker'). Called registry.register(malicious) — overwrites the legitimate Open Banking connector. Queried it.",
+      "actualResult": "registry.get('open_banking').name = \"Malicious Open Banking\" (was \"Open Banking (PSD2)\"). Query returned success=true, evidence.verificationLevel=\"cryptographic\", evidence.attestedAmount=1000000000. The registry performs NO authentication on register() — any module can replace a production connector.",
+      "status": "FAIL",
+      "severity": "Medium",
+      "remediation": "productionConnectorRegistry.register() must verify a connector trust token or be made private (only called from a signed bootstrap). Any caller can currently replace a production connector with a malicious one."
+    },
+    {
+      "id": "SEC-024",
+      "category": "Evidence Forgery",
+      "attack": "Tamper with an Evidence object after creation",
+      "tried": "Created evidence (attestedAmount=100, txHash='real-tx-abc'). Mutated attestedAmount to 1,000,000,000 and txHash to 'fake-tx-xyz'. Compared evidenceHash before/after.",
+      "actualResult": "evidenceHash before=\"hash_ttj8044\", after=\"hash_ttj8044\". Hash is IDENTICAL (NOT content-derived). The evidenceHash field is generated by uid('hash') — a sequential counter, NOT a cryptographic hash of the contents.",
+      "status": "FAIL",
+      "severity": "High",
+      "remediation": "evidenceHash must be sha256(canonical_json(type|source|verificationLevel|entityId|attestedAmount|currency|attester|payload)). Verify the hash on every read; reject evidence whose recomputed hash mismatches the stored hash."
+    },
+    {
+      "id": "SEC-025",
+      "category": "Evidence Forgery",
+      "attack": "Create synthetic Evidence with no real connector backing",
+      "tried": "Called createEvidence() directly (no connector involved) with attester='synthetic-attacker'. Registered in evidenceStore. Queried confidenceFor('any-lp', 'USD').",
+      "actualResult": "confidenceFor returned amount=689534.31, confidence=0.6965, bestEvidence=present (attester=synthetic-attacker, amount=999999). No provenance check exists — synthetic evidence is accepted and used in confidence calculations.",
+      "status": "FAIL",
+      "severity": "High",
+      "remediation": "Evidence must carry a signed attestation from a registered connector. evidenceStore.register must verify the signature against the connector's public key before accepting. Synthetic evidence with no backing must be rejected."
+    }
+  ]
+}
