@@ -7,6 +7,7 @@ import {
   LayoutDashboard, CreditCard, ArrowDownToLine, Users, Package,
   FileText, BarChart3, Settings, KeyRound, Webhook, UserCog,
   LogOut, ChevronDown, Bell, Search, Menu, X, Shield, Globe,
+  QrCode, Link2, RefreshCcw, Repeat, FileBarChart, Boxes, Sparkles,
 } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -25,15 +26,24 @@ const merchantNav: NavGroup[] = [
   { label: 'Overview', items: [
     { label: 'Dashboard', href: '/dashboard', icon: <LayoutDashboard className="h-4 w-4" /> },
     { label: 'Analytics', href: '/dashboard/analytics', icon: <BarChart3 className="h-4 w-4" /> },
+    { label: 'Reports', href: '/dashboard/reports', icon: <FileBarChart className="h-4 w-4" /> },
   ]},
   { label: 'Accept Payments', items: [
     { label: 'Payments', href: '/dashboard/payments', icon: <CreditCard className="h-4 w-4" /> },
-    { label: 'Payouts', href: '/dashboard/payouts', icon: <ArrowDownToLine className="h-4 w-4" /> },
+    { label: 'Checkout Builder', href: '/dashboard/checkout', icon: <Sparkles className="h-4 w-4" /> },
+    { label: 'Payment Links', href: '/dashboard/payment-links', icon: <Link2 className="h-4 w-4" /> },
+    { label: 'QR Payments', href: '/dashboard/qr', icon: <QrCode className="h-4 w-4" /> },
   ]},
   { label: 'Manage Business', items: [
     { label: 'Customers', href: '/dashboard/customers', icon: <Users className="h-4 w-4" /> },
     { label: 'Products', href: '/dashboard/products', icon: <Package className="h-4 w-4" /> },
     { label: 'Invoices', href: '/dashboard/invoices', icon: <FileText className="h-4 w-4" /> },
+    { label: 'Subscriptions', href: '/dashboard/subscriptions', icon: <Repeat className="h-4 w-4" /> },
+    { label: 'Refunds', href: '/dashboard/refunds', icon: <RefreshCcw className="h-4 w-4" /> },
+    { label: 'Payouts', href: '/dashboard/payouts', icon: <ArrowDownToLine className="h-4 w-4" /> },
+  ]},
+  { label: 'Extensions', items: [
+    { label: 'Marketplace', href: '/dashboard/extensions', icon: <Boxes className="h-4 w-4" /> },
   ]},
   { label: 'Settings', items: [
     { label: 'General', href: '/dashboard/settings', icon: <Settings className="h-4 w-4" /> },
@@ -51,6 +61,7 @@ const adminNav: NavGroup[] = [
     { label: 'Merchants', href: '/admin/merchants', icon: <Package className="h-4 w-4" /> },
   ]},
   { label: 'System', items: [
+    { label: 'Runtime', href: '/admin/runtime', icon: <Globe className="h-4 w-4" /> },
     { label: 'Audit Trail', href: '/admin/audit', icon: <Shield className="h-4 w-4" /> },
   ]},
 ];
