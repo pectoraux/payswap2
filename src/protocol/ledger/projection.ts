@@ -104,7 +104,7 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Mint ${amount} ${assetCode} to ${p.to ?? 'recipient'}`,
           legs: [
-            { accountCode: circulatingAccount(assetCode), debit: amount, currency: assetCode, memo: 'mint — increase circulating' },
+            { accountCode: circulatingAccount(assetCode), debit: amount, currency, memo: 'mint — increase circulating' },
             { accountCode: backingAccount(currency), credit: amount, currency, memo: 'mint — increase backing liability' },
           ],
         }),
@@ -128,7 +128,7 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           description: `Burn ${amount} ${assetCode} from ${p.from ?? 'holder'}`,
           legs: [
             { accountCode: backingAccount(currency), debit: amount, currency, memo: 'burn — release backing liability' },
-            { accountCode: circulatingAccount(assetCode), credit: amount, currency: assetCode, memo: 'burn — decrease circulating' },
+            { accountCode: circulatingAccount(assetCode), credit: amount, currency, memo: 'burn — decrease circulating' },
           ],
         }),
       );
@@ -141,6 +141,7 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
       const amount = num(p.amount);
       const from = (p.from as string) ?? '';
       const to = (p.to as string) ?? '';
+      const currency = twinAssetToCurrency(assetCode);
       if (!assetCode || amount <= 0 || !from || !to) {
         return { eventId: event.id, type: event.type, journals, skipped: 'invalid_transfer_payload' };
       }
@@ -154,8 +155,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Transfer ${amount} ${assetCode}: ${from} → ${to}`,
           legs: [
-            { accountCode: userWalletAccount(to), debit: amount, currency: assetCode, memo: `receive from ${from}` },
-            { accountCode: userWalletAccount(from), credit: amount, currency: assetCode, memo: `send to ${to}` },
+            { accountCode: userWalletAccount(to), debit: amount, currency, memo: `receive from ${from}` },
+            { accountCode: userWalletAccount(from), credit: amount, currency, memo: `send to ${to}` },
           ],
         }),
       );
@@ -166,6 +167,7 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
     case 'twintoken.escrowed': {
       const assetCode = (p.assetCode as string) ?? '';
       const amount = num(p.amount);
+      const currency = twinAssetToCurrency(assetCode);
       if (!assetCode || amount <= 0) {
         return { eventId: event.id, type: event.type, journals, skipped: 'invalid_escrow_payload' };
       }
@@ -176,8 +178,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Escrow ${amount} ${assetCode} (escrowId=${p.escrowId ?? 'n/a'})`,
           legs: [
-            { accountCode: escrowedAccount(assetCode), debit: amount, currency: assetCode, memo: 'escrow — move to escrowed' },
-            { accountCode: circulatingAccount(assetCode), credit: amount, currency: assetCode, memo: 'escrow — reduce circulating' },
+            { accountCode: escrowedAccount(assetCode), debit: amount, currency, memo: 'escrow — move to escrowed' },
+            { accountCode: circulatingAccount(assetCode), credit: amount, currency, memo: 'escrow — reduce circulating' },
           ],
         }),
       );
@@ -189,6 +191,7 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
       const assetCode = (p.assetCode as string) ?? '';
       const amount = num(p.amount);
       const to = (p.to as string) ?? '';
+      const currency = twinAssetToCurrency(assetCode);
       if (!assetCode || amount <= 0) {
         return { eventId: event.id, type: event.type, journals, skipped: 'invalid_release_payload' };
       }
@@ -201,8 +204,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Release ${amount} ${assetCode} from escrow to ${to || 'circulating'}`,
           legs: [
-            { accountCode: creditAccount, debit: amount, currency: assetCode, memo: `release to ${to || 'circulating'}` },
-            { accountCode: escrowedAccount(assetCode), credit: amount, currency: assetCode, memo: 'release — reduce escrowed' },
+            { accountCode: creditAccount, debit: amount, currency, memo: `release to ${to || 'circulating'}` },
+            { accountCode: escrowedAccount(assetCode), credit: amount, currency, memo: 'release — reduce escrowed' },
           ],
         }),
       );
