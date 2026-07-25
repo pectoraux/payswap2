@@ -234,6 +234,12 @@ export const treasuryNav: NavGroup[] = [
       { label: 'Reports', href: '/treasury/reports', icon: <FileBarChart className="h-4 w-4" /> },
     ],
   },
+  {
+    label: 'Controls',
+    items: [
+      { label: 'Emergency', href: '/treasury/emergency', icon: <ShieldAlert className="h-4 w-4" /> },
+    ],
+  },
 ];
 
 export const complianceNav: NavGroup[] = [
