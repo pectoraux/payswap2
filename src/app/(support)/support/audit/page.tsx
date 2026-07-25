@@ -23,14 +23,15 @@ import {
   PageHeader,
   fmtDate,
 } from '@/components/role-ui';
-import { History, Activity, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { History, Activity, ShieldCheck, AlertTriangle, Webhook } from 'lucide-react';
+import { ReplayWebhookButton } from '@/components/support/replay-webhook-button';
 
 export const dynamic = 'force-dynamic';
 
 export default async function SupportAuditPage() {
   const session = await getServerSession(authOptions);
 
-  const [logs, total, successCount, failCount] = await Promise.all([
+  const [logs, total, successCount, failCount, deliveries] = await Promise.all([
     db.auditLog.findMany({
       orderBy: { createdAt: 'desc' },
       take: 100,
@@ -39,13 +40,27 @@ export default async function SupportAuditPage() {
     db.auditLog.count(),
     db.auditLog.count({ where: { result: 'SUCCESS' } }),
     db.auditLog.count({ where: { result: { not: 'SUCCESS' } } }),
+    db.webhookDelivery.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 25,
+      include: { endpoint: true },
+    }),
   ]);
+
+  // Delivery stats computed from the fetched slice (best-effort — these
+  // describe the visible rows, not the entire table).
+  const deliveriesDelivered = deliveries.filter(
+    (d) => d.status.toUpperCase() === 'DELIVERED',
+  ).length;
+  const deliveriesFailed = deliveries.filter((d) =>
+    ['FAILED', 'RETRYING', 'PENDING'].includes(d.status.toUpperCase()),
+  ).length;
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Audit trail"
-        description="Immutable record of every action taken on the platform."
+        description="Immutable record of every action taken on the platform, plus webhook delivery replay controls."
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -75,6 +90,78 @@ export default async function SupportAuditPage() {
           tone="cyan"
         />
       </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="text-base">Webhook deliveries</CardTitle>
+              <CardDescription>
+                Replay any delivery to re-send its payload to the configured
+                endpoint. A new delivery row is recorded for each replay.
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-medium text-emerald-600 dark:text-emerald-400">
+                {deliveriesDelivered} delivered
+              </span>
+              <span className="rounded bg-rose-500/10 px-1.5 py-0.5 font-medium text-rose-600 dark:text-rose-400">
+                {deliveriesFailed} pending/failed
+              </span>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {deliveries.length === 0 ? (
+            <EmptyState
+              icon={<Webhook className="h-6 w-6" />}
+              title="No webhook deliveries"
+              description="When the platform fires a webhook event, deliveries will appear here for replay."
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Event</TableHead>
+                  <TableHead>Endpoint</TableHead>
+                  <TableHead className="text-right">Attempts</TableHead>
+                  <TableHead className="text-right">Response</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Delivered</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {deliveries.map((d) => (
+                  <TableRow key={d.id}>
+                    <TableCell className="font-mono text-xs">
+                      {d.eventType}
+                    </TableCell>
+                    <TableCell className="max-w-[14rem] truncate font-mono text-[10px] text-muted-foreground">
+                      {d.endpoint?.url ?? d.endpointId}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {d.attempts}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {d.responseStatus ?? '—'}
+                    </TableCell>
+                    <TableCell>
+                      <StatusBadge status={d.status} />
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {fmtDate(d.deliveredAt)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <ReplayWebhookButton deliveryId={d.id} compact />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

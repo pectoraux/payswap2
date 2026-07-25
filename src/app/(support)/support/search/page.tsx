@@ -24,13 +24,14 @@ import {
   fmtDate,
 } from '@/components/role-ui';
 import { Search, Users, Building2, CreditCard } from 'lucide-react';
+import { SearchBar } from '@/components/support/search-bar';
 
 export const dynamic = 'force-dynamic';
 
 export default async function SupportSearchPage() {
   const session = await getServerSession(authOptions);
 
-  // Recent entities as "search results" placeholder
+  // Recent entities surfaced as the "browse" view alongside the live search.
   const [recentUsers, recentMerchants, recentPayments] = await Promise.all([
     db.user.findMany({
       where: { deletedAt: null },
@@ -52,7 +53,7 @@ export default async function SupportSearchPage() {
     <div className="space-y-6">
       <PageHeader
         title="Search"
-        description="Browse recent users, merchants and payments."
+        description="Search across payments, payouts, merchants and customers — or browse the most recent records below."
       />
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -75,6 +76,19 @@ export default async function SupportSearchPage() {
           tone="cyan"
         />
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Global search</CardTitle>
+          <CardDescription>
+            Type to search live across all four record types. Results are
+            grouped by type and link to the relevant dashboard.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SearchBar />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

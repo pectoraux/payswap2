@@ -24,6 +24,8 @@ import {
   fmtDate,
 } from '@/components/role-ui';
 import { ShieldAlert, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { AlertActions } from '@/components/compliance/alert-actions';
+import { OpenCaseDialog } from '@/components/compliance/open-case-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -77,10 +79,15 @@ export default async function ComplianceAlertsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">All alerts</CardTitle>
-          <CardDescription>
-            {alerts.length} alert{alerts.length === 1 ? '' : 's'} recorded
-          </CardDescription>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="text-base">All alerts</CardTitle>
+              <CardDescription>
+                {alerts.length} alert{alerts.length === 1 ? '' : 's'} recorded
+              </CardDescription>
+            </div>
+            <OpenCaseDialog triggerLabel="Open Case" />
+          </div>
         </CardHeader>
         <CardContent>
           {alerts.length === 0 ? (
@@ -100,6 +107,7 @@ export default async function ComplianceAlertsPage() {
                   <TableHead>Status</TableHead>
                   <TableHead>Raised</TableHead>
                   <TableHead>Closed</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -133,6 +141,9 @@ export default async function ComplianceAlertsPage() {
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {fmtDate(a.closedAt)}
+                    </TableCell>
+                    <TableCell>
+                      <AlertActions alertId={a.id} status={a.status} />
                     </TableCell>
                   </TableRow>
                 ))}

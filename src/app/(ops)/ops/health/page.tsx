@@ -35,6 +35,7 @@ import {
 import { productionConnectorRegistry } from '@/protocol/connectors-v2/registry';
 import { metricsRegistry } from '@/protocol/ops/metrics';
 import { sloManager } from '@/protocol/ops/slos';
+import { RebuildProjectionsButton } from '@/components/ops/rebuild-projections-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,6 +72,7 @@ export default async function OpsHealthPage() {
       <PageHeader
         title="Health"
         description="Process, memory and connector health checks."
+        action={<RebuildProjectionsButton />}
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
