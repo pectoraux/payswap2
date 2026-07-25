@@ -18,8 +18,10 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/status-badge';
-import { Button } from '@/components/ui/button';
-import { UserCog, Plus } from 'lucide-react';
+import { UserCog } from 'lucide-react';
+import { InviteTeamMemberDialog } from '@/components/merchant/invite-team-member-dialog';
+import { TeamMemberActions } from '@/components/merchant/team-member-actions';
+import { TeamMemberRoleSelect } from '@/components/merchant/team-member-role-select';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +43,9 @@ export default async function TeamPage() {
   const fmtDate = (d: Date | null) =>
     d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
 
+  const activeCount = members.filter((m) => m.status === 'ACTIVE').length;
+  const pendingCount = members.filter((m) => m.status === 'PENDING').length;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -50,9 +55,32 @@ export default async function TeamPage() {
             Invite staff and manage their access to your merchant account.
           </p>
         </div>
-        <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-          <Plus className="mr-2 h-4 w-4" /> Invite member
-        </Button>
+        <InviteTeamMemberDialog />
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Total members</CardDescription>
+            <CardTitle className="text-2xl tabular-nums">{members.length}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Active</CardDescription>
+            <CardTitle className="text-2xl tabular-nums text-emerald-600 dark:text-emerald-400">
+              {activeCount}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Pending invites</CardDescription>
+            <CardTitle className="text-2xl tabular-nums text-amber-600 dark:text-amber-400">
+              {pendingCount}
+            </CardTitle>
+          </CardHeader>
+        </Card>
       </div>
 
       <Card>
@@ -74,34 +102,42 @@ export default async function TeamPage() {
               </p>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Joined</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {members.map((m) => (
-                  <TableRow key={m.id}>
-                    <TableCell className="font-medium">{m.email}</TableCell>
-                    <TableCell>
-                      <span className="rounded bg-teal-500/10 px-1.5 py-0.5 text-[10px] font-medium text-teal-600 dark:text-teal-400">
-                        {m.role}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={m.status} />
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {fmtDate(m.joinedAt)}
-                    </TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Joined</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {members.map((m) => (
+                    <TableRow key={m.id}>
+                      <TableCell className="font-medium">{m.email}</TableCell>
+                      <TableCell>
+                        <TeamMemberRoleSelect id={m.id} role={m.role} />
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={m.status} />
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {fmtDate(m.joinedAt)}
+                      </TableCell>
+                      <TableCell>
+                        <TeamMemberActions
+                          id={m.id}
+                          email={m.email}
+                          status={m.status}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

@@ -147,6 +147,7 @@ export const merchantNav: NavGroup[] = [
       { label: 'API Keys', href: '/dashboard/settings/api-keys', icon: <KeyRound className="h-4 w-4" /> },
       { label: 'Webhooks', href: '/dashboard/settings/webhooks', icon: <Webhook className="h-4 w-4" /> },
       { label: 'Team', href: '/dashboard/settings/team', icon: <UserCog className="h-4 w-4" /> },
+      { label: 'Billing', href: '/dashboard/settings/billing', icon: <CreditCard className="h-4 w-4" /> },
     ],
   },
 ];
