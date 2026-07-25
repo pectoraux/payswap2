@@ -1,0 +1,49 @@
+{
+  "name": "@payswap/cli",
+  "version": "1.0.0",
+  "description": "Official PaySwap command-line interface — interact with payments, payouts, ledger, treasury, compliance, and ops from your terminal.",
+  "keywords": [
+    "payswap",
+    "cli",
+    "payments",
+    "fintech",
+    "fintech-cli"
+  ],
+  "license": "MIT",
+  "author": "PaySwap <developers@payswap.io>",
+  "homepage": "https://docs.payswap.io/cli",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/payswap/payswap.git",
+    "directory": "developer/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/payswap/payswap/issues"
+  },
+  "main": "./dist/index.js",
+  "bin": {
+    "payswap": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src --ext .ts",
+    "dev": "bun src/index.ts",
+    "prepublishOnly": "bun run build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
