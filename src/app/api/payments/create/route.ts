@@ -7,6 +7,7 @@ import {
   forbidden,
 } from '@/lib/api-auth';
 import { db } from '@/lib/db';
+import { getEnvironment } from '@/lib/environment';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,6 +29,8 @@ export async function POST(req: NextRequest) {
 
   const merchantId = await requireMerchantId();
   if (!merchantId) return forbidden();
+
+  const env = await getEnvironment();
 
   let body: any;
   try {
@@ -61,7 +64,7 @@ export async function POST(req: NextRequest) {
   let customerRecordId: string | null = null;
   if (customerEmail) {
     const existing = await db.customerRecord.findFirst({
-      where: { merchantId, email: customerEmail },
+      where: { merchantId, email: customerEmail, environment: env },
     });
     if (existing) {
       customerRecordId = existing.id;
@@ -82,6 +85,7 @@ export async function POST(req: NextRequest) {
           email: customerEmail,
           totalSpent: amount,
           transactionCount: 1,
+          environment: env,
         },
       });
       customerRecordId = created.id;
@@ -103,6 +107,7 @@ export async function POST(req: NextRequest) {
       metadata: customerRecordId
         ? JSON.stringify({ customerRecordId })
         : null,
+      environment: env,
     },
   });
 

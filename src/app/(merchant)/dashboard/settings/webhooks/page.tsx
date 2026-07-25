@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
+import { getEnvironment } from '@/lib/environment';
 import {
   Card,
   CardContent,
@@ -25,8 +26,9 @@ export default async function WebhooksPage() {
   const merchantId = userRole?.merchantId;
   if (!merchantId) redirect('/unauthorized');
 
+  const env = await getEnvironment();
   const webhooks = await db.webhookEndpoint.findMany({
-    where: { merchantId },
+    where: { merchantId, environment: env },
     orderBy: { createdAt: 'desc' },
   });
 

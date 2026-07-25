@@ -173,6 +173,7 @@ model Customer {
 
 model CustomerRecord {
   id              String   @id @default(cuid())
+  environment     String   @default("live")
   merchantId      String
   customerId      String?
   name            String
@@ -255,6 +256,7 @@ model WalletTransaction {
 
 model Payment {
   id                  String   @id @default(cuid())
+  environment     String   @default("live")
   merchantId          String
   customerId          String?
   amount              Float
@@ -290,6 +292,7 @@ model Payment {
 
 model Payout {
   id                  String   @id @default(cuid())
+  environment     String   @default("live")
   merchantId          String
   method              String
   sourceAmount        Float
@@ -320,6 +323,7 @@ model Payout {
 
 model Refund {
   id          String   @id @default(cuid())
+  environment     String   @default("live")
   merchantId  String
   paymentId   String
   amount      Float
@@ -342,6 +346,7 @@ model Refund {
 
 model Product {
   id          String   @id @default(cuid())
+  environment     String   @default("live")
   merchantId  String
   name        String
   description String?
@@ -362,6 +367,7 @@ model Product {
 
 model Invoice {
   id          String   @id @default(cuid())
+  environment     String   @default("live")
   merchantId  String
   customerId  String?
   number      String
@@ -387,6 +393,7 @@ model Invoice {
 
 model Subscription {
   id                  String   @id @default(cuid())
+  environment     String   @default("live")
   merchantId          String
   customerId          String?
   planName            String
@@ -410,6 +417,7 @@ model Subscription {
 
 model PaymentLink {
   id              String   @id @default(cuid())
+  environment     String   @default("live")
   merchantId      String
   amount          Float
   currency        String
@@ -431,6 +439,7 @@ model PaymentLink {
 
 model ApiKey {
   id          String   @id @default(cuid())
+  environment     String   @default("live")
   merchantId  String
   label       String
   keyPrefix   String
@@ -449,6 +458,7 @@ model ApiKey {
 
 model WebhookEndpoint {
   id          String   @id @default(cuid())
+  environment     String   @default("live")
   merchantId  String
   url         String
   secretHash  String

@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
+import { getEnvironment } from '@/lib/environment';
 import {
   Card,
   CardContent,
@@ -28,8 +29,10 @@ export default async function RefundsPage() {
   if (!ctx) redirect('/unauthorized');
   const { merchantId, merchant } = ctx;
 
+  const env = await getEnvironment();
+
   const refunds = await db.refund.findMany({
-    where: { merchantId },
+    where: { merchantId, environment: env },
     orderBy: { createdAt: 'desc' },
     take: 100,
     include: { payment: true },
@@ -37,7 +40,11 @@ export default async function RefundsPage() {
 
   // Recent payments the merchant can issue refunds against.
   const recentPayments = await db.payment.findMany({
-    where: { merchantId, status: { in: ['SUCCESS', 'COMPLETED', 'SETTLED', 'SUCCEEDED'] } },
+    where: {
+      merchantId,
+      environment: env,
+      status: { in: ['SUCCESS', 'COMPLETED', 'SETTLED', 'SUCCEEDED'] },
+    },
     orderBy: { createdAt: 'desc' },
     take: 25,
     select: { id: true, reference: true, amount: true, currency: true },

@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
+import { getEnvironment } from '@/lib/environment';
 import {
   Card,
   CardContent,
@@ -34,8 +35,9 @@ export default async function PayoutsPage() {
   if (!merchantId) redirect('/unauthorized');
 
   const merchant = await db.merchant.findUnique({ where: { id: merchantId } });
+  const env = await getEnvironment();
   const payouts = await db.payout.findMany({
-    where: { merchantId },
+    where: { merchantId, environment: env },
     orderBy: { createdAt: 'desc' },
     take: 100,
   });

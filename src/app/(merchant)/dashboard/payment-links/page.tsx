@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
+import { getEnvironment } from '@/lib/environment';
 import {
   Card,
   CardContent,
@@ -27,8 +28,10 @@ export default async function PaymentLinksPage() {
   if (!ctx) redirect('/unauthorized');
   const { merchantId, merchant } = ctx;
 
+  const env = await getEnvironment();
+
   const links = await db.paymentLink.findMany({
-    where: { merchantId },
+    where: { merchantId, environment: env },
     orderBy: { createdAt: 'desc' },
     take: 100,
   });

@@ -46,6 +46,8 @@ function writeStoredMode(next: EnvMode) {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(STORAGE_KEY, next);
+    // Also set a cookie so server-side API routes can read the environment
+    document.cookie = `payswap-env-mode=${next}; path=/; max-age=${30 * 24 * 60 * 60}; samesite=lax`;
   } catch {
     // ignore storage errors (private mode, full quota, etc.)
   }
@@ -98,6 +100,8 @@ export function EnvSwitcher() {
             : 'No real funds will move in this mode.',
       },
     );
+    // Reload to refresh server-rendered data with the new environment
+    setTimeout(() => window.location.reload(), 500);
   }, [mode]);
 
   const isLive = mode === 'live';

@@ -7,6 +7,7 @@ import {
   forbidden,
 } from '@/lib/api-auth';
 import { db } from '@/lib/db';
+import { getEnvironment } from '@/lib/environment';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,6 +30,8 @@ export async function POST(req: NextRequest) {
 
   const merchantId = await requireMerchantId();
   if (!merchantId) return forbidden();
+
+  const env = await getEnvironment();
 
   let body: any;
   try {
@@ -89,6 +92,7 @@ export async function POST(req: NextRequest) {
       netAmount,
       status: 'REQUESTED',
       reason: `Payout request ${randomUUID().slice(0, 8).toUpperCase()}`,
+      environment: env,
     },
   });
 

@@ -1,5 +1,6 @@
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
+import { getEnvironment } from '@/lib/environment';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -18,11 +19,13 @@ export default async function MerchantDashboard() {
     return <div className="text-sm text-muted-foreground">No merchant account found.</div>;
   }
 
+  const env = await getEnvironment();
+
   const [payments, payouts, customers, products] = await Promise.all([
-    db.payment.findMany({ where: { merchantId }, orderBy: { createdAt: 'desc' }, take: 10 }),
-    db.payout.findMany({ where: { merchantId }, orderBy: { createdAt: 'desc' }, take: 5 }),
-    db.customerRecord.count({ where: { merchantId } }),
-    db.product.count({ where: { merchantId, deletedAt: null } }),
+    db.payment.findMany({ where: { merchantId, environment: env }, orderBy: { createdAt: 'desc' }, take: 10 }),
+    db.payout.findMany({ where: { merchantId, environment: env }, orderBy: { createdAt: 'desc' }, take: 5 }),
+    db.customerRecord.count({ where: { merchantId, environment: env } }),
+    db.product.count({ where: { merchantId, deletedAt: null, environment: env } }),
   ]);
 
   const revenue = payments.filter(p => p.status === 'COMPLETED').reduce((s, p) => s + p.amount, 0);

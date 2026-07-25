@@ -6,6 +6,7 @@ import {
   forbidden,
 } from '@/lib/api-auth';
 import { db } from '@/lib/db';
+import { getEnvironment } from '@/lib/environment';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,6 +31,7 @@ export async function POST(req: NextRequest) {
   if (!merchantId) return forbidden();
 
   const userId = (session.user as any)?.id as string | undefined;
+  const env = await getEnvironment();
 
   let body: any;
   try {
@@ -109,6 +111,7 @@ export async function POST(req: NextRequest) {
       reason,
       status: 'PENDING',
       requestedBy: userId || 'unknown',
+      environment: env,
     },
   });
 

@@ -6,6 +6,7 @@ import {
   forbidden,
 } from '@/lib/api-auth';
 import { db } from '@/lib/db';
+import { getEnvironment } from '@/lib/environment';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,6 +35,8 @@ export async function POST(req: NextRequest) {
 
   const merchantId = await requireMerchantId();
   if (!merchantId) return forbidden();
+
+  const env = await getEnvironment();
 
   let body: any;
   try {
@@ -88,14 +91,16 @@ export async function POST(req: NextRequest) {
   const total = subtotal + tax;
 
   // Generate a sequential invoice number per merchant: INV-NNNNN.
-  const existingCount = await db.invoice.count({ where: { merchantId } });
+  const existingCount = await db.invoice.count({
+    where: { merchantId, environment: env },
+  });
   const number = `INV-${String(existingCount + 1).padStart(5, '0')}`;
 
   // Link to a customer record if we already have one for this email.
   let customerId: string | null = null;
   if (customerEmail) {
     const existing = await db.customerRecord.findFirst({
-      where: { merchantId, email: customerEmail },
+      where: { merchantId, email: customerEmail, environment: env },
     });
     if (existing) customerId = existing.id;
   }
@@ -112,6 +117,7 @@ export async function POST(req: NextRequest) {
       currency,
       status: 'DRAFT',
       dueDate,
+      environment: env,
     },
   });
 

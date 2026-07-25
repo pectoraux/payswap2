@@ -6,6 +6,7 @@ import {
   forbidden,
 } from '@/lib/api-auth';
 import { db } from '@/lib/db';
+import { getEnvironment } from '@/lib/environment';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,8 @@ export async function POST(req: NextRequest) {
 
   const merchantId = await requireMerchantId();
   if (!merchantId) return forbidden();
+
+  const env = await getEnvironment();
 
   let body: any;
   try {
@@ -58,7 +61,7 @@ export async function POST(req: NextRequest) {
   // Upsert on (merchantId, email) so merchants can't accidentally create
   // duplicate customer records.
   const existing = await db.customerRecord.findFirst({
-    where: { merchantId, email },
+    where: { merchantId, email, environment: env },
   });
 
   let customer;
@@ -79,6 +82,7 @@ export async function POST(req: NextRequest) {
         email,
         phone,
         country,
+        environment: env,
       },
     });
   }

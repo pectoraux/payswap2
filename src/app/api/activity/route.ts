@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { requireMerchantId, requireSession, unauthorized } from '@/lib/api-auth';
+import { getEnvironment } from '@/lib/environment';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -104,6 +105,7 @@ export async function GET(req: NextRequest) {
   const filter = normaliseFilter(url.searchParams.get('type'));
   const limit = clampLimit(url.searchParams.get('limit'));
   const offset = clampOffset(url.searchParams.get('offset'));
+  const env = await getEnvironment();
 
   // Each source query fetches one page beyond what we need (limit + 1) so we
   // can compute `hasMore` without a second COUNT(*) round trip on every call.
@@ -125,7 +127,7 @@ export async function GET(req: NextRequest) {
   if (filter === 'all' || filter === 'payment') {
     const rows = await runSafe(
       db.payment.findMany({
-        where: merchantId ? { merchantId } : undefined,
+        where: merchantId ? { merchantId, environment: env } : { environment: env },
         orderBy: { createdAt: 'desc' },
         take: fetchSize,
         select: {
@@ -163,7 +165,7 @@ export async function GET(req: NextRequest) {
   if (filter === 'all' || filter === 'payout') {
     const rows = await runSafe(
       db.payout.findMany({
-        where: merchantId ? { merchantId } : undefined,
+        where: merchantId ? { merchantId, environment: env } : { environment: env },
         orderBy: { createdAt: 'desc' },
         take: fetchSize,
         select: {
@@ -200,7 +202,7 @@ export async function GET(req: NextRequest) {
   if (filter === 'all' || filter === 'refund') {
     const rows = await runSafe(
       db.refund.findMany({
-        where: merchantId ? { merchantId } : undefined,
+        where: merchantId ? { merchantId, environment: env } : { environment: env },
         orderBy: { createdAt: 'desc' },
         take: fetchSize,
         select: {
@@ -236,9 +238,12 @@ export async function GET(req: NextRequest) {
   if (filter === 'all' || filter === 'webhook') {
     const rows = await runSafe(
       db.webhookDelivery.findMany({
-        // WebhookDelivery has no direct merchantId; scope via the endpoint
-        // relation. Admins (no merchantId) see all deliveries.
-        where: merchantId ? { endpoint: { merchantId } } : undefined,
+        // WebhookDelivery has no direct merchantId/environment; scope via the
+        // endpoint relation. Admins (no merchantId) see all deliveries for the
+        // current environment.
+        where: merchantId
+          ? { endpoint: { merchantId, environment: env } }
+          : { endpoint: { environment: env } },
         orderBy: { createdAt: 'desc' },
         take: fetchSize,
         select: {
@@ -283,8 +288,9 @@ export async function GET(req: NextRequest) {
   if (filter === 'all' || filter === 'audit') {
     const rows = await runSafe(
       db.auditLog.findMany({
-        // AuditLog has no merchant FK. Scope to the user's own actions when
-        // the caller is a merchant, so the feed stays relevant. Admins see
+        // AuditLog has no merchant FK and no `environment` column, so it cannot
+        // be scoped by environment. Scope to the user's own actions when the
+        // caller is a merchant, so the feed stays relevant. Admins see
         // everything.
         where: merchantId ? { userId: (session.user as any)?.id } : undefined,
         orderBy: { createdAt: 'desc' },
