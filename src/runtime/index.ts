@@ -26,9 +26,10 @@ import { ReserveLedgerService } from './engines/reserve-ledger';
 import { ReserveMarketEngine } from './engines/reserve-market-v2';
 import { LiquidityMarketplaceService } from './engines/liquidity-marketplace';
 import { RouteCompiler, RouteScoringEngine } from './engines/routing';
+import { OpportunityDiscoveryEngine } from './engines/opportunity-discovery-v2';
 import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
 import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
-import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine } from './engines/opportunity-discovery';
+import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine as OldOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
 import { InMemoryRecommendationStore, type RecommendationStore } from './recommendations';
 import { InMemoryLiquidityGraph, type LiquidityGraphQuery } from './graphs/liquidity-graph';
 // Amendment 2 engines:
@@ -85,9 +86,12 @@ export type {
   ScoringWeights,
 } from './engines/routing';
 export { computeTotalScore, DEFAULT_SCORING_WEIGHTS, validateRoute } from './engines/routing';
+export * from './engines/opportunity-discovery-v2';
 export * from './engines/liquidity-market';
 export * from './engines/liquidity-intelligence';
-export * from './engines/opportunity-discovery';
+// v1 opportunity-discovery (legacy NoOp — replaced by v2):
+export { NoOpOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
+export type { OpportunityDiscoveryEngine as OldOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
 export * from './recommendations';
 export * from './graphs/liquidity-graph';
 // Amendment 2 public surface:
@@ -129,7 +133,7 @@ export interface Runtime {
   reserveMarketState: ReserveMarket;  // A1 shadow-price publisher (legacy interface)
   liquidityStrategyMarketplace: LiquidityStrategyMarketplace;
   liquidityIntelligence: LiquidityIntelligenceEngine;
-  opportunityDiscovery: OpportunityDiscoveryEngine;
+  opportunityDiscovery: OldOpportunityDiscoveryEngine;
   recommendationStore: RecommendationStore;
   liquidityGraph: LiquidityGraphQuery;
   // Amendment 2 engines (interface-only in M-RT-1; wired in later milestones):
@@ -163,6 +167,8 @@ export interface Runtime {
   routeScoringEngine: RouteScoringEngine;
   // M-RT-7: The real Financial Compiler (pure, deterministic, reads-only):
   realCompiler: RealFinancialCompiler;
+  // M-RT-9: Opportunity Discovery (pure, deterministic network analysis → Recommendations):
+  opportunityDiscoveryV2: OpportunityDiscoveryEngine;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -234,6 +240,15 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   });
   // M-RT-7: The real Financial Compiler (pure, deterministic, reads-only).
   const realCompiler = new RealFinancialCompiler();
+  // M-RT-9: Opportunity Discovery (pure, deterministic network analysis → Recommendations).
+  const opportunityDiscoveryV2 = new OpportunityDiscoveryEngine({
+    capabilityGraph,
+    reserveLedger,
+    reserveMarket,
+    liquidityMarketplace,
+    routeCompiler,
+    clock,
+  });
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
   const reserveDiscovery = new NoOpReserveDiscoveryEngine();
@@ -281,6 +296,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     routeCompiler,
     routeScoringEngine,
     realCompiler,
+    opportunityDiscoveryV2,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),
