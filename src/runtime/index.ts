@@ -27,6 +27,7 @@ import { ReserveMarketEngine } from './engines/reserve-market-v2';
 import { LiquidityMarketplaceService } from './engines/liquidity-marketplace';
 import { RouteCompiler, RouteScoringEngine } from './engines/routing';
 import { OpportunityDiscoveryEngine } from './engines/opportunity-discovery-v2';
+import { RecommendationLifecycleService } from './engines/recommendation-lifecycle-v2';
 import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
 import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
 import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine as OldOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
@@ -87,6 +88,7 @@ export type {
 } from './engines/routing';
 export { computeTotalScore, DEFAULT_SCORING_WEIGHTS, validateRoute } from './engines/routing';
 export * from './engines/opportunity-discovery-v2';
+export * from './engines/recommendation-lifecycle-v2';
 export * from './engines/liquidity-market';
 export * from './engines/liquidity-intelligence';
 // v1 opportunity-discovery (legacy NoOp — replaced by v2):
@@ -169,6 +171,8 @@ export interface Runtime {
   realCompiler: RealFinancialCompiler;
   // M-RT-9: Opportunity Discovery (pure, deterministic network analysis → Recommendations):
   opportunityDiscoveryV2: OpportunityDiscoveryEngine;
+  // M-RT-10: Recommendation Lifecycle (event-driven state management; the only writer):
+  recLifecycle: RecommendationLifecycleService;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -249,6 +253,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     routeCompiler,
     clock,
   });
+  // M-RT-10: Recommendation Lifecycle (event-driven state management; the only writer).
+  const recLifecycle = new RecommendationLifecycleService(eventStore, clock);
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
   const reserveDiscovery = new NoOpReserveDiscoveryEngine();
@@ -297,6 +303,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     routeScoringEngine,
     realCompiler,
     opportunityDiscoveryV2,
+    recLifecycle,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

@@ -2949,3 +2949,57 @@ Stage Summary:
 - Maturity matrix: 8 primitives feature-complete.
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - NEXT: M-RT-10 Recommendation Lifecycle (prioritization, approval state, implementation tracking — the 9-stage lifecycle: Detected → Scored → Simulated → Recommended → Accepted → Implemented → Observed → Measured → Learning stored).
+
+---
+Task ID: M-RT-10 (Recommendation Lifecycle — event-driven state management, 9-stage lifecycle)
+Agent: main (Z.ai Code)
+Task: Implement M-RT-10 Recommendation Lifecycle. Responsibility: lifecycle management ONLY (not discovery, not execution). Recommendations are immutable protocol objects whose state evolves through domain events — not in-place mutation. Current state is rebuilt as a projection from the event stream. 9 stages: Detected → Scored → Simulated → Recommended → Accepted → Implemented → Observed → Measured → Learned. Each transition = one domain event. Invalid transitions rejected. The service NEVER performs the implementation itself.
+
+Work Log:
+- Created src/runtime/engines/recommendation-lifecycle-v2/types.ts:
+  · LifecycleState (9 states: detected, scored, simulated, recommended, accepted, implemented, observed, measured, learned).
+  · LifecycleEventType (9 event types: recommendation.detected/scored/simulated/recommended/accepted/implemented/observed/measured/learned).
+  · LEGAL_TRANSITIONS — the legal transition map (from → allowed to[]). Terminal state 'learned' has no outgoing transitions. Scored can skip to recommended (if no twin). Recommended/accepted can go to learned (rejected/revoked).
+  · isLegalTransition(from, to) — pure validation function.
+  · stateToEventType(state) — maps a state to its event type.
+  · LifecycleEventPayload (recommendationId, from, to, reason, data?).
+  · LifecycleUncommittedEvent (compatible with UncommittedEvent).
+  · LifecycleEventRecord (stored event with ts + version).
+  · RecommendationLifecycleState (recommendationId, currentState, history[], detectedAt, lastTransitionAt, score?, measurement?).
+  · IllegalTransitionError — thrown when a transition is illegal.
+
+- Created src/runtime/engines/recommendation-lifecycle-v2/projection.ts:
+  · RecommendationLifecycleProjection — rebuilds lifecycle state from the event stream. Same projection discipline as every other primitive. rebuild(events) replays all events, tracks currentState through transitions, captures score at 'scored' stage, captures measurement at 'measured' stage. Pure, deterministic.
+
+- Created src/runtime/engines/recommendation-lifecycle-v2/service.ts:
+  · RecommendationLifecycleService — the ONLY writer. Constructor takes EventStore + RuntimeClock.
+  · detect(recommendationId, reason, env, actor, corr) — registers a new recommendation (detected state; first event).
+  · transition(recommendationId, to, reason, env, actor, corr, data?) — validates the transition (reads current state by replay, checks isLegalTransition, throws IllegalTransitionError if illegal, appends one domain event, re-reads from events). NEVER performs the implementation.
+  · getState(recommendationId, env) — reads current state by replaying the event stream (via projection).
+  · listAll(env) — scans for rec-lifecycle events, groups by recommendation ID, rebuilds each.
+  · verifyReplay(recommendationId, env) — rebuild + verify.
+
+- Created src/runtime/engines/recommendation-lifecycle-v2/index.ts — barrel.
+- Created API routes:
+  · src/app/api/runtime/recommendations/route.ts — GET (list all lifecycle states with byState summary).
+  · src/app/api/runtime/recommendations/[id]/transition/route.ts — POST (transition a recommendation; validates; returns 422 on illegal transition with from/to info).
+- Updated src/runtime/index.ts — imported RecommendationLifecycleService; added `recLifecycle` to the Runtime container; createRuntime() instantiates it. Re-exported from barrel.
+- Updated INTERFACE-CONTRACT-CATALOG.md Appendix C — Recommendation Lifecycle row: Contracts ✅ + Logic ✅ + Events ✅ + Projection ✅ + Invariants ✅ + Replay ✅ + API ✅ + Prod ⬜. Nine primitives now feature-complete.
+
+Verification (M-RT-10 exit criteria — all pass):
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors (fixed: `kind: 'domain' as const` in an interface → `kind: 'domain'`).
+- End-to-end test (full 9-stage lifecycle):
+  1. Detected → 2. Scored (score=0.85) → 3. Simulated → 4. Recommended → 5. Accepted → 6. Implemented → 7. Observed → 8. Measured (measurement={actualVolumeDelta:42000, actualRevenueDelta:1800, actualCostDeltaBps:-12}) → 9. Learned ✓
+  10. Illegal transition (learned → scored) rejected with IllegalTransitionError ✓
+  11. Determinism: replay reproduces identical state (currentState=learned, history=9, score=0.85, measurement matched) PASS ✓
+  12. Purity: service only validates + appends events; no discovery/execution ✓
+  13. Event stream: 9 events (one per transition) ✓
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- M-RT-10 (Recommendation Lifecycle) COMPLETE. Event-driven lifecycle management where recommendations are immutable protocol objects whose state evolves through 9 domain events. Invalid transitions rejected. State rebuilt entirely from events by replay. The service NEVER performs the implementation.
+- The closed-loop optimization cycle is now structurally complete: Discovery (M-RT-9) finds → Lifecycle (M-RT-10) manages → (future: Digital Twin M-RT-11 validates → Execution M-RT-12 implements → Measurement learns).
+- Maturity matrix: 9 primitives feature-complete. Recommendation Lifecycle: Contracts ✅ + Logic ✅ + Events ✅ + Projection ✅ + Invariants ✅ + Replay ✅ + API ✅ (Prod ⬜).
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- NEXT: M-RT-11 Digital Twin (simulation + validation of recommendations; counterfactual: Current Network vs Alternative Network).

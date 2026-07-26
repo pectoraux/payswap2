@@ -895,6 +895,7 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | **Route Graph + Routing** | ✅ | ✅ | n/a | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | **Financial Compiler** | ✅ | ✅ | n/a | n/a | ✅ | ✅ | ✅ | ⬜ |
 | **Opportunity Discovery** | ✅ | ✅ | n/a | n/a | n/a | ✅ | ✅ | ⬜ |
+| **Recommendation Lifecycle** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | Runtime Pipeline | ✅ | ⏳ | ✅ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Settlement Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
 | Reserve Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -910,14 +911,15 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | Digital Twin | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Economic Health Dashboard | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 
-**Current state (post M-RT-9):** Eight primitives are feature-complete. The
-**Opportunity Discovery** engine (M-RT-9) is now live — pure, deterministic
-network analysis that reads all compiled projections and produces immutable
-Recommendation protocol objects (with evidence + expectedValue + graphDiff).
-8 of 12 opportunity analyzers are real (missing_bridge, expensive_corridor,
-underutilized/overutilized_reserve, idle_liquidity, high_latency_path,
-excessive_fee_path, single_provider_dependency); 4 are stubs for later.
-The Runtime now discovers network improvements — the "Evolve" responsibility
-is operational.
+**Current state (post M-RT-10):** Nine primitives are feature-complete. The
+**Recommendation Lifecycle** (M-RT-10) is now live — event-driven lifecycle
+management where recommendations are immutable protocol objects whose state
+evolves through domain events (Detected → Scored → Simulated → Recommended →
+Accepted → Implemented → Observed → Measured → Learned). Invalid transitions
+are rejected; the state is rebuilt entirely from events by replay; the service
+never performs the implementation itself. The closed-loop optimization cycle
+is now structurally complete: Discovery (M-RT-9) finds → Lifecycle (M-RT-10)
+manages → (future: Digital Twin validates → Execution implements → Measurement
+learns).
 
-*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-9 done, M-RT-10 next.*
+*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-10 done, M-RT-11 next.*
