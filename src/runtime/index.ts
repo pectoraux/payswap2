@@ -83,6 +83,8 @@ export * from './compiler';
 export * from './graphs/knowledge-graph';
 // Integration Pass public surface (type-only — compresses peer concepts):
 export * from './integration';
+// v1.5 Final Tightening public surface (type-only — closed-loop optimization):
+export * from './optimization-loop';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';

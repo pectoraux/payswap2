@@ -2361,3 +2361,51 @@ Stage Summary:
 - M-RT-1 skeleton extended with 1 type-only integration module (integration/types.ts + barrel). No business logic. No new top-level primitives.
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - PER USER INSTRUCTION: The Constitution stays frozen. The objective was not to increase concepts but to make the Runtime feel like one coherent operating system. Implementation resumes at M-RT-2 (Capability Graph) when the user gives the go-ahead. STOP here.
+
+---
+Task ID: RT-V1.5-TIGHTENING (Runtime Constitution v1.5 Final Tightening — Closed-Loop Economic Intelligence; PERMANENT FREEZE)
+Agent: main (Z.ai Code)
+Task: The final tightening — NOT a new amendment, NOT new primitives. Explicitly state that Economic Intelligence is closed-loop (Discover→Recommend→Validate→Learn). Define the Continuous Economic Optimization Loop (Observe→Discover→Recommend→Simulate→Prioritize→Execute→Measure→Learn→Observe). Add the Economic Flywheel. Make Recommendation confidence adaptive. Give the Compiler dual modes (execution + optimization). Organize Runtime Memory into 3 tiers (Operational/Economic/Learning). Clarify continuous Opportunity Discovery, Knowledge Graph lifecycle, LP/Treasury cooperative evolution. Declare the north-star objective. NO new runtimes/primitives/engines/graphs/passes/objects/types/memory/layers. Update ONLY canonical architecture + roadmap + constitution + frozen vocabulary + M-RT-1 interfaces (type-only). No business logic. PERMANENTLY freeze v1.5. STOP.
+
+Work Log:
+ARCHITECTURE DOC (PROTOCOL-RUNTIME-ARCHITECTURE.md):
+- Renamed to "PaySwap Runtime — Architecture (v1.5 Runtime Constitution, Final Tightening: Closed-Loop Economic Intelligence)". Updated header block: architecture COMPLETE; future work = implementation only; v1.5 does NOT introduce new primitives — it connects existing ones into one closed-loop self-improving system.
+- Updated §0 Philosophy to v1.5: north-star objective as the opening sentence ("The Runtime exists to maximize the long-term health of the financial network while optimizing every individual financial intent"). "The Runtime is not a payment processor — it is a continuously optimizing financial network." Economic Flywheel reference. Four responsibilities (Execute/Optimize/Coordinate/Evolve via closed loop).
+- Added "Economic Intelligence Integration Pass — The Closed Loop (Final Tightening)" section near the top (after Integration Pass). States: NOT a new amendment, NOT new primitives — the final tightening. Includes the north-star objective, the guiding rule, the Continuous Economic Optimization Loop diagram, the Economic Flywheel diagram, and a 14-row tightening summary table.
+- NEW §7AB The Continuous Economic Optimization Loop: never stops; independent from payment execution; runs on Runtime Clock. 8-phase table (Observe→Discover→Recommend→Simulate→Prioritize→Execute→Measure→Learn) with owner + what-happens per phase. Closed loop: Learn feeds back into Observe.
+- NEW §7AC Economic Intelligence Closed-Loop Phases: 4 permanent phases (Discover/Recommend/Validate/Learn). Validate = 4 validators (Digital Twin + Counterfactual + Economic Score + Compiler). Recommendation Feedback Loop diagram (Recommendation→Digital Twin→Implementation→Measurement→Runtime Memory→Economic Intelligence→Future Recommendations). No new engine — connects existing Recommendation Lifecycle + Digital Twin + Runtime Memory + Economic Intelligence.
+- NEW §7AD Compiler Dual Modes: same compiler, two modes. Execution Compilation (payment Intent → immediate Execution Plan) + Optimization Compilation (Recommendation → Optimization Plan, validated not executed). CompilerMode type, CompilerModeSelector interface, OptimizationPlan type. Both modes use same passes/Knowledge Graph/cost decomposition.
+- NEW §7AE Adaptive Recommendation Confidence: confidence is dynamic — increases when predictions match reality, decreases when diverge. NOT a new ML engine — existing Recommendation Lifecycle "learned" stage + ImpactMeasurement. ConfidenceFeedback type (recommendationId/type/predicted/actual/confidenceDelta/newTypeConfidence). Runtime learns automatically which rec types create real value.
+- NEW §7AF Runtime Memory Hierarchy: 3 tiers (Operational/Economic/Learning) all inside existing Runtime Memory primitive. Tier table (contents + source per tier). RuntimeMemoryTier type, TieredRuntimeMemory interface (recall with tier filter + recordTo + typeConfidence). Operational answers "how did corridor perform last Friday"; Economic answers "when does LP A congest"; Learning answers "do missing_bridge recs produce +40% volume".
+- NEW §7AG Continuous Opportunity Discovery + Knowledge Graph Lifecycle: Opportunity Discovery is continuous (not per-payment) — analyzes all 6 graphs + Runtime Memory (3 tiers) + existing Recommendations + Economic Scores. Knowledge Graph NOT manually maintained — continuously rebuilt from Events + Compiler outputs + Recommendations + Economic Scores + Runtime Memory + Graph projections. "Everything feeds the graph; the graph feeds everything."
+- NEW §7AH LP + Treasury Evolution as Cooperative Optimization: LP Growth = advisor (cooperative, not competitive — helps LPs increase revenue/utilization/expand corridors/deploy capital/optimize pricing/reduce idle liquidity). Treasury Growth = network steward (optimizes throughput/capital efficiency/resilience/corridor coverage/network growth — NOT merely profitability). Both are recommendation producers within Economic Intelligence flowing through the same Validate→Learn loop.
+- NEW §7AI The North-Star Objective: "The Runtime exists to maximize the long-term health of the financial network while optimizing every individual financial intent." When profitability and network health conflict, network health wins (consistent with Principle 8 — Economic Safety). The Continuous Economic Optimization Loop is the mechanism pursuing this objective.
+- Updated §25 scorecard: added Closed-loop optimization (open-loop→full), Adaptive learning (static→full) v1.5 rows.
+- Updated §26 → "Runtime Constitution PERMANENTLY FROZEN (v1.5 — Final Tightening: Closed-Loop Economic Intelligence)". Architecture COMPLETE. Future work = implementation only. No further architectural amendments — ever. Any future capability as compiler passes / EI plugins / graph projections / strategies / policies / recommendation producers / inspectors / UI. Remaining unknowns are algorithmic and operational, not structural.
+
+M-RT-1 SKELETON EXTENSION (src/runtime/) — 1 new type-only module:
+- Created optimization-loop/types.ts — TYPE-ONLY: OptimizationLoopPhase (8 phases) + OPTIMIZATION_LOOP_ORDER; OptimizationLoopTick (tickId/startedAt/phaseResults/recommendationsSurfaced/Suppressed/confidenceAdjustments); EconomicIntelligencePhase (4 phases: discover/recommend/validate/learn); RecommendationValidator (4: digital_twin/counterfactual/economic_score/compiler) + ValidationResult; CompilerMode ('execution'|'optimization') + CompilerModeSelector + OptimizationPlan; ConfidenceFeedback (recommendationId/type/predicted/actual/confidenceDelta/newTypeConfidence); RuntimeMemoryTier (operational/economic/learning) + TieredRuntimeMemory; NORTH_STAR_OBJECTIVE constant. index.ts barrel (type-only).
+- Updated vocabulary.ts — added 7 v1.5 terms (Continuous Economic Optimization Loop, Economic Flywheel, Economic Intelligence Phase, Compiler Mode, Adaptive Confidence, Runtime Memory Tier, North-Star Objective).
+- Updated index.ts barrel — re-exports optimization-loop module (type-only).
+
+Verification:
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors in src/runtime/ (all v1.5 types compile cleanly).
+- Load check: 15 principles, 68 vocabulary terms (61 + 7 v1.5). OPTIMIZATION_LOOP_ORDER = observe→discover→recommend→simulate→prioritize→execute→measure→learn. NORTH_STAR_OBJECTIVE present. All v1.5 types compile and import.
+- End-to-end dispatch (no regression): no-op payment intent → status 'completed', 15 trace stages, 12 events appended. Skeleton spine intact.
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- v1.5 Final Tightening applied. Runtime Constitution PERMANENTLY FROZEN as v1.5 edition. The architecture is COMPLETE — future work is implementation only.
+- Economic Intelligence is now explicitly closed-loop: Discover → Recommend → Validate (4 validators) → Learn. The Continuous Economic Optimization Loop (8 phases) never stops and is independent from payment execution.
+- The Economic Flywheel: every execution increases network intelligence; network intelligence improves every future execution.
+- Compiler has dual modes (execution + optimization) — same compiler, different intent.
+- Recommendation confidence is adaptive (prediction-vs-reality; no ML).
+- Runtime Memory has 3 tiers (Operational/Economic/Learning) inside the existing primitive.
+- Knowledge Graph continuously rebuilt; everything feeds it; it feeds everything.
+- LP/Treasury evolution is cooperative (advisor/network steward, not competitor/profit center).
+- North-star objective declared: maximize long-term network health while optimizing every intent.
+- NO new primitives/engines/graphs/passes/objects/types/memory/layers introduced. Everything reuses the existing Constitution.
+- M-RT-1 skeleton extended with 1 type-only optimization-loop module. No business logic.
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- PER USER INSTRUCTION: Architecture PERMANENTLY frozen v1.5. The remaining unknowns are algorithmic and operational, not structural. Implementation resumes at M-RT-2 (Capability Graph + Reserve Market). STOP here.

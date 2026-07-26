@@ -1,32 +1,32 @@
-# PaySwap Runtime — Architecture (v1.4 Runtime Constitution, True Permanent Freeze)
+# PaySwap Runtime — Architecture (v1.5 Runtime Constitution, Final Tightening: Closed-Loop Economic Intelligence)
 
-> **Runtime Constitution PERMANENTLY FROZEN — v1.4 (True Final Freeze).**
-> This is the **actual final** architecture amendment. The Runtime
-> Constitution is now frozen **permanently**. No further architectural
-> redesigns — ever. All future work must fit within this architecture,
-> implemented as engines, plugins, strategies, graph projections, or compiler
-> passes **within** the Constitution. The Constitution itself does not change.
+> **Runtime Constitution PERMANENTLY FROZEN — v1.5 (Final Tightening).**
+> The architecture is **complete**. Future work is **implementation only**.
+> No further architectural amendments — ever. The 18 permanent primitives are
+> unchanged; the Integration Pass compressed peer concepts under them; this
+> Final Tightening connected them into one **closed-loop self-improving
+> system** — the Continuous Economic Optimization Loop.
 >
-> v1.4 adds the **unifying abstraction** that ties every engine together:
-> the **Financial Network Compiler** — the layer that turns a business Intent
-> into an executable financial program (an Execution Plan). Every engine
-> becomes a **compiler optimization pass**. It also introduces the
-> **Financial Knowledge Graph** as the single root over the five existing
-> graphs, elevates the **Recommendation to a first-class Protocol Object**
-> with identity + lifecycle, and adds the fourth Runtime responsibility:
-> **Coordinate**.
+> v1.5 does NOT introduce new primitives. It explicitly states that Economic
+> Intelligence is **closed-loop** (Discover → Recommend → Validate → Learn),
+> defines the **Economic Flywheel**, makes Recommendation confidence
+> **adaptive**, gives the Compiler **dual modes** (execution + optimization),
+> organizes Runtime Memory into **three tiers**, and declares the
+> **north-star objective**: *maximize the long-term health of the financial
+> network while optimizing every individual financial intent.*
 >
-> **Status:** Implementation-ready. Phase 2 resumes from M-RT-1 with all
-> amendment interfaces (including the Compiler + Knowledge Graph) in the
-> skeleton.
+> **Status:** Implementation-ready. Phase 2 resumes at M-RT-2 (Capability
+> Graph + Reserve Market) with all amendment + integration + tightening
+> interfaces in the skeleton.
 > **Supersedes:** v1 (Stripe-mirror), v2 (programmable-network reframe),
 > Amendment 1 (Liquidity Intelligence + Reserve-Aware Routing), Amendment 2
 > (Economic Operating System + Economic Health + Multi-hop design), Final
-> Amendment (Economic Discovery & Network Evolution + Capability/Route split).
-> **Philosophy (one sentence, v1.4):** *The Runtime executes financial
-> intents, optimizes execution, coordinates independent economic actors, and
-> continuously evolves the financial network — compiling every intent into an
-> explainable execution.*
+> Amendment (Economic Discovery & Network Evolution + Capability/Route split),
+> v1.4 (Financial Compiler + Knowledge Graph + Coordination), Integration
+> Pass (compressing peer concepts).
+> **Philosophy (north-star, v1.5):** *The Runtime exists to maximize the
+> long-term health of the financial network while optimizing every individual
+> financial intent.*
 > **Kernel constraint:** The frozen kernel (`src/kernel/*`) is never
 > modified. Everything below is built **above** the kernel primitives.
 
@@ -266,6 +266,64 @@ or Economic Intelligence plugins.
 
 ---
 
+## Economic Intelligence Integration Pass — The Closed Loop *(Final Tightening)*
+
+> **The architecture is conceptually complete. This is NOT a new amendment and
+> NOT a new set of primitives.** It is the **final tightening**: explicitly
+> stating that Economic Intelligence is **closed-loop**, not open-loop —
+> connecting everything already designed into one continuous self-improving
+> feedback system.
+
+**The north-star objective (added):**
+> *The Runtime exists to maximize the long-term health of the financial
+> network while optimizing every individual financial intent.*
+
+**The guiding rule:** The Runtime is **not a payment processor**. It is a
+**continuously optimizing financial network**. Every payment improves future
+payments. Every execution improves the network. Every recommendation improves
+the market. Every simulation improves future recommendations. Everything
+already exists in the architecture — this pass only connects them.
+
+### The Continuous Economic Optimization Loop
+
+This loop never stops. It is **independent from payment execution**. It runs
+continuously in the background.
+
+```
+Observe → Discover → Recommend → Simulate → Prioritize →
+Execute → Measure → Learn → Observe again
+```
+
+### The Economic Flywheel
+
+```
+Payments → Compiler → Knowledge Graph → Discovery →
+Recommendations → Simulation → Implementation → Learning →
+Better Network → Better Payments
+```
+
+*Every execution increases network intelligence. Network intelligence improves
+every future execution.*
+
+| # | Tightening | What it states |
+|---|---|---|
+| 1 | **Continuous Economic Optimization Loop** | Observe → Discover → Recommend → Simulate → Prioritize → Execute → Measure → Learn → Observe. Never stops; independent from payment execution. |
+| 2 | **Economic Intelligence is closed-loop** | Four permanent phases: Discover → Recommend → Validate → Learn. (Validate = Digital Twin + Counterfactual + Economic Score + Compiler.) |
+| 3 | **Recommendation Feedback loop** | Recommendation → Digital Twin → Implementation → Measurement → Runtime Memory → Economic Intelligence → Future Recommendations. Drawn explicitly. |
+| 4 | **Adaptive Recommendation confidence** | Confidence is dynamic — increases when predictions match reality, decreases when reality diverges. No new ML; just architecture. |
+| 5 | **Compiler dual modes** | Execution Compilation (compile a payment → immediate Execution Plan) + Optimization Compilation (compile a Recommendation → Optimization Plan). Same compiler, different intent. No new compiler. |
+| 6 | **Opportunity Discovery is continuous** | Not per-payment — continuous. Analyzes all 6 graphs + Runtime Memory + Recommendations + Economic Scores. Continuously emits opportunities. |
+| 7 | **Runtime Memory hierarchy** | Three tiers — Operational Memory (previous executions), Economic Memory (network observations), Learning Memory (recommendation outcomes). All inside Runtime Memory. No new primitive. |
+| 8 | **Digital Twin lifecycle** | Continuously simulates / forecasts / validates recommendations / benchmarks execution / estimates opportunity value / replays history. No new capability. |
+| 9 | **Financial Knowledge Graph lifecycle** | Not manually maintained — continuously rebuilt from Events + Compiler outputs + Recommendations + Economic Scores + Runtime Memory + Graph projections. Everything feeds the graph; the graph feeds everything. |
+| 10 | **Economic Flywheel** | The diagram above. Every execution increases network intelligence; network intelligence improves every future execution. |
+| 11 | **LP evolution = cooperative optimization** | LP Growth Engine behaves like an advisor: helps LPs increase revenue/utilization/expand corridors/deploy capital/optimize pricing/reduce idle liquidity. Cooperative, not competitive. |
+| 12 | **Treasury evolution = network optimization** | Treasury optimizes network throughput / capital efficiency / resilience / corridor coverage / network growth — not merely profitability. |
+| 13 | **North-star objective** | "The Runtime exists to maximize the long-term health of the financial network while optimizing every individual financial intent." |
+| 14 | **No new anything** | No new runtimes, primitives, engines, graphs, compiler passes, protocol objects, recommendation types, memory systems, or optimization layers. Everything reuses the existing Constitution. |
+
+---
+
 ## Final Amendment — Economic Discovery & Network Evolution
 
 This is the **final** architecture amendment. After it, the Runtime
@@ -444,11 +502,19 @@ execution deterministically in the sandbox.
 
 ---
 
-## 0. The Philosophy (v1.4 True Final Freeze)
+## 0. The Philosophy (v1.5 — Final Tightening: Closed-Loop Economic Intelligence)
 
-> **The Runtime executes financial intents, optimizes execution, coordinates
-> independent economic actors, and continuously evolves the financial network
-> — compiling every intent into an explainable execution.**
+> **The Runtime exists to maximize the long-term health of the financial
+> network while optimizing every individual financial intent.** *(north-star
+> objective)*
+
+The Runtime is **not a payment processor**. It is a **continuously optimizing
+financial network**. Every payment improves future payments. Every execution
+improves the network. Every recommendation improves the market. Every
+simulation improves future recommendations. This is the **Economic Flywheel**
+(§7AB): a closed loop — Observe → Discover → Recommend → Simulate →
+Prioritize → Execute → Measure → Learn → Observe — that never stops and is
+independent from payment execution.
 
 The Runtime has **four continuous responsibilities**, equally important:
 1. **Execute** today's payment.
@@ -456,14 +522,15 @@ The Runtime has **four continuous responsibilities**, equally important:
 3. **Coordinate** independent economic actors (LPs, Treasury, banks,
    merchants, connectors, regulators, customers, reserves, FX providers)
    toward shared outcomes.
-4. **Evolve** tomorrow's network.
+4. **Evolve** tomorrow's network — via the closed-loop Continuous Economic
+   Optimization Loop.
 
 And the unifying mechanism: **every intent is compiled** into an Execution
 Plan by the Financial Network Compiler, where every engine is a compiler
 optimization pass. This makes PaySwap an economic network that can evolve
 itself — not a payment runtime, not merely an economic operating system, but
-a **compiling, coordinating, self-evolving financial network**. Stripe
-attempts none of #2/#3/#4. PaySwap does all four.
+a **compiling, coordinating, self-evolving financial network with a closed
+optimization loop**. Stripe attempts none of #2/#3/#4. PaySwap does all four.
 
 The Runtime no longer exists merely to execute financial intents. It exists
 to **continuously improve the liquidity network itself** while executing.
@@ -2141,6 +2208,244 @@ including the opportunities it *missed* — is inspectable.
 
 ---
 
+## 7AB. The Continuous Economic Optimization Loop *(EI Integration §1, §10)*
+
+The loop never stops. It is **independent from payment execution** — it runs
+continuously in the background, on the Runtime Clock.
+
+```
+Observe → Discover → Recommend → Simulate → Prioritize →
+Execute → Measure → Learn → Observe again
+```
+
+| Phase | Owner | What happens |
+|---|---|---|
+| **Observe** | Knowledge Graph + Runtime Memory | Continuously ingest Events, Compiler outputs, Economic Scores, execution outcomes |
+| **Discover** | Opportunity Discovery (graph analysis) | Find inefficiencies: missing corridors, idle reserves, expensive paths, unused capabilities, underpriced LPs, missing reserve pools, unused connectors |
+| **Recommend** | Recommendation Engine | Generate protocol Recommendations (proposals, not implementations) |
+| **Simulate** | Digital Twin + Counterfactual Engine | Run counterfactuals on each Recommendation; gate by thresholds |
+| **Prioritize** | Economic Score | Rank passing Recommendations by expected value × confidence |
+| **Execute** | Actors (LPs/Treasury/Ops) accept + implement | The Recommendation's Graph Diff is applied to the network |
+| **Measure** | Recommendation Lifecycle | Observe post-implementation outcome; record ImpactMeasurement |
+| **Learn** | Runtime Memory (Learning tier) | Adjust confidence for that Recommendation type; store the learned fact |
+
+The loop is **closed**: Learn feeds back into Observe, which feeds Discovery,
+which generates better-targeted Recommendations. Every cycle makes the next
+cycle smarter.
+
+---
+
+## 7AC. Economic Intelligence Closed-Loop Phases *(EI Integration §2, §3)*
+
+Economic Intelligence has **four permanent phases** — Discover → Recommend →
+Validate → Learn — forming an explicit closed loop.
+
+### Discover
+Find inefficiencies: missing corridors, idle reserves, expensive paths, unused
+capabilities, underpriced LPs, missing reserve pools, unused connectors.
+Everything already modeled (§7W Opportunity Discovery as graph analysis).
+
+### Recommend
+Generate protocol Recommendations (§7X Graph Transformations). No
+implementation — only proposals.
+
+### Validate
+Every Recommendation must pass through **four validators** before it becomes
+actionable:
+1. **Digital Twin** — counterfactual simulation (§7Z)
+2. **Counterfactual Engine** — Current vs Alternative Network (§7N)
+3. **Economic Score** — corridor scoring (§7M)
+4. **Compiler** — Optimization Compilation (§7AD)
+
+### Learn
+Measure the outcome. Store in Runtime Memory (Learning tier, §7AE). Improve
+future scoring.
+
+### Recommendation Feedback Loop
+
+```
+Recommendation → Digital Twin → Implementation → Measurement →
+Runtime Memory → Economic Intelligence → Future Recommendations
+```
+
+No new engine. This is the existing Recommendation Lifecycle (§7O) connected
+to the existing Digital Twin (§7Z), Runtime Memory (§12), and Economic
+Intelligence (§7T).
+
+---
+
+## 7AD. Compiler Dual Modes *(EI Integration §5)*
+
+The Financial Compiler has **two modes** — same compiler, different intent.
+No new compiler.
+
+| Mode | Input | Output | When |
+|---|---|---|---|
+| **Execution Compilation** | A payment Intent | An immediate Execution Plan | Per payment |
+| **Optimization Compilation** | A Recommendation | An Optimization Plan | During the Validate phase |
+
+```ts
+type CompilerMode = 'execution' | 'optimization';
+
+interface CompilerModeSelector {
+  /** Compile a payment Intent → immediate Execution Plan (executes now). */
+  compileExecution(intent: TypedIntent, ctx: CompilerContext): Promise<ExecutionPlan>;
+  /** Compile a Recommendation → Optimization Plan (validated, not executed). */
+  compileOptimization(rec: GraphTransformationRecommendation, ctx: CompilerContext): Promise<OptimizationPlan>;
+}
+
+/** An Optimization Plan — what the network would look like if the rec were implemented. */
+interface OptimizationPlan {
+  recommendationId: string;
+  compiledExecutionPlans: ExecutionPlan[];   // sample payments re-compiled under the new graph
+  estimatedNetworkImpact: { dimension: string; delta: number }[];
+  passedValidation: boolean;
+}
+```
+
+Both modes use the same passes, the same Knowledge Graph, the same cost
+decomposition. Execution Compilation produces a plan that runs now;
+Optimization Compilation produces a plan that validates whether the
+Recommendation is worth implementing.
+
+---
+
+## 7AE. Adaptive Recommendation Confidence *(EI Integration §4)*
+
+Recommendation confidence is **dynamic**. It updates after every
+implementation:
+
+- **Confidence increases** when the measured outcome matches the predicted
+  expected value (within tolerance).
+- **Confidence decreases** when reality diverges from the prediction.
+
+This is **not a new ML engine** — it is the existing Recommendation Lifecycle's
+"learned" stage (§7O) connected to the existing ImpactMeasurement (§7B). The
+confidence adjustment is a pure function of prediction-vs-reality.
+
+```ts
+interface ConfidenceFeedback {
+  recommendationId: string;
+  recommendationType: RecommendationKind;
+  predicted: { dimension: string; delta: number }[];
+  actual: ImpactMeasurement;
+  /** The confidence delta applied (+ if prediction matched, − if diverged). */
+  confidenceDelta: number;
+  /** The new confidence for this recommendation type (0..1). */
+  newTypeConfidence: number;
+  ts: number;
+}
+```
+
+Economic Intelligence consults `newTypeConfidence` when scoring future
+Recommendations of the same type. The Runtime **learns automatically** which
+recommendation types create real value — no AI subsystem, just architecture.
+
+---
+
+## 7AF. Runtime Memory Hierarchy *(EI Integration §7)*
+
+Runtime Memory (§12) is organized into **three tiers** — all inside the
+existing Runtime Memory primitive. No new primitive.
+
+| Tier | Contents | Source |
+|---|---|---|
+| **Operational Memory** | Previous executions (latency, cost, success/failure per corridor/LP/reserve/connector) | Compiler + Pipeline |
+| **Economic Memory** | Network observations (Friday payroll demand, holiday liquidity shortage, LP congestion windows, FX widening, reserve depletion cycles, connector instability) | Knowledge Graph + Liquidity Intelligence |
+| **Learning Memory** | Recommendation outcomes (predicted vs actual, confidence deltas per type) | Recommendation Lifecycle + ConfidenceFeedback |
+
+```ts
+type RuntimeMemoryTier = 'operational' | 'economic' | 'learning';
+
+interface TieredRuntimeMemory extends RuntimeMemory {
+  recall(query: MemoryQuery & { tier?: RuntimeMemoryTier }): Promise<RuntimeFact[]>;
+  /** Write a fact to a specific tier. */
+  recordTo(tier: RuntimeMemoryTier, fact: RuntimeFact): Promise<void>;
+}
+```
+
+The three tiers are queryable independently or together. Operational Memory
+answers "how did this corridor perform last Friday?"; Economic Memory answers
+"when does LP A congest?"; Learning Memory answers "do `missing_bridge` recs
+actually produce +40% volume?". All three feed the Compiler's passes and
+Economic Intelligence's Discovery.
+
+---
+
+## 7AG. Continuous Opportunity Discovery + Knowledge Graph Lifecycle *(EI Integration §6, §9)*
+
+**Opportunity Discovery is continuous** — not per-payment. It runs on the
+Runtime Clock, analyzing:
+
+- Capability Graph · Route Graph · Liquidity Graph · Resource Graph ·
+  Economic Graph · Knowledge Graph
+- Runtime Memory (all three tiers)
+- existing Recommendations
+- Economic Scores
+
+It continuously emits opportunities (§7W graph analysis). A payment does not
+trigger Discovery; Discovery runs regardless and feeds the Optimization Loop.
+
+**The Financial Knowledge Graph is not manually maintained.** It is
+continuously rebuilt from:
+- Events (Domain + Runtime)
+- Compiler outputs (Execution Plans + Optimization Plans)
+- Recommendations (accepted/rejected/implemented)
+- Economic Scores
+- Runtime Memory (all three tiers)
+- Graph projections (Capability → Route synthesis, etc.)
+
+*Everything feeds the graph; the graph feeds everything.* The Knowledge Graph
+is the **single substrate** the Compiler reads, Economic Intelligence
+analyzes, and Runtime Memory writes through.
+
+---
+
+## 7AH. LP + Treasury Evolution as Cooperative Optimization *(EI Integration §11, §12)*
+
+**LP Growth Engine** behaves like an **advisor** — cooperative optimization,
+not competition. It helps LPs:
+- increase revenue
+- increase utilization
+- expand corridors
+- deploy capital
+- optimize pricing
+- reduce idle liquidity
+
+**Treasury Growth Engine** optimizes:
+- network throughput
+- capital efficiency
+- resilience
+- corridor coverage
+- network growth
+
+— **not merely profitability**. Treasury is a network steward, not a profit
+center. Its growth recommendations serve the network's long-term health (the
+north-star objective).
+
+Both are recommendation producers within Economic Intelligence (§7T). Their
+outputs flow through the same Validate → Learn loop as every other
+Recommendation.
+
+---
+
+## 7AI. The North-Star Objective *(EI Integration §13)*
+
+> *The Runtime exists to maximize the long-term health of the financial
+> network while optimizing every individual financial intent.*
+
+This is the **north star** of the Runtime. Every architectural decision,
+every compiler pass, every Recommendation, every simulation, and every
+measurement serves this objective. When profitability and network health
+conflict, **network health wins** (consistent with Principle 8 — Economic
+Safety).
+
+The Continuous Economic Optimization Loop (§7AB) is the mechanism that
+pursues this objective: every cycle makes the network healthier and every
+future intent better-optimized.
+
+---
+
 ## 8. Operational Runtime
 
 Owns everything that is not money movement but must react to it.
@@ -2849,6 +3154,8 @@ economic capabilities, then migrates the remaining capabilities.
 | **Financial compilation** *(v1.4)* | routing | **full** (Financial Network Compiler; every engine is a compiler pass; Intent → Execution Plan → Runtime) |
 | **Unified knowledge graph** *(v1.4)* | 5 separate graphs | **full** (Financial Knowledge Graph root; cross-graph queries) |
 | **Coordination** *(v1.4)* | absent | **full** (fourth Runtime responsibility; coordinates independent economic actors toward shared outcomes) |
+| **Closed-loop optimization** *(v1.5)* | open-loop | **full** (Continuous Economic Optimization Loop: Observe→Discover→Recommend→Simulate→Prioritize→Execute→Measure→Learn; never stops; independent from payment execution) |
+| **Adaptive learning** *(v1.5)* | static | **full** (adaptive Recommendation confidence; 3-tier Runtime Memory; Compiler dual modes; self-filtering via simulation gate) |
 
 The architecture no longer optimizes for Stripe parity. It is an **economic
 network that can evolve itself** with clear principles: intent first, four
@@ -2869,46 +3176,53 @@ application architecture.
 
 ---
 
-## 26. Runtime Constitution PERMANENTLY FROZEN (v1.4 True Final Freeze applied).
+## 26. Runtime Constitution PERMANENTLY FROZEN (v1.5 — Final Tightening: Closed-Loop Economic Intelligence).
 
-The v1.4 True Final Freeze is applied. The Runtime Constitution is **frozen
-permanently** as the v1.4 edition. The architecture is frozen around the
-**18 permanent primitives** (§7S): Intent Engine, Financial Compiler, Runtime
-Pipeline, Settlement Engine, Reserve Engine, Liquidity Market, Treasury
-Intelligence, Economic Intelligence, Decision Engine, Policy Engine, Event
-Store, Projection Engine, Runtime Memory, Protocol Inspector, Financial
-Knowledge Graph, Digital Twin, Recommendation Lifecycle, Runtime Clock.
+The v1.5 Final Tightening is applied. The Runtime Constitution is **frozen
+permanently** as the v1.5 edition. The architecture is **complete**. Future
+work is **implementation only**. The 18 permanent primitives (§7S) are
+unchanged; the Integration Pass (§7T–7AA) compressed peer concepts under
+them; this Final Tightening (§7AB–7AI) connected them into one closed-loop
+self-improving system.
 
-The v1.4 additions — the **Financial Network Compiler** (the unifying
-abstraction; every engine is a compiler pass), the **Financial Knowledge
-Graph** (the root over all five graphs), **Recommendation as a Protocol
-Object** (identity + lifecycle + learning), and the **fourth responsibility:
-Coordinate** — close the last conceptual gap. The Runtime is now a
-**compiling, coordinating, self-evolving financial network**.
+**The architecture is now a complete feedback system:**
+- The **Continuous Economic Optimization Loop** (§7AB): Observe → Discover →
+  Recommend → Simulate → Prioritize → Execute → Measure → Learn → Observe.
+  Never stops; independent from payment execution.
+- **Economic Intelligence is closed-loop** (§7AC): Discover → Recommend →
+  Validate → Learn.
+- The **Compiler has dual modes** (§7AD): Execution Compilation (payments) +
+  Optimization Compilation (recommendations). Same compiler.
+- **Recommendation confidence is adaptive** (§7AE): increases when
+  predictions match reality, decreases when they diverge. No ML — just
+  architecture.
+- **Runtime Memory has three tiers** (§7AF): Operational, Economic, Learning
+  — all inside the existing primitive.
+- **The Knowledge Graph is continuously rebuilt** (§7AG): everything feeds
+  the graph; the graph feeds everything.
+- **LP/Treasury evolution is cooperative** (§7AH): advisor, not competitor;
+  network steward, not profit center.
+- **The north-star objective** (§7AI): maximize the long-term health of the
+  financial network while optimizing every individual financial intent.
 
-**No further architectural redesigns — ever.** All future work must fit
-within the 18 primitives, implemented as compiler passes, graph projections,
-plugins, strategies, or optimizers **within** the Constitution. The
-Constitution itself does not change. The remaining risks are execution
-risks: implementing the compiler incrementally without disrupting existing
-behavior, validating economic algorithms with real data, proving reserve-
-aware routing and LP market clearing under load, and hardening for production
-scale. The fastest way to improve the design now is to build it, measure it,
-and let operational experience inform future plugins — not change the
-Constitution.
+**No further architectural amendments — ever.** Any future capability must
+be implemented as: compiler passes, Economic Intelligence plugins, graph
+projections, strategies, policies, recommendation producers, inspectors, or
+UI — **within** the existing Constitution. The Constitution itself does not
+change. The remaining unknowns are algorithmic and operational, not
+structural: implementing the compiler incrementally, validating economic
+algorithms with real data, proving reserve-aware routing and LP market
+clearing under load, and hardening for production scale.
 
-**M-RT-1 is already built** (with Amendment 1, 2, and Final Amendment
-interfaces). The skeleton now needs the v1.4 interfaces added (Financial
-Compiler, Execution Plan, Financial Knowledge Graph, enriched Recommendation
-Protocol Object) — all interface-only, no business logic — then
-implementation resumes at **M-RT-2: Capability Graph** (the first economic-
-network milestone, per the reordered roadmap). The payments vertical slice
-(M-RT-12) will compile through the Financial Compiler.
+**M-RT-1 is already built** (with all amendment + integration + tightening
+interfaces). Implementation resumes at **M-RT-2: Capability Graph + Reserve
+Market** (the first economic-network milestones, per the reordered roadmap).
+The payments vertical slice (M-RT-12) will compile through the Financial
+Compiler and execute on a runtime with a fully closed optimization loop.
 
-*The Runtime executes financial intents, optimizes execution, coordinates
-independent economic actors, and continuously evolves the financial network
-— compiling every intent into an explainable execution.*
+*The Runtime exists to maximize the long-term health of the financial
+network while optimizing every individual financial intent.*
 
 ---
 
-*End of v1.4 Runtime Constitution (True Final Freeze). Architecture PERMANENTLY frozen around 18 primitives. No further redesigns — ever.*
+*End of v1.5 Runtime Constitution (Final Tightening: Closed-Loop Economic Intelligence). Architecture PERMANENTLY frozen around 18 primitives + closed optimization loop. No further redesigns — ever. Implementation begins.*

@@ -78,6 +78,14 @@ export const RUNTIME_VOCABULARY: readonly VocabTerm[] = [
   { term: 'Cost Decomposition', meaning: 'The full cost the reserve_aware_routing compiler pass optimizes: Execution + Capital + Reserve (shadow price) + Liquidity + Risk + Settlement Delay + FX. Every component is exposed in the Execution Plan.' },
   { term: 'Recommendation Simulation Gate', meaning: 'The Digital Twin as testing ground: every Recommendation auto-generates a counterfactual simulation; only those passing thresholds (min revenue/volume/confidence) surface to actors. Makes the Runtime self-filtering.' },
   { term: 'Optimization Explanation', meaning: 'Inspector answers for every payment: Why this LP/reserve/route? Why not the others? What opportunity prevented a better outcome? How would this look if recommendation #184 were already implemented?' },
+  // v1.5 Final Tightening terms (closed-loop; no new primitives):
+  { term: 'Continuous Economic Optimization Loop', meaning: 'The closed loop that never stops and is independent from payment execution: Observe → Discover → Recommend → Simulate → Prioritize → Execute → Measure → Learn → Observe again. Every cycle makes the next cycle smarter.' },
+  { term: 'Economic Flywheel', meaning: 'Payments → Compiler → Knowledge Graph → Discovery → Recommendations → Simulation → Implementation → Learning → Better Network → Better Payments. Every execution increases network intelligence; network intelligence improves every future execution.' },
+  { term: 'Economic Intelligence Phase', meaning: 'One of four permanent closed-loop phases: Discover → Recommend → Validate → Learn. Validate runs four validators (Digital Twin + Counterfactual + Economic Score + Compiler) before a Recommendation surfaces.' },
+  { term: 'Compiler Mode', meaning: 'The Financial Compiler has two modes — Execution Compilation (compile a payment → immediate Execution Plan) and Optimization Compilation (compile a Recommendation → Optimization Plan). Same compiler, different intent.' },
+  { term: 'Adaptive Confidence', meaning: 'Recommendation confidence is dynamic — increases when predictions match reality, decreases when reality diverges. No ML engine; just architecture (prediction-vs-reality pure function). Stored in Learning Memory.' },
+  { term: 'Runtime Memory Tier', meaning: 'Runtime Memory has three tiers — Operational (previous executions), Economic (network observations), Learning (recommendation outcomes). All inside the existing Runtime Memory primitive.' },
+  { term: 'North-Star Objective', meaning: 'The Runtime exists to maximize the long-term health of the financial network while optimizing every individual financial intent. When profitability and network health conflict, network health wins.' },
 ] as const;
 
 export const VOCABULARY_TERMS = RUNTIME_VOCABULARY.map((t) => t.term);
