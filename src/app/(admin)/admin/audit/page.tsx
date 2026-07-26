@@ -2,7 +2,7 @@ import { requireAdmin } from '@/lib/auth-guards';
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { db } from '@/lib/db';
+import { auditLogReadModel } from '@/runtime';
 import { formatDate } from '@/lib/format';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -14,13 +14,7 @@ export const dynamic = 'force-dynamic';
 export default async function AuditPage() {
   await requireAdmin();
 
-  const [auditLogs, totalCount] = await Promise.all([
-    db.auditLog.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-    }),
-    db.auditLog.count(),
-  ]);
+  const { logs: auditLogs, total: totalCount } = await auditLogReadModel.list({ take: 100 });
 
   return (
     <div className="space-y-6">

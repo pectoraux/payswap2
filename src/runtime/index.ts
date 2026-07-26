@@ -113,6 +113,7 @@ export * from './engines/simulator';
 export * from './engines/inspector';
 export * from './engines/api-gateway';
 export * from './engines/scheduling';
+export * from './read-models/v2';
 export * from './engines/liquidity-market';
 export * from './engines/liquidity-intelligence';
 // v1 opportunity-discovery (legacy NoOp — replaced by v2):

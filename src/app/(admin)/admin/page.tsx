@@ -12,7 +12,7 @@ import {
   Users, Building2, CreditCard, DollarSign, ArrowRight, Clock,
 } from 'lucide-react';
 import { requireAdmin } from '@/lib/auth-guards';
-import { db } from '@/lib/db';
+import { adminOverviewReadModel } from '@/runtime';
 import { formatCurrency, formatDate, formatNumber, statusBadgeClass } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -20,29 +20,8 @@ export const dynamic = 'force-dynamic';
 export default async function AdminOverviewPage() {
   await requireAdmin();
 
-  const [
-    merchantCount,
-    userCount,
-    paymentCount,
-    volumeAgg,
-    pendingWaitlistCount,
-    recentWaitlist,
-  ] = await Promise.all([
-    db.merchant.count(),
-    db.user.count(),
-    db.payment.count(),
-    db.payment.aggregate({
-      where: { status: 'COMPLETED' },
-      _sum: { amount: true },
-    }),
-    db.waitlistEntry.count({ where: { status: 'PENDING' } }),
-    db.waitlistEntry.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 8,
-    }),
-  ]);
-
-  const totalVolume = volumeAgg._sum.amount ?? 0;
+  const overview = await adminOverviewReadModel.get();
+  const { merchantCount, userCount, paymentCount, totalVolume, pendingWaitlistCount, recentWaitlist } = overview;
 
   return (
     <div className="space-y-6">

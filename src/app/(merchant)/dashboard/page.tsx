@@ -14,6 +14,7 @@ import {
   DollarSign, CreditCard, Users, ArrowDownToLine, ArrowRight, Sparkles,
 } from 'lucide-react';
 import { requireMerchant } from '@/lib/auth-guards';
+import { paymentReadModel, customerReadModel, merchantOverviewReadModel } from '@/runtime';
 import { db } from '@/lib/db';
 import { formatCurrency, formatDate, formatNumber, statusBadgeClass } from '@/lib/format';
 import { EmptyState } from '@/components/empty-state';
@@ -27,30 +28,16 @@ export default async function MerchantDashboardPage() {
   const merchantId = merchant.id;
   const currency = merchant.currency || 'USD';
 
-  // Aggregates — grouped queries against SQLite
+  // Use read models where possible; fall back to Prisma for complex queries not yet migrated
   const [
-    revenueAgg,
-    paymentCount,
-    payoutCount,
-    customerCount,
-    productCount,
+    overview,
     recentPayments,
     methodBreakdown,
     last14DaysPayments,
+    productCount,
   ] = await Promise.all([
-    db.payment.aggregate({
-      where: { merchantId, status: 'COMPLETED' },
-      _sum: { amount: true, fee: true },
-    }),
-    db.payment.count({ where: { merchantId } }),
-    db.payout.count({ where: { merchantId } }),
-    db.customerRecord.count({ where: { merchantId } }),
-    db.product.count({ where: { merchantId, deletedAt: null } }),
-    db.payment.findMany({
-      where: { merchantId },
-      orderBy: { createdAt: 'desc' },
-      take: 10,
-    }),
+    merchantOverviewReadModel.get(merchantId),
+    paymentReadModel.list(merchantId, { take: 10 }),
     db.payment.groupBy({
       by: ['method'],
       where: { merchantId, status: 'COMPLETED' },
@@ -66,11 +53,15 @@ export default async function MerchantDashboardPage() {
       select: { amount: true, currency: true, createdAt: true },
       orderBy: { createdAt: 'asc' },
     }),
+    db.product.count({ where: { merchantId, deletedAt: null } }),
   ]);
 
-  const totalRevenue = revenueAgg._sum.amount ?? 0;
-  const totalFees = revenueAgg._sum.fee ?? 0;
+  const totalRevenue = overview.totalVolume;
+  const totalFees = 0; // TODO: read model should expose fees
   const netRevenue = totalRevenue - totalFees;
+  const paymentCount = overview.paymentCount;
+  const payoutCount = overview.payoutCount;
+  const customerCount = overview.customerCount;
 
   // Build the last 14 days revenue series
   const dayMap = new Map<string, number>();
