@@ -22,6 +22,7 @@ import { DefaultPolicyEngine, type PolicyEngine } from './policy';
 import { ProjectionRunner } from './read-models';
 // Amendment 1 engines:
 import { InMemoryReserveMarket, type ReserveMarket } from './engines/reserve-market';
+import { ReserveLedgerService } from './engines/reserve-ledger';
 import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
 import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
 import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine } from './engines/opportunity-discovery';
@@ -66,6 +67,7 @@ export * from './inspector';
 export * from './read-models';
 // Amendment 1 public surface:
 export * from './engines/reserve-market';
+export * from './engines/reserve-ledger';
 export * from './engines/liquidity-market';
 export * from './engines/liquidity-intelligence';
 export * from './engines/opportunity-discovery';
@@ -133,6 +135,8 @@ export interface Runtime {
   // M-RT-2: Capability Graph as a compiled projection (compiler + projection):
   capabilityCompiler: CapabilityCompiler;
   capabilityProjection: CapabilityGraphProjection;
+  // M-RT-3: Reserve Ledger (event-derived projection; the only writer):
+  reserveLedger: ReserveLedgerService;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -187,6 +191,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     () => compilerInputFromKernel([]),  // empty by default; seed via API
   );
   const routeGraph = new InMemoryRouteGraph();
+  // M-RT-3: Reserve Ledger (event-derived projection; the only writer).
+  const reserveLedger = new ReserveLedgerService(eventStore, clock);
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
   const reserveDiscovery = new NoOpReserveDiscoveryEngine();
@@ -228,6 +234,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     knowledgeGraph,
     capabilityCompiler,
     capabilityProjection,
+    reserveLedger,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

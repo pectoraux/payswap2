@@ -870,45 +870,49 @@ agree on N consecutive payments do you switch over.
 
 ## Appendix C — Runtime Coverage (maturity matrix)
 
-Generated after every milestone. Tracks **per-primitive maturity** across six
+Generated after every milestone. Tracks **per-primitive maturity** across eight
 dimensions — a much clearer picture than a single percentage. A primitive is
-"production-ready" only when all six columns are ✅.
+"production-ready" only when all columns are ✅. **Projection**, **Invariants**,
+and **Replay** are explicit because the architecture is fundamentally
+event-driven and built around compiled projections — replay correctness is part
+of the implementation, not just a test.
 
-Legend: ✅ done · ⏳ in progress · ⬜ not started
+Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 
-| Primitive | Contracts | Logic | Events | API | Tests | Prod |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|
-| Runtime Clock | ✅ | ✅ | n/a | n/a | ⬜ | ⏳ |
-| Event Store | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| Intent Engine | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| Policy Engine | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| Decision Engine | ✅ | ✅ | n/a | n/a | ⬜ | ⬜ |
-| Projection Engine | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| Protocol Inspector | ✅ | ⏳ | ⏳ | ⬜ | ⬜ | ⬜ |
-| **Capability Graph** | ✅ | ✅ | ✅ | ✅ | ⬜ | ⏳ |
-| Reserve Ledger (M-RT-3) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Reserve Market (M-RT-4) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Liquidity Marketplace (M-RT-5) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Route Graph (M-RT-6) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Financial Compiler (M-RT-7/8) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Runtime Pipeline | ✅ | ⏳ | ✅ | ⬜ | ⬜ | ⬜ |
-| Settlement Engine | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Reserve Engine | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Liquidity Market | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Runtime Memory | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Financial Knowledge Graph | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Economic Intelligence | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Opportunity Discovery | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| LP Growth | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Treasury Growth | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Counterfactual Engine | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Recommendation Lifecycle | ✅ | ⏳ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Digital Twin | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Economic Health Dashboard | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Primitive | Contracts | Logic | Events | Projection | Invariants | Replay | API | Prod |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Runtime Clock | ✅ | ✅ | n/a | n/a | n/a | n/a | n/a | ⏳ |
+| Event Store | ✅ | ✅ | ✅ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Intent Engine | ✅ | ✅ | ✅ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Policy Engine | ✅ | ✅ | ✅ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Decision Engine | ✅ | ✅ | n/a | n/a | n/a | n/a | n/a | ⬜ |
+| Projection Engine | ✅ | ✅ | ✅ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Protocol Inspector | ✅ | ⏳ | ⏳ | ⬜ | n/a | ⬜ | ⬜ | ⬜ |
+| **Capability Graph** | ✅ | ✅ | ✅ | ✅ | n/a | ✅ | ✅ | ⏳ |
+| **Reserve Ledger** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
+| Reserve Market (M-RT-4) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Liquidity Marketplace (M-RT-5) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Route Graph (M-RT-6) | ✅ | ⬜ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ |
+| Financial Compiler (M-RT-7/8) | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
+| Runtime Pipeline | ✅ | ⏳ | ✅ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Settlement Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
+| Reserve Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
+| Liquidity Market | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
+| Runtime Memory | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Financial Knowledge Graph | ✅ | ⬜ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ |
+| Economic Intelligence | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Opportunity Discovery | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
+| LP Growth | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Treasury Growth | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Counterfactual Engine | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Recommendation Lifecycle | ✅ | ⏳ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Digital Twin | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
+| Economic Health Dashboard | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 
-**Current state (post M-RT-2):** Capability Graph is the first primitive with
-Contracts ✅ + Logic ✅ + Events ✅ + API ✅. The maturity matrix makes the
-gap to production explicit: Tests + Prod columns are the next work for every
-primitive.
+**Current state (post M-RT-3):** Two primitives are feature-complete (all
+applicable columns ✅, only Prod ⏳ remains): **Capability Graph** and **Reserve
+Ledger**. The Reserve Ledger establishes the event-derived-projection pattern
+with enforced invariants + replay verification — the same pattern every later
+graph and ledger will reuse.
 
-*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 done, M-RT-3 next.*
+*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 + M-RT-3 done, M-RT-4 next.*

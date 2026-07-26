@@ -2519,3 +2519,73 @@ Stage Summary:
 - Maturity matrix adopted: 6 columns (Contracts/Logic/Events/API/Tests/Prod) per primitive. Capability Graph: ✅✅✅✅⬜⏳.
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - NEXT: M-RT-3 Reserve Ledger (accounting only: Available/Locked/Pending/Consumed/Released; twin-token backing invariant per mint).
+
+---
+Task ID: M-RT-3 (Reserve Ledger — event-derived projection with enforced invariants)
+Agent: main (Z.ai Code)
+Task: Implement M-RT-3 Reserve Ledger with narrowed scope: accounting only (Available/Locked/Pending/Consumed/Released). No market, no shadow price, no pricing, no utilization, no forecasts. The ledger is an event-derived projection (same discipline as Capability Graph). Define invariants before implementation. Every transition emits exactly one Domain Event. Replay determinism is part of the implementation, not just a test. Maturity target: Contracts ✅ + Logic ✅ + Events ✅ + Projection ✅ + Invariants ✅ + Replay ✅ + API ✅ + Prod ⏳.
+
+Work Log:
+- Created src/runtime/engines/reserve-ledger/types.ts:
+  · Reserve (id, asset, owner, jurisdiction, backingPolicy, createdAt) — identity + policy only; balances derived from events.
+  · ReserveBalances (available, locked, pending, consumed, released) — the 5 balance buckets.
+  · ReserveState (reserve + balances + version) — a reserve + its current derived balances.
+  · ReserveTransition (lock, unlock, consume, release, replenish) — the 5 transitions. Each maps to exactly one Domain Event.
+  · ReserveEventType (reserve.created, reserve.funded, reserve.locked, reserve.unlocked, reserve.consumed, reserve.released, reserve.adjusted).
+  · ReserveEventPayload (reserveId, amount, reason, operationId?, source?, asset?, owner?, jurisdiction?, backingPolicy?).
+  · ReserveUncommittedEvent (compatible with UncommittedEvent).
+  · INVARIANTS as pure functions: validateInvariants(balances) → string[] (all 5 balances ≥ 0); simulateTransition(balances, transition, amount) → ReserveBalances | null (pure simulation); checkTransition(balances, transition, amount) → { valid, violations } (simulate + validate); totalBalance(balances) → number (Available + Locked + Pending + Consumed + Released); transitionToEventType(transition) → ReserveEventType.
+  · State machine: replenish → Available+; lock → Available- Locked+; unlock → Locked- Available+; consume → Locked- Consumed+; release → Consumed- Released+.
+
+- Created src/runtime/engines/reserve-ledger/projection.ts:
+  · ReserveLedgerProjection — rebuilds ReserveState from the Domain Event stream. The ONLY thing that produces ReserveState.
+  · rebuild(events) → ReserveState | null — replays all events to reconstruct the current state.
+  · apply(event, current) → ReserveState — applies one event (creates from reserve.created, or transitions balances).
+  · applyTransition(balances, eventType, amount) → ReserveBalances — pure function; maps event type to balance change.
+  · The ledger is NEVER mutated directly — the projection derives state from events.
+
+- Created src/runtime/engines/reserve-ledger/service.ts:
+  · ReserveLedgerService — the ONLY writer. Constructor takes EventStore + RuntimeClock.
+  · create(params) → ReserveState — creates a reserve (emits reserve.created). Checks it doesn't already exist.
+  · transition(params) → ReserveState — executes a transition. ENFORCES INVARIANTS BEFORE APPENDING: (1) reads current state by replaying events; (2) simulates the transition + checks invariants via checkTransition(); (3) if invalid, throws ReserveInvariantViolation; (4) if valid, appends exactly ONE Domain Event; (5) re-reads state from events (never trusts in-memory mutation).
+  · getState(reserveId, environment) → ReserveState | null — reads current state by replaying the event stream (via projection).
+  · listReserves(environment) → ReserveState[] — scans for reserve.created events + rebuilds each.
+  · verifyReplay(reserveId, environment) → { valid, state, violations } — rebuilds from events + validates invariants. PART OF THE IMPLEMENTATION, not just a test (Principle 6: Deterministic Replay).
+  · ReserveInvariantViolation + ReserveNotFoundError custom errors.
+  · appendEvents() private helper — uses OCC (expectedVersion) on the event store.
+
+- Created src/runtime/engines/reserve-ledger/index.ts — barrel exporting all types + functions + service + projection + errors.
+
+- Created API routes:
+  · src/app/api/runtime/reserves/route.ts — GET (list all reserves with balances + total) + POST (create a reserve, admin only).
+  · src/app/api/runtime/reserves/[id]/transition/route.ts — POST (execute a transition: lock/unlock/consume/release/replenish; enforces invariants; returns 422 on violation with violations array, 404 if not found).
+  · src/app/api/runtime/reserves/[id]/verify/route.ts — GET (replay verification: rebuild from events + check invariants hold).
+
+- Updated src/runtime/index.ts — imported ReserveLedgerService; added `reserveLedger: ReserveLedgerService` to the Runtime container; createRuntime() instantiates it (real, not NoOp); re-exported from barrel.
+
+- Updated INTERFACE-CONTRACT-CATALOG.md Appendix C — maturity matrix expanded from 6 to 8 columns (added Projection, Invariants, Replay as explicit columns per review feedback). Reserve Ledger: Contracts ✅ + Logic ✅ + Events ✅ + Projection ✅ + Invariants ✅ + Replay ✅ + API ✅ + Prod ⏳. Capability Graph also updated to include Projection ✅ + Replay ✅.
+
+Verification (M-RT-3 exit criteria — all pass):
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors (fixed 3: extended ReserveEventPayload with optional asset/owner/jurisdiction/backingPolicy for created events; made ReserveUncommittedEvent payload compatible with UncommittedEvent using intersection type; fixed projection cast to use `as unknown as`).
+- End-to-end test (full lifecycle):
+  1. Created reserve res-ghs-1 (GHS, treasury, GH, fiat_full) → zero balances ✓
+  2. Replenish(100000) → available=100000 ✓
+  3. Lock(30000) → available=70000, locked=30000 ✓
+  4. Consume(30000) → locked=0, consumed=30000 ✓
+  5. Release(30000) → consumed=0, released=30000 ✓
+  6. Invariant violation: lock(999999999) → rejected with ReserveInvariantViolation ✓
+  7. Lock(20000) + Unlock(20000) → net zero (available=70000, locked=0) ✓
+  8. Replay verification: VALID, 0 violations, balances match ✓
+  9. Deterministic replay: same events → same state (PASS) ✓
+  10. Event stream: 7 events (created + funded + locked + consumed + released + locked + unlocked) — exactly one event per transition ✓
+  11. Total invariant: 70000 + 0 + 0 + 0 + 30000 = 100000 = Total ✓
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- M-RT-3 (Reserve Ledger) COMPLETE. The ledger is an event-derived projection with enforced invariants + deterministic replay.
+- Scope honored: accounting only (Available/Locked/Pending/Consumed/Released). No market, no shadow price, no pricing, no utilization, no forecasts. Those belong to M-RT-4 (Reserve Market).
+- The event-derived-projection pattern is now established for two primitives (Capability Graph + Reserve Ledger). Every later graph and ledger reuses this pattern: source-of-truth inputs → compiler/projection → derived state, with invariants enforced before every event append, and replay verification as part of the implementation.
+- Maturity matrix expanded to 8 columns per review (Contracts/Logic/Events/Projection/Invariants/Replay/API/Prod). Reserve Ledger: 7/8 ✅ (only Prod ⏳).
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- NEXT: M-RT-4 Reserve Market (shadow price + reserve cost + utilization + scarcity + forecast on top of the Reserve Ledger).
