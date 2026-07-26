@@ -1,29 +1,32 @@
-# PaySwap Runtime — Architecture (v1.3 Runtime Constitution, Final Amendment)
+# PaySwap Runtime — Architecture (v1.4 Runtime Constitution, True Permanent Freeze)
 
-> **Runtime Constitution PERMANENTLY FROZEN — v1.3 (Final Amendment).**
-> This is the **final** architecture amendment. After this, the Runtime
-> Constitution is frozen **permanently**. No further architectural redesigns.
-> All future work must fit within this architecture — implemented as engines,
-> plugins, policies, or strategies **within** the Constitution, never by
-> changing the Constitution itself.
+> **Runtime Constitution PERMANENTLY FROZEN — v1.4 (True Final Freeze).**
+> This is the **actual final** architecture amendment. The Runtime
+> Constitution is now frozen **permanently**. No further architectural
+> redesigns — ever. All future work must fit within this architecture,
+> implemented as engines, plugins, strategies, graph projections, or compiler
+> passes **within** the Constitution. The Constitution itself does not change.
 >
-> The Final Amendment introduces the last missing primitive: **Economic
-> Discovery and Network Evolution.** The Runtime now has **three continuous
-> responsibilities** — (1) execute today's payment, (2) optimize today's
-> execution, (3) improve tomorrow's network — and models the liquidity
-> network as an **evolving ecosystem**, not a static graph. The crucial
-> conceptual shift: **separate "what an LP is capable of" (Capability Graph)
-> from "what routes currently exist" (Route Graph).**
+> v1.4 adds the **unifying abstraction** that ties every engine together:
+> the **Financial Network Compiler** — the layer that turns a business Intent
+> into an executable financial program (an Execution Plan). Every engine
+> becomes a **compiler optimization pass**. It also introduces the
+> **Financial Knowledge Graph** as the single root over the five existing
+> graphs, elevates the **Recommendation to a first-class Protocol Object**
+> with identity + lifecycle, and adds the fourth Runtime responsibility:
+> **Coordinate**.
 >
-> **Status:** Implementation-ready. Phase 2 resumes from M-RT-1 with the
-> Final Amendment interfaces incorporated into the skeleton.
+> **Status:** Implementation-ready. Phase 2 resumes from M-RT-1 with all
+> amendment interfaces (including the Compiler + Knowledge Graph) in the
+> skeleton.
 > **Supersedes:** v1 (Stripe-mirror), v2 (programmable-network reframe),
 > Amendment 1 (Liquidity Intelligence + Reserve-Aware Routing), Amendment 2
-> (Economic Operating System + Economic Health + Multi-hop design).
-> **Philosophy (one sentence, Final Amendment):** *The Runtime executes
-> financial intents, optimizes execution, and continuously evolves the
-> financial network — discovering new economic opportunities and growing
-> every participant.*
+> (Economic Operating System + Economic Health + Multi-hop design), Final
+> Amendment (Economic Discovery & Network Evolution + Capability/Route split).
+> **Philosophy (one sentence, v1.4):** *The Runtime executes financial
+> intents, optimizes execution, coordinates independent economic actors, and
+> continuously evolves the financial network — compiling every intent into an
+> explainable execution.*
 > **Kernel constraint:** The frozen kernel (`src/kernel/*`) is never
 > modified. Everything below is built **above** the kernel primitives.
 
@@ -99,6 +102,25 @@ Graph) is separated from **what routes currently exist** (Route Graph), so
 the Runtime can discover routes that *could* exist, not just route through
 routes that *do* exist.
 
+### Principle 14 — Financial Compilation *(v1.4 True Final Freeze)*
+Turning a business Intent into an executable settlement is not routing — it
+is **compilation**. The Runtime compiles an Intent into an Execution Plan
+through a sequence of optimization passes (policy, compliance, fraud,
+reserve optimization, liquidity optimization, FX optimization, settlement
+planning). Every engine is a **compiler optimization pass**. The Digital
+Twin is a **compiler sandbox** — the same compiler, different world state.
+This one abstraction unifies every engine under a single mental model:
+`Intent → Compiler → Execution Plan → Runtime → Settlement`, exactly like
+`Source Code → Compiler → Machine Code → CPU`.
+
+### Principle 15 — Coordination *(v1.4 True Final Freeze)*
+The Runtime has **four** continuous responsibilities — Execute, Optimize,
+**Coordinate**, and Evolve. The Runtime is not merely executing; it is
+coordinating independent economic actors (LPs, Treasury, banks, merchants,
+connectors, regulators, customers, reserves, FX providers) toward shared
+outcomes. Coordination is a first-class responsibility equal to execution,
+optimization, and evolution.
+
 ---
 
 ## Runtime Vocabulary (Frozen)
@@ -155,6 +177,55 @@ and AI agent uses exactly this vocabulary. Terminology never drifts.
 | **Economic Score** *(Final Amendment)* | A per-corridor score (demand/supply/competition/capital-efficiency/reserve-health/risk/latency/profitability/growth) that powers BOTH routing AND recommendations. |
 | **Counterfactual** *(Final Amendment)* | A what-if simulation comparing the Current Network vs an Alternative Network (e.g. "what if LP A had funded XOF?") across revenue/volume/latency/capital/reserve-utilization. Powers the Digital Twin's counterfactual evolution. |
 | **Recommendation Lifecycle** *(Final Amendment)* | The 9-stage lifecycle of a Recommendation: Detected → Scored → Simulated → Recommended → Accepted → Implemented → Observed → Measured → Learning stored. The Runtime learns which recommendation types create real value. |
+| **Financial Network Compiler** *(v1.4)* | The unifying abstraction above the engines. Turns a business Intent into an executable Execution Plan through a sequence of optimization passes. Every engine is a compiler optimization pass. `Intent → Compiler → Execution Plan → Runtime → Settlement`, exactly like `Source Code → Compiler → Machine Code → CPU`. |
+| **Execution Plan** *(v1.4)* | The output of the Financial Compiler — the "machine code" the Runtime executes. A complete, executable financial program: which reserves, which LPs, how many, what FX path, what settlement plan, what collateral, what capital allocation, what execution timing. |
+| **Compilation Pass** *(v1.4)* | One stage of the Financial Compiler. Each existing engine (Policy, Compliance, Fraud, Reserve, Liquidity, FX, Settlement) is a compilation pass: resolve identities → policy → compliance → fraud → reserve optimization → liquidity optimization → FX optimization → settlement planning → Execution Plan. |
+| **Financial Knowledge Graph** *(v1.4)* | The single root graph containing all five existing graphs (Capability, Route, Liquidity, Resource, Economic). Answers cross-graph queries no individual graph can (e.g. "Which LPs could become profitable if Treasury opened an XOF reserve?" traverses Capability → Reserve → Economic → Route → Opportunity). |
+| **Coordinate** *(v1.4)* | The fourth Runtime responsibility. The Runtime coordinates independent economic actors (LPs, Treasury, banks, merchants, connectors, regulators, customers, reserves, FX providers) toward shared outcomes — equal to Execute, Optimize, and Evolve. |
+| **Protocol Object** *(v1.4)* | A first-class runtime citizen with identity, lifecycle, and learnability. Recommendations are Protocol Objects: searchable, versionable, assignable, discussable, acceptable, rejectable, measurable, and learnable. |
+
+---
+
+## v1.4 True Final Freeze — Financial Compiler + Knowledge Graph + Coordination
+
+This is the **actual final** architecture amendment. The Constitution is now
+frozen **permanently**. v1.4 adds the unifying abstraction that ties every
+engine together and closes the last conceptual gap.
+
+**The missing abstraction:** the Runtime is not routing — it is **compiling**.
+A merchant says "charge customer 100 GHS"; the Runtime solves an optimization
+problem (which reserve, which LPs, how many LPs, what FX path, what settlement
+plan, what collateral, what capital allocation, what execution timing,
+whether future expected traffic changes today's decision). That is
+compilation, not routing. The **Financial Network Compiler** turns a business
+Intent into an executable Execution Plan; every engine becomes a compiler
+optimization pass.
+
+**The root graph:** five graphs (Capability, Route, Liquidity, Resource,
+Economic) exist, but relationships span them ("LP A supports Twin GHS,
+supports Instant Settlement, owns Reserve R, connects Connector X, serves
+Merchant M"). The **Financial Knowledge Graph** is the single root with
+multiple projections — one API, cross-graph queries.
+
+**Recommendation as Protocol Object:** Recommendations get identity +
+lifecycle (Proposal → Decision → Acceptance → Implementation → Outcome →
+Learning). Searchable, versionable, assignable, discussable, measurable,
+learnable.
+
+**The fourth responsibility:** Execute / Optimize / **Coordinate** / Evolve.
+The Runtime coordinates independent economic actors toward shared outcomes.
+
+| # | Addition | Effect |
+|---|---|---|
+| 1 | **Financial Network Compiler** | The unifying abstraction. `Intent → Compiler → Execution Plan → Runtime → Settlement`. Every engine is a compiler optimization pass. |
+| 2 | **Compilation Passes** | The existing engines (Policy, Compliance, Fraud, Reserve, Liquidity, FX, Settlement) become ordered compiler passes: resolve identities → policy → compliance → fraud → reserve → liquidity → FX → settlement → Execution Plan. |
+| 3 | **Execution Plan** | New first-class artifact — the compiler's output. The "machine code" the Runtime executes. |
+| 4 | **Digital Twin = Compiler Sandbox** | The twin compiles using different assumptions — same compiler, different world state. Unifies simulation and production. |
+| 5 | **Financial Knowledge Graph** | The single root over all five graphs. One API, cross-graph queries ("which LPs become profitable if Treasury opens an XOF reserve?" traverses Capability→Reserve→Economic→Route→Opportunity). |
+| 6 | **Recommendation = Protocol Object** | Identity + lifecycle (Proposal → Decision → Acceptance → Implementation → Outcome → Learning). Searchable, versionable, assignable, discussable, measurable, learnable. |
+| 7 | **Fourth responsibility: Coordinate** | Execute / Optimize / Coordinate / Evolve. The Runtime coordinates independent economic actors toward shared outcomes. |
+| 8 | **18 permanent primitives** | The canonical frozen set: Intent Engine, Financial Compiler, Runtime Pipeline, Settlement Engine, Reserve Engine, Liquidity Market, Treasury Intelligence, Economic Intelligence, Decision Engine, Policy Engine, Event Store, Projection Engine, Runtime Memory, Protocol Inspector, Financial Knowledge Graph, Digital Twin, Recommendation Lifecycle, Runtime Clock. Everything else is a plugin/strategy/optimizer/graph-projection/compiler-pass built on these. |
+| 9 | **True permanent freeze** | No further architectural redesigns — ever. All future work fits within the 18 primitives as plugins/passes/projections. |
 
 ---
 
@@ -336,21 +407,26 @@ execution deterministically in the sandbox.
 
 ---
 
-## 0. The Philosophy (Final Amendment)
+## 0. The Philosophy (v1.4 True Final Freeze)
 
-> **The Runtime executes financial intents, optimizes execution, and
-> continuously evolves the financial network — discovering new economic
-> opportunities and growing every participant.**
+> **The Runtime executes financial intents, optimizes execution, coordinates
+> independent economic actors, and continuously evolves the financial network
+> — compiling every intent into an explainable execution.**
 
-The Runtime now has **three continuous responsibilities**, equally important:
-1. **Execute today's payment.**
-2. **Optimize today's execution.**
-3. **Improve tomorrow's network.**
+The Runtime has **four continuous responsibilities**, equally important:
+1. **Execute** today's payment.
+2. **Optimize** today's execution.
+3. **Coordinate** independent economic actors (LPs, Treasury, banks,
+   merchants, connectors, regulators, customers, reserves, FX providers)
+   toward shared outcomes.
+4. **Evolve** tomorrow's network.
 
-The third responsibility — **Economic Discovery & Network Evolution** — is
-what makes PaySwap an economic network that can evolve itself, not merely a
-payment runtime or an economic operating system. Stripe never attempts #3.
-PaySwap does.
+And the unifying mechanism: **every intent is compiled** into an Execution
+Plan by the Financial Network Compiler, where every engine is a compiler
+optimization pass. This makes PaySwap an economic network that can evolve
+itself — not a payment runtime, not merely an economic operating system, but
+a **compiling, coordinating, self-evolving financial network**. Stripe
+attempts none of #2/#3/#4. PaySwap does all four.
 
 The Runtime no longer exists merely to execute financial intents. It exists
 to **continuously improve the liquidity network itself** while executing.
@@ -1455,6 +1531,261 @@ which recommendations actually create value.
 
 ---
 
+## 7P. Financial Network Compiler *(v1.4 — the unifying abstraction)*
+
+The Runtime is not routing — it is **compiling**. A merchant says "charge
+customer 100 GHS"; the Runtime solves an optimization problem (which reserve,
+which LPs, how many LPs, what FX path, what settlement plan, what collateral,
+what capital allocation, what execution timing, whether future expected
+traffic changes today's decision). That is compilation.
+
+```
+Intent → Compiler → Execution Plan → Runtime → Settlement
+```
+
+Exactly like:
+
+```
+Source Code → Compiler → Machine Code → CPU
+```
+
+The compiler is the heart of PaySwap. It unifies every engine under a single
+mental model: **every engine is a compiler optimization pass.**
+
+### Compilation phases (every engine is a pass)
+
+```
+Payment Intent
+      ↓
+  resolve identities       (Intent Engine)
+      ↓
+  policy pass              (Policy Engine)
+      ↓
+  compliance pass          (Compliance)
+      ↓
+  fraud pass               (Risk & Fraud Engine)
+      ↓
+  reserve optimization     (Reserve Engine + Reserve Market + Shadow Price)
+      ↓
+  liquidity optimization   (Liquidity Market + Strategy evaluation)
+      ↓
+  FX optimization          (FX path selection)
+      ↓
+  settlement planning      (Settlement Engine)
+      ↓
+  Execution Plan           (the compiler's output — "machine code")
+      ↓
+  Runtime executes         (Runtime Pipeline → Settlement)
+```
+
+### The Execution Plan — the compiler's output
+
+The Execution Plan is a first-class artifact: a complete, executable financial
+program. It is the "machine code" the Runtime executes.
+
+```ts
+interface ExecutionPlan {
+  id: string;
+  intentId: string;
+  // The compiled decisions (one per pass):
+  reserveAllocations: ReserveAllocation[];
+  lpAllocations: LPAllocation[];
+  fxHops: FXHop[];
+  settlementLegs: SettlementLeg[];
+  collateral: CollateralPlan;
+  capitalAllocation: CapitalAllocation;
+  executionTiming: ExecutionTiming;
+  // The passes that produced this plan (for inspection/replay):
+  passes: CompilationPassResult[];
+  // Explainability:
+  rationale: string;
+  alternativesConsidered: ExecutionPlanAlternative[];
+  estimatedCostBps: number;
+  estimatedRisk: number;
+  expectedProfitability: number;
+  compiledAt: number;
+}
+
+interface CompilationPassResult {
+  pass: CompilationPassName;
+  decision: Decision;          // the universal explainability record
+  durationMs: number;
+}
+
+type CompilationPassName =
+  | 'resolve_identities' | 'policy' | 'compliance' | 'fraud'
+  | 'reserve_optimization' | 'liquidity_optimization'
+  | 'fx_optimization' | 'settlement_planning';
+```
+
+### The Financial Compiler contract
+
+```ts
+interface FinancialCompiler {
+  /** Compile a TypedIntent into an Execution Plan. */
+  compile(intent: TypedIntent, ctx: CompilerContext): Promise<ExecutionPlan>;
+  /** Re-compile from a given pass (for partial replay / what-if). */
+  recompileFrom(plan: ExecutionPlan, fromPass: CompilationPassName, ctx: CompilerContext): Promise<ExecutionPlan>;
+  /** Compile under different assumptions (Digital Twin sandbox). */
+  compileWithAssumptions(intent: TypedIntent, assumptions: WorldAssumptions): Promise<ExecutionPlan>;
+}
+
+interface CompilerContext {
+  clock: RuntimeClock;
+  knowledgeGraph: FinancialKnowledgeGraph;   // §7Q
+  reserveMarket: ReserveMarket;
+  liquidityStrategyMarketplace: LiquidityStrategyMarketplace;
+  economicScore: EconomicScoreEngine;
+  runtimeMemory: RuntimeMemory;
+  environment: Environment;
+}
+```
+
+### Digital Twin = Compiler Sandbox
+
+The twin compiles using **different assumptions** — the same compiler,
+different world state. This unifies simulation and production: a twin run is
+the production compiler run against a sandbox world. "What if reserve GHS
+were exhausted?" = compile the same intent with a `WorldAssumptions` mutation.
+
+```ts
+interface WorldAssumptions {
+  reserveOverrides?: Record<string, Partial<ReserveMarketState>>;
+  capabilityOverrides?: LPCapability[];
+  fxOverrides?: Record<string, number>;
+  scenarioId?: string;          // a Scenario from the Simulation Runtime
+}
+```
+
+### Why this unifies everything
+
+- Every engine (Policy, Compliance, Fraud, Reserve, Liquidity, FX, Settlement)
+  is a **compiler pass** — not an independent island.
+- The Execution Plan is the single handoff between "thinking" (compilation)
+  and "doing" (execution). The Runtime Pipeline executes the plan; it does
+  not re-decide.
+- The Inspector renders the plan + every pass's Decision.
+- Replay = recompile from a pass. What-if = compile with assumptions.
+- The twin = the compiler in a sandbox. Sim = prod, structurally.
+
+---
+
+## 7Q. Financial Knowledge Graph *(v1.4 — the root graph)*
+
+Five graphs exist (Capability, Route, Liquidity, Resource, Economic), but
+relationships span them:
+
+```
+LP A  ──supports──→  Twin GHS
+LP A  ──supports──→  Instant Settlement
+LP A  ──owns──→      Reserve R
+LP A  ──connects──→  Connector X
+LP A  ──serves──→    Merchant M
+```
+
+That query traverses Capability, Reserve, Economic, Route, and Opportunity
+graphs. You don't want five graph APIs — you want **one knowledge graph with
+multiple projections.**
+
+```ts
+interface FinancialKnowledgeGraph {
+  // The five projections (each is a view over the same underlying graph):
+  capability(): CapabilityGraph;
+  route(): RouteGraph;
+  liquidity(): LiquidityGraphQuery;
+  resource(): ResourceGraphQuery;
+  economic(): EconomicGraphQuery;
+
+  // Cross-graph queries no individual graph can answer:
+  query(q: KnowledgeQuery): Promise<KnowledgeQueryResult>;
+
+  // "Which LPs could become profitable if Treasury opened an XOF reserve?"
+  //   → traverses Capability → Reserve → Economic → Route → Opportunity
+  whatIf(opensReserve: string): Promise<{ lpId: string; projectedProfitability: number }[]>;
+}
+
+interface KnowledgeQuery {
+  subject: string;                 // "lp:Acacia"
+  relationships: string[];         // ['supports', 'owns', 'connects', 'serves']
+  traverse: GraphProjection[];     // ['capability', 'reserve', 'economic', 'route', 'opportunity']
+  filter?: Record<string, unknown>;
+}
+
+type GraphProjection = 'capability' | 'route' | 'liquidity' | 'resource' | 'economic' | 'opportunity';
+
+interface KnowledgeQueryResult {
+  subject: string;
+  nodes: KnowledgeNode[];
+  edges: KnowledgeEdge[];
+  derivedFacts: { claim: string; evidence: EvidenceCitation[]; confidence: number }[];
+}
+```
+
+The Financial Knowledge Graph is the **single source of truth** the Financial
+Compiler reads at compile time (§7P's `CompilerContext.knowledgeGraph`). All
+five projections are views over it; cross-graph queries power Opportunity
+Discovery, LP/Treasury Growth, and Counterfactual evaluation.
+
+---
+
+## 7R. Recommendation as Protocol Object *(v1.4 — first-class citizen)*
+
+Recommendations are not merely objects — they are **Protocol Objects** with
+identity, lifecycle, and learnability. First-class citizens: searchable,
+versionable, assignable, discussable, acceptable, rejectable, measurable,
+and learnable.
+
+```
+Recommendation
+  ↓ Proposal      (detected + scored + simulated)
+  ↓ Decision      (accepted or rejected, with reason)
+  ↓ Acceptance    (assigned to an actor + deadline)
+  ↓ Implementation (action taken — capability added, reserve opened, etc.)
+  ↓ Outcome       (observed post-implementation)
+  ↓ Learning      (measured impact → Runtime Memory confidence adjustment)
+```
+
+The Recommendation type (Final Amendment §7B) already carries identity +
+lifecycle + measuredImpact. v1.4 makes the **Protocol Object** semantics
+explicit: every Recommendation is searchable, versionable, assignable,
+discussable, and its Learning feeds Runtime Memory (§12) so the Runtime
+continuously learns which recommendation types create real value.
+
+---
+
+## 7S. The 18 Permanent Primitives *(v1.4 — the frozen canonical set)*
+
+The Constitution freezes around these 18 permanent primitives. **Everything
+else** is a plugin, strategy, optimizer, graph projection, or compiler pass
+built on top of these — never a change to the Constitution itself.
+
+| # | Primitive | Role |
+|---|---|---|
+| 1 | **Intent Engine** | Ingests a raw request → typed Intent (the universal input) |
+| 2 | **Financial Compiler** | Compiles an Intent → Execution Plan via optimization passes (§7P) |
+| 3 | **Runtime Pipeline** | Executes an Execution Plan through the 14 stages |
+| 4 | **Settlement Engine** | Moves value to fulfill obligations (the product) |
+| 5 | **Reserve Engine** | Locks/releases/mints/burns reserves; publishes Reserve Market State + Shadow Price |
+| 6 | **Liquidity Market** | LPs publish strategies + pricing curves; market clears; winner executes |
+| 7 | **Treasury Intelligence** | Capital Allocator + Treasury Growth Engine |
+| 8 | **Economic Intelligence** | Liquidity Intelligence + Opportunity Discovery + Economic Score |
+| 9 | **Decision Engine** | Universal explainability record (9+ dimensions) |
+| 10 | **Policy Engine** | Explicit, evaluable rules gating execution |
+| 11 | **Event Store** | Append-only source of truth (audit/replay/sim/debug/inspect) |
+| 12 | **Projection Engine** | Subscribes to events → writes read models (immediate) |
+| 13 | **Runtime Memory** | Learned operational facts + recommendation learning |
+| 14 | **Protocol Inspector** | Expandable trace tree per execution |
+| 15 | **Financial Knowledge Graph** | Root over all 5 graphs; cross-graph queries (§7Q) |
+| 16 | **Digital Twin** | Autonomous 24/7 sandbox world + counterfactual evolution |
+| 17 | **Recommendation Lifecycle** | 9-stage protocol-object lifecycle with learning |
+| 18 | **Runtime Clock** | Virtual time; sandbox 10×/100×/1000×; Time Machine |
+
+**The rule:** any future capability must be expressible as one of: a compiler
+pass, a graph projection, a plugin, a strategy, or an optimizer built on
+these 18 primitives. The primitives themselves do not change.
+
+---
+
 ## 8. Operational Runtime
 
 Owns everything that is not money movement but must react to it.
@@ -2160,6 +2491,9 @@ economic capabilities, then migrates the remaining capabilities.
 | **Multi-hop composition** *(Am2)* | absent | **designed** (architecture supports it; implementation deferred to M-RT-16) |
 | **Economic Discovery & Network Evolution** *(Final)* | absent | **full** (three responsibilities; Capability/Route Graph split; Capability/Corridor/Reserve Discovery; LP/Treasury Growth Engines; Economic Score; Counterfactual; 9-stage Recommendation Lifecycle with learning) |
 | **Self-evolving network** *(Final)* | absent | **full** (the Runtime discovers what's missing and grows the network itself; it is an economic network that evolves itself) |
+| **Financial compilation** *(v1.4)* | routing | **full** (Financial Network Compiler; every engine is a compiler pass; Intent → Execution Plan → Runtime) |
+| **Unified knowledge graph** *(v1.4)* | 5 separate graphs | **full** (Financial Knowledge Graph root; cross-graph queries) |
+| **Coordination** *(v1.4)* | absent | **full** (fourth Runtime responsibility; coordinates independent economic actors toward shared outcomes) |
 
 The architecture no longer optimizes for Stripe parity. It is an **economic
 network that can evolve itself** with clear principles: intent first, four
@@ -2180,35 +2514,46 @@ application architecture.
 
 ---
 
-## 26. Runtime Constitution PERMANENTLY FROZEN (Final Amendment applied).
+## 26. Runtime Constitution PERMANENTLY FROZEN (v1.4 True Final Freeze applied).
 
-The Final Amendment is applied. The Runtime Constitution is **frozen
-permanently** as the v1.3 edition. The architecture now contains **all**
-major long-lived concepts — Intent, Execution, Settlement, Reserves,
-Liquidity Markets, Multi-hop routing (designed), Treasury optimization +
-growth, Opportunity discovery, LP growth intelligence, Economic Digital Twin
-with counterfactual evolution, Runtime Memory with recommendation learning,
-Protocol Inspector, Economic Health, Economic Score, and the Capability/
-Route Graph split that enables network self-evolution.
+The v1.4 True Final Freeze is applied. The Runtime Constitution is **frozen
+permanently** as the v1.4 edition. The architecture is frozen around the
+**18 permanent primitives** (§7S): Intent Engine, Financial Compiler, Runtime
+Pipeline, Settlement Engine, Reserve Engine, Liquidity Market, Treasury
+Intelligence, Economic Intelligence, Decision Engine, Policy Engine, Event
+Store, Projection Engine, Runtime Memory, Protocol Inspector, Financial
+Knowledge Graph, Digital Twin, Recommendation Lifecycle, Runtime Clock.
+
+The v1.4 additions — the **Financial Network Compiler** (the unifying
+abstraction; every engine is a compiler pass), the **Financial Knowledge
+Graph** (the root over all five graphs), **Recommendation as a Protocol
+Object** (identity + lifecycle + learning), and the **fourth responsibility:
+Coordinate** — close the last conceptual gap. The Runtime is now a
+**compiling, coordinating, self-evolving financial network**.
 
 **No further architectural redesigns — ever.** All future work must fit
-within this architecture, implemented as engines, plugins, policies, or
-strategies **within** the Constitution. The Constitution itself does not
-change. The next gains come from executing the milestone plan while keeping
-the runtime coherent.
+within the 18 primitives, implemented as compiler passes, graph projections,
+plugins, strategies, or optimizers **within** the Constitution. The
+Constitution itself does not change. The remaining risks are execution
+risks: implementing the compiler incrementally without disrupting existing
+behavior, validating economic algorithms with real data, proving reserve-
+aware routing and LP market clearing under load, and hardening for production
+scale. The fastest way to improve the design now is to build it, measure it,
+and let operational experience inform future plugins — not change the
+Constitution.
 
-**M-RT-1 is already built** (with Amendment 1 & 2 interfaces). The skeleton
-now needs the Final Amendment interfaces added (Capability Graph, Route
-Graph, LP/Treasury Growth Engines, Economic Score, Corridor/Capability/
-Reserve Discovery, Recommendation Lifecycle, Counterfactual Engine) — all
-interface-only, no business logic — then implementation resumes at
-**M-RT-2: Capability Graph** (the first economic-network milestone, per the
-reordered roadmap).
+**M-RT-1 is already built** (with Amendment 1, 2, and Final Amendment
+interfaces). The skeleton now needs the v1.4 interfaces added (Financial
+Compiler, Execution Plan, Financial Knowledge Graph, enriched Recommendation
+Protocol Object) — all interface-only, no business logic — then
+implementation resumes at **M-RT-2: Capability Graph** (the first economic-
+network milestone, per the reordered roadmap). The payments vertical slice
+(M-RT-12) will compile through the Financial Compiler.
 
-*The Runtime executes financial intents, optimizes execution, and
-continuously evolves the financial network — discovering new economic
-opportunities and growing every participant.*
+*The Runtime executes financial intents, optimizes execution, coordinates
+independent economic actors, and continuously evolves the financial network
+— compiling every intent into an explainable execution.*
 
 ---
 
-*End of v1.3 Runtime Constitution (Final Amendment). Architecture PERMANENTLY frozen.*
+*End of v1.4 Runtime Constitution (True Final Freeze). Architecture PERMANENTLY frozen around 18 primitives. No further redesigns — ever.*

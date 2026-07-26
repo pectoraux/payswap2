@@ -41,6 +41,9 @@ import { NoOpTreasuryGrowthEngine, type TreasuryGrowthEngine } from './engines/t
 import { NoOpEconomicScoreEngine, type EconomicScoreEngine } from './engines/economic-score';
 import { NoOpCounterfactualEngine, type CounterfactualEngine } from './engines/counterfactual';
 import { InMemoryRecommendationLifecycle, type RecommendationLifecycle } from './engines/recommendation-lifecycle';
+// v1.4 True Final Freeze — Financial Compiler + Knowledge Graph:
+import { NoOpFinancialCompiler, type FinancialCompiler } from './compiler';
+import { NoOpFinancialKnowledgeGraph, type FinancialKnowledgeGraph } from './graphs/knowledge-graph';
 
 // Re-export the public surface.
 export * from './types';
@@ -75,6 +78,9 @@ export * from './engines/treasury-growth';
 export * from './engines/economic-score';
 export * from './engines/counterfactual';
 export * from './engines/recommendation-lifecycle';
+// v1.4 True Final Freeze public surface:
+export * from './compiler';
+export * from './graphs/knowledge-graph';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -110,6 +116,9 @@ export interface Runtime {
   economicScore: EconomicScoreEngine;
   counterfactual: CounterfactualEngine;
   recommendationLifecycle: RecommendationLifecycle;
+  // v1.4 True Final Freeze — Financial Compiler + Knowledge Graph (interface-only in M-RT-1):
+  compiler: FinancialCompiler;
+  knowledgeGraph: FinancialKnowledgeGraph;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -162,6 +171,9 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const economicScore = new NoOpEconomicScoreEngine();
   const counterfactual = new NoOpCounterfactualEngine();
   const recommendationLifecycle = new InMemoryRecommendationLifecycle();
+  // v1.4 True Final Freeze — Financial Compiler + Knowledge Graph (NoOp for M-RT-1).
+  const compiler = new NoOpFinancialCompiler();
+  const knowledgeGraph = new NoOpFinancialKnowledgeGraph();
 
   const runtime: Runtime = {
     clock,
@@ -188,6 +200,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     economicScore,
     counterfactual,
     recommendationLifecycle,
+    compiler,
+    knowledgeGraph,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

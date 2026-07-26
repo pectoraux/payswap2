@@ -91,6 +91,18 @@ export const ARCHITECTURAL_PRINCIPLES: readonly Principle[] = [
     statement:
       'The Runtime has three continuous responsibilities — execute, optimize, and evolve the network. The liquidity network is an evolving ecosystem, not a static graph. The Runtime continuously discovers missing liquidity, missing reserves, missing corridors, missing FX bridges, and missing LP capabilities — and transforms them into executable, measured recommendations. What an LP is capable of (Capability Graph) is separated from what routes currently exist (Route Graph), so the Runtime can discover routes that could exist, not just route through routes that do exist. (Final Amendment)',
   },
+  {
+    number: 14,
+    name: 'Financial Compilation',
+    statement:
+      'Turning a business Intent into an executable settlement is not routing — it is compilation. The Runtime compiles an Intent into an Execution Plan through a sequence of optimization passes (policy, compliance, fraud, reserve, liquidity, FX, settlement). Every engine is a compiler optimization pass. The Digital Twin is a compiler sandbox — same compiler, different world state. (v1.4 True Final Freeze)',
+  },
+  {
+    number: 15,
+    name: 'Coordination',
+    statement:
+      'The Runtime has four continuous responsibilities — Execute, Optimize, Coordinate, and Evolve. The Runtime is not merely executing; it is coordinating independent economic actors (LPs, Treasury, banks, merchants, connectors, regulators, customers, reserves, FX providers) toward shared outcomes. Coordination is a first-class responsibility equal to execution, optimization, and evolution. (v1.4 True Final Freeze)',
+  },
 ] as const;
 
 export const PRINCIPLE_NAMES = ARCHITECTURAL_PRINCIPLES.map((p) => p.name);

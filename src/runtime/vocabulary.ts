@@ -63,6 +63,13 @@ export const RUNTIME_VOCABULARY: readonly VocabTerm[] = [
   { term: 'Economic Score', meaning: 'A per-corridor score (demand/supply/competition/capital-efficiency/reserve-health/risk/latency/profitability/growth) that powers BOTH routing AND recommendations.' },
   { term: 'Counterfactual', meaning: 'A what-if simulation comparing the Current Network vs an Alternative Network across revenue/volume/latency/capital/reserve-utilization. Powers the Digital Twin counterfactual evolution and the Recommendation "Simulated" lifecycle stage.' },
   { term: 'Recommendation Lifecycle', meaning: 'The 9-stage lifecycle of a Recommendation: Detected → Scored → Simulated → Recommended → Accepted → Implemented → Observed → Measured → Learning stored. The Runtime learns which recommendation types create real value.' },
+  // v1.4 True Final Freeze terms:
+  { term: 'Financial Network Compiler', meaning: 'The unifying abstraction above the engines. Turns a business Intent into an executable Execution Plan through a sequence of optimization passes. Every engine is a compiler optimization pass. Intent → Compiler → Execution Plan → Runtime → Settlement, exactly like Source Code → Compiler → Machine Code → CPU.' },
+  { term: 'Execution Plan', meaning: "The Financial Compiler's output — the 'machine code' the Runtime executes. A complete, executable financial program: which reserves, which LPs, how many, what FX path, what settlement plan, what collateral, what capital allocation, what execution timing." },
+  { term: 'Compilation Pass', meaning: 'One stage of the Financial Compiler. Each existing engine (Policy, Compliance, Fraud, Reserve, Liquidity, FX, Settlement) is a compilation pass: resolve identities → policy → compliance → fraud → reserve optimization → liquidity optimization → FX optimization → settlement planning → Execution Plan.' },
+  { term: 'Financial Knowledge Graph', meaning: 'The single root graph containing all five existing graphs (Capability, Route, Liquidity, Resource, Economic). Answers cross-graph queries no individual graph can. The single source of truth the Financial Compiler reads at compile time.' },
+  { term: 'Coordinate', meaning: 'The fourth Runtime responsibility (Execute / Optimize / Coordinate / Evolve). The Runtime coordinates independent economic actors (LPs, Treasury, banks, merchants, connectors, regulators, customers, reserves, FX providers) toward shared outcomes.' },
+  { term: 'Protocol Object', meaning: 'A first-class runtime citizen with identity, lifecycle, and learnability. Recommendations are Protocol Objects: searchable, versionable, assignable, discussable, acceptable, rejectable, measurable, and learnable.' },
 ] as const;
 
 export const VOCABULARY_TERMS = RUNTIME_VOCABULARY.map((t) => t.term);
