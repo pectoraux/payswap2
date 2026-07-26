@@ -2720,3 +2720,80 @@ Stage Summary:
 - Maturity matrix: 4 primitives feature-complete (Capability Graph + Reserve Ledger + Reserve Market + Liquidity Marketplace); all applicable columns ✅, only Prod ⏳.
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - NEXT: M-RT-6 Route Graph + Reserve-Aware Routing (routes compiled FROM the Capability Graph; routing scored on 9+ dimensions including reserve shadow price from the Reserve Market).
+
+---
+Task ID: M-RT-6 (Route Graph + Reserve-Aware Routing — compiled projection + pure decomposed scoring)
+Agent: main (Z.ai Code)
+Task: Implement M-RT-6 Route Graph + Reserve-Aware Routing. Route Graph = compiled projection (derived from Capability Graph; connectivity only; no economics; always rebuildable). Route Scoring = pure deterministic function consuming Route Graph + Reserve Market snapshot + Liquidity Marketplace order book + Policy + Intent constraints. Produces ranked candidate routes with DECOMPOSED score components (9 components, not a single opaque score). Does NOT reserve liquidity, lock reserves, create settlement plans, or emit execution events. Invariants: no invalid hops, no disconnected paths, no cycles.
+
+Work Log:
+- Created src/runtime/engines/routing/types.ts:
+  · RouteHop (ownerId, ownerType, capabilityId, from, to) — references a capability.
+  · Route (id, from, to, hops[], isDirect, isMultiHop, hopCount, generatedFrom[], active) — connectivity only, no economics.
+  · RouteGraph (routes[], direct(from,to), all(from,to)) — the compiled-projection interface.
+  · RouteScoreComponents (executionCostBps, reserveCostBps, liquidityCostBps, fxCostBps, settlementCostBps, latencyMs, risk, confidence, policyPenalty) — 9 DECOMPOSED components for Inspector explanations.
+  · ScoredRoute (route, components, totalScore, eligible, rejectionReason?).
+  · RoutingRequest (from, to, amount, maxCostBps?, maxLatencyMs?, maxRisk?, now).
+  · RoutingResult (request, ranked[], rejected[], winner, canRoute, generatedAt).
+  · ScoringWeights + DEFAULT_SCORING_WEIGHTS — how components combine into the total.
+  · INVARIANTS: validateRoute(route) → violations[] (≥1 hop, ≤10 hops, connectivity check each hop's to = next hop's from, route from/to match first/last hop, no repeated capability IDs = no cycles). computeTotalScore(components, weights) → number (pure).
+
+- Created src/runtime/engines/routing/compiler.ts:
+  · RouteCompiler — compiles the Route Graph from the Capability Graph. Pure, deterministic.
+  · compile(capabilities, compiledAt) → Route[] — generates direct (1-hop) routes from active capabilities. Multi-hop deferred to M-RT-19.
+  · rebuild(capabilityGraph, compiledAt) → RouteGraph — replaces the entire graph from current capabilities. Always rebuildable. Returns a RouteGraph with direct/all query methods.
+  · Does NOT know economics — connectivity only.
+
+- Created src/runtime/engines/routing/engine.ts:
+  · RouteScoringEngine — PURE deterministic scoring. Constructor takes ScoringInputs (routeGraph, capabilityGraph, reserveMarket, liquidityMarketplace, clock, weights?).
+  · rank(request, env) → RoutingResult — the pure scoring pipeline:
+    1. Get candidate routes from Route Graph
+    2. For each route: evaluateRoute()
+    3. Split into eligible + rejected
+    4. Sort eligible by totalScore (lowest = best) — DETERMINISTIC ORDERING
+    5. Return winner + ranked + rejected + canRoute
+  · evaluateRoute(route, request, env, weights) — pure per-route evaluation:
+    - Policy filter: capability active? amount within [minAmount, maxAmount]?
+    - Liquidity filter: does the marketplace have a valid offer? (calls liquidityMarketplace.quote())
+    - Reserve-cost evaluation: reads reserveMarket.getMarketSnapshotAll() → finds matching reserve → shadowPriceBps
+    - Decomposed components: executionCostBps (from quote), reserveCostBps (from shadow price), liquidityCostBps, fxCostBps (5bps if crossing currencies), settlementCostBps (2bps flat), latencyMs (from quote), risk (from quote), confidence (from capability availability), policyPenalty (0 if passed, 1 if rejected)
+    - Intent constraint check: maxCostBps, maxLatencyMs, maxRisk
+    - Returns ScoredRoute with all 9 components visible
+  · Does NOT call reserveLedger (no locking), does NOT create settlement plans, does NOT emit events. Pure read + evaluate.
+
+- Created src/runtime/engines/routing/index.ts — barrel.
+
+- Created read-only API routes:
+  · src/app/api/runtime/routes/route.ts — GET (list compiled routes; optionally rebuild from Capability Graph). Note: "Route Graph is a compiled projection — connectivity only, no economics."
+  · src/app/api/runtime/routes/rank/route.ts — GET (rank routes for from→to+amount; pure deterministic scoring). Note: "Nothing is executed. Decomposed score components are visible."
+
+- Updated src/runtime/index.ts:
+  · Imported RouteCompiler + RouteScoringEngine; added `routeCompiler` + `routeScoringEngine` to the Runtime container.
+  · createRuntime() instantiates both: RouteCompiler.rebuild(capabilityGraph) + RouteScoringEngine with all lower-layer inputs.
+  · Explicit re-exports to avoid Route/RouteGraph/RouteHop naming collision with graphs/route module.
+
+- Updated INTERFACE-CONTRACT-CATALOG.md Appendix C — Route Graph + Routing row: Contracts ✅ + Logic ✅ + Events n/a + Projection ✅ + Invariants ✅ + Replay ✅ + API ✅ + Prod ⏳. Five primitives now feature-complete.
+
+Verification (M-RT-6 exit criteria — all pass):
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors (fixed: Route/RouteGraph/RouteHop naming collision between engines/routing and graphs/route — used explicit re-exports).
+- End-to-end test (full pipeline: Capability Graph → offers → reserve → routes → scoring):
+  1. Capability Graph compiled: 6 capabilities ✓
+  2. Published 2 offers (Acacia 110bps, Baobab 80bps) ✓
+  3. Reserve TwinGHS created + funded (200000) ✓
+  4. Route Graph compiled: 6 routes; KES→TwinGHS = 3 routes (owners 1,2,3) ✓
+  5. Routing result: canRoute=true, ranked=2, rejected=1 (owner 3 has no offer), winner=owner 2 (Baobab, 80bps) ✓
+  6. Decomposed score (winner): executionCostBps=80, reserveCostBps=3 (shadow price), liquidityCostBps=80, fxCostBps=5, settlementCostBps=2, latencyMs=44000, risk=0.2, confidence=0.95, policyPenalty=0 ✓ — all 9 components visible
+  7. Determinism: same inputs → same outputs (PASS) ✓
+  8. Route invariants: no invalid hops, no disconnected paths, no cycles (PASS) ✓
+  9. Route Graph rebuildable (compiled projection): PASS ✓
+  10. Scoring is pure (no write methods, no reserve locking, no settlement creation, no events) ✓
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- M-RT-6 (Route Graph + Reserve-Aware Routing) COMPLETE. Route Graph is a compiled projection (connectivity only; no economics; always rebuildable). Scoring is pure, deterministic, and decomposed (9 score components visible for Inspector explanations). Does NOT lock reserves, create settlement, or emit events.
+- The dependency chain is clean: Capability Graph → Reserve Ledger → Reserve Market → Liquidity Marketplace → Route Graph + Routing → Financial Compiler (M-RT-7). Each milestone consumes lower-layer outputs without cyclic dependencies.
+- The scoring engine reads the Reserve Market's shadow price (reserveCostBps) and the Liquidity Marketplace's offers (executionCostBps + liquidityCostBps) — but does NOT calculate reserve economics (that's the Reserve Market's job). The Route Graph doesn't know economics at all (connectivity only).
+- Maturity matrix: 5 primitives feature-complete (Capability Graph + Reserve Ledger + Reserve Market + Liquidity Marketplace + Route Graph + Routing); all applicable columns ✅, only Prod ⏳.
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- NEXT: M-RT-7 Minimal Financial Compiler (resolve_identities + settlement_planning only — transforms TypedIntent → basic ExecutionPlan; every subsequent component integrates through the real execution path).

@@ -25,6 +25,7 @@ import { InMemoryReserveMarket, type ReserveMarket } from './engines/reserve-mar
 import { ReserveLedgerService } from './engines/reserve-ledger';
 import { ReserveMarketEngine } from './engines/reserve-market-v2';
 import { LiquidityMarketplaceService } from './engines/liquidity-marketplace';
+import { RouteCompiler, RouteScoringEngine } from './engines/routing';
 import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
 import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
 import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine } from './engines/opportunity-discovery';
@@ -72,6 +73,18 @@ export * from './engines/reserve-market';
 export * from './engines/reserve-ledger';
 export * from './engines/reserve-market-v2';
 export * from './engines/liquidity-marketplace';
+// M-RT-6 routing: explicit re-exports to avoid collision with graphs/route types.
+export { RouteCompiler } from './engines/routing';
+export { RouteScoringEngine } from './engines/routing';
+export type { ScoringInputs } from './engines/routing';
+export type {
+  RouteScoreComponents,
+  ScoredRoute,
+  RoutingRequest,
+  RoutingResult,
+  ScoringWeights,
+} from './engines/routing';
+export { computeTotalScore, DEFAULT_SCORING_WEIGHTS, validateRoute } from './engines/routing';
 export * from './engines/liquidity-market';
 export * from './engines/liquidity-intelligence';
 export * from './engines/opportunity-discovery';
@@ -145,6 +158,9 @@ export interface Runtime {
   reserveMarket: ReserveMarketEngine;
   // M-RT-5: Liquidity Marketplace (offer events → order book projection; deterministic matching):
   liquidityMarketplace: LiquidityMarketplaceService;
+  // M-RT-6: Route Graph (compiled projection) + Reserve-Aware Routing (pure scoring):
+  routeCompiler: RouteCompiler;
+  routeScoringEngine: RouteScoringEngine;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -205,6 +221,15 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const reserveMarket = new ReserveMarketEngine(reserveLedger, clock);
   // M-RT-5: Liquidity Marketplace (offer events → order book projection; deterministic matching).
   const liquidityMarketplace = new LiquidityMarketplaceService(eventStore, clock);
+  // M-RT-6: Route Graph (compiled from Capability Graph) + Reserve-Aware Routing (pure scoring).
+  const routeCompiler = new RouteCompiler();
+  const routeScoringEngine = new RouteScoringEngine({
+    routeGraph: routeCompiler.rebuild(capabilityGraph, clock.now()),
+    capabilityGraph,
+    reserveMarket,
+    liquidityMarketplace,
+    clock,
+  });
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
   const reserveDiscovery = new NoOpReserveDiscoveryEngine();
@@ -249,6 +274,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     reserveLedger,
     reserveMarket,
     liquidityMarketplace,
+    routeCompiler,
+    routeScoringEngine,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),
