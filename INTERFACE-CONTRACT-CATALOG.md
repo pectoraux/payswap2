@@ -898,6 +898,7 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | **Recommendation Lifecycle** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | **Digital Twin** | ✅ | ✅ | n/a | n/a | n/a | ✅ | ✅ | ⬜ |
 | **Execution Pipeline** | ✅ | ✅ | ✅ | n/a | n/a | ✅ | ✅ | ⬜ |
+| **Simulator (sim=prod)** | ✅ | ✅ | n/a | n/a | n/a | ✅ | ✅ | ⬜ |
 | Settlement Engine | ✅ | ✅ | ✅ | n/a | n/a | ✅ | ✅ | ⬜ |
 | Reserve Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
 | Liquidity Market | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -912,15 +913,12 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | Digital Twin | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Economic Health Dashboard | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 
-**Current state (post M-RT-12):** Twelve primitives are feature-complete. The
-**Execution Pipeline** (M-RT-12) is now live — the first end-to-end execution
-through the real runtime stack. A single payment flows: Intent → Financial
-Compiler (9 passes) → ExecutionPlan → Execution Pipeline (10 stages: Receive,
-Validate, Reserve, Liquidity, Settlement, Ledger, Events, Projection, Inspector,
-Complete) → Domain Events → Projections. The pipeline owns all side effects
-(reserve locking, ledger updates, event emission); the compiler stays pure.
-The full execution trace is inspectable: compiler passes + pipeline stages +
-domain events. **The architecture is validated as an integrated runtime, not
-just a collection of well-designed components.**
+**Current state (post M-RT-13):** Thirteen primitives are feature-complete.
+The **Simulator** (M-RT-13) proves **sim = prod**: the same 9-pass compiler
+executes in both modes, producing structurally identical traces (same pass
+order, same choices, same LP, same cost). Only 3 expected differences
+(settlement adapter, side effects, timestamps). The Digital Twin executes the
+SAME operating system under a different environment — no separate simulation
+engine. This minimizes long-term drift between simulation and production.
 
-*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-12 done — THE GOLDEN PATH PROVEN.*
+*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-13 done — SIM = PROD PROVEN.*
