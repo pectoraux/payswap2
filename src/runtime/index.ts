@@ -31,7 +31,7 @@ import { InMemoryLiquidityGraph, type LiquidityGraphQuery } from './graphs/liqui
 import { NoOpEconomicHealthDashboard, type EconomicHealthDashboard } from './engines/economic-health';
 import { NoOpMultiHopRouter, type MultiHopRouter } from './graphs/multi-hop';
 // Final Amendment engines + graphs:
-import { InMemoryCapabilityGraph, type CapabilityGraph } from './graphs/capability';
+import { InMemoryCapabilityGraph, type CapabilityGraph, CapabilityGraphService } from './graphs/capability';
 import { InMemoryRouteGraph, type RouteGraph } from './graphs/route';
 import { NoOpCapabilityDiscoveryEngine, type CapabilityDiscoveryEngine } from './engines/capability-discovery';
 import { NoOpCorridorDiscoveryEngine, type CorridorDiscoveryEngine } from './engines/corridor-discovery';
@@ -123,6 +123,8 @@ export interface Runtime {
   // v1.4 True Final Freeze — Financial Compiler + Knowledge Graph (interface-only in M-RT-1):
   compiler: FinancialCompiler;
   knowledgeGraph: FinancialKnowledgeGraph;
+  // M-RT-2: real Capability Graph service (event-emitting):
+  capabilityGraphService: CapabilityGraphService;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -166,6 +168,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const multiHopRouter = new NoOpMultiHopRouter();
   // Final Amendment engines + graphs — interface-only (NoOp/In-memory) for M-RT-1.
   const capabilityGraph = new InMemoryCapabilityGraph();
+  // M-RT-2: real Capability Graph service (event-emitting wrapper).
+  const capabilityGraphService = new CapabilityGraphService(eventStore, clock);
   const routeGraph = new InMemoryRouteGraph();
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
@@ -206,6 +210,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     recommendationLifecycle,
     compiler,
     knowledgeGraph,
+    capabilityGraphService,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

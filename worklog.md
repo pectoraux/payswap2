@@ -2439,3 +2439,41 @@ Stage Summary:
 - Three permanent documents now in place: Constitution + Dependency Map + Roadmap.
 - No code changes. No kernel changes. No architecture changes. Lint: clean. tsc: clean. Dev server: healthy.
 - NEXT: implementation begins at M-RT-2 (Capability Graph) and M-RT-3 (Reserve Market + Liquidity Market + Reserve Engine) — parallelizable Layer 3 primitives. The architecture work is complete.
+
+---
+Task ID: RT-CONTRACT-CATALOG + M-RT-2 (Interface Contract Catalog [4th permanent artifact] + first real implementation: Capability Graph)
+Agent: main (Z.ai Code)
+Task: Produce the fourth permanent artifact (Interface Contract Catalog — one contract page per primitive: purpose/inputs/outputs/invariants/consumers/dependencies/milestone) + measurable milestone exit criteria + deployment order (build ≠ deploy) + roadmap adjustment (minimal Compiler pulled to M-RT-4). Then begin implementation: M-RT-2 Capability Graph (real logic, not NoOp).
+
+Work Log:
+FOURTH PERMANENT ARTIFACT (INTERFACE-CONTRACT-CATALOG.md, ~430 lines):
+- Created the Interface Contract Catalog — one contract page per primitive across all 10 layers (L0 Foundation → L10 Simulation & Health). Each contract: Purpose / Inputs / Outputs / Invariants / Consumers / Dependencies / Milestone.
+- Appendix A — Measurable Milestone Exit Criteria: every milestone (M-RT-1 through M-RT-19) has a "DONE when" checklist with concrete, measurable criteria (e.g. M-RT-5: ExecutionPlan carries ReserveAwareRoutingPassResult; CostDecomposition exposed; Route B beats Route A; compile() <100ms; 100% test coverage on compiler contracts).
+- Appendix B — Build Order vs Deployment Order: separated build order (critical path: M-RT-2 → M-RT-3 → M-RT-4 minimal Compiler → M-RT-5 full Compiler → M-RT-6 → M-RT-10 → M-RT-11 → M-RT-12) from deployment order (safe migration: Capability Graph → Reserve Market → Read-only Compiler → Shadow Compiler → Production Compiler → Pipeline switch-over). The shadow-compiler step lets you validate Compiler output against real intents without risking production.
+- Appendix C — Runtime Coverage (architectural burndown chart): per-primitive completion % instead of "which milestone are we on" — a better progress metric because it reflects the actual architecture. Current: ~30% (M-RT-1 complete; 18 primitives have interfaces, ~5 fully implemented).
+- Roadmap adjustment noted: minimal Compiler pulled to M-RT-4 (before Route Graph) — reduces integration risk; every subsequent component integrates through the real execution path.
+
+M-RT-2 IMPLEMENTATION (Capability Graph — real logic):
+- Created src/runtime/graphs/capability/service.ts — CapabilityGraphService: the production wrapper. Wraps InMemoryCapabilityGraph with Domain Event emission (capability.published / capability.withdrawn) via the Event Store, Runtime Clock timestamps, and idempotent capability IDs keyed by lpId:from→to. Methods: publish() / withdraw() (async, event-emitting) + forLP() / canMove() / all() / rawGraph() (sync reads).
+- Created src/runtime/graphs/capability/seed.ts — seedCapabilitiesFromKernel(): derives initial capabilities from kernel LiquidityProvider data. Convention: an LP in country X offering currency Y gets local→Twin<Y> (mint-side) + Twin<Y>→Y (redeem-side). For the canonical Kenya→Ghana scenario: 3 LPs × 2 capabilities = 6 capabilities (KES→TwinGHS + TwinGHS→GHS per LP). deriveCapabilitiesFromLP() + localCurrencyFor() helpers.
+- Updated src/runtime/graphs/capability/index.ts barrel — exports CapabilityGraphService + PublishableCapability + seed functions.
+- Updated src/runtime/index.ts — added CapabilityGraphService import; extended Runtime container with `capabilityGraphService`; createRuntime() instantiates it (real, not NoOp).
+- Created src/app/api/runtime/capabilities/route.ts — the first runtime API surface: GET (list, filter by lpId/from→to), POST (publish, admin only), DELETE (withdraw, admin only), PUT (seed from kernel LP data, admin only). Uses NextAuth session + role check. Aliased the `runtime` import as `payswapRuntime` to avoid the Next.js `runtime` config-export conflict.
+
+Verification (M-RT-2 exit criteria):
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors (fixed 1: typed the `published` array as LPCapability[] to avoid never[] inference).
+- End-to-end test: seeded 6 capabilities from 3 kernel LPs; canMove('KES','TwinGHS') returned all 3 LPs [1,2,3]; forLP('1') returned Acacia's 2 capabilities [KES→TwinGHS, TwinGHS→GHS]; 6 capability.published Domain Events appended to Event Store; after withdrawing Acacia's KES→TwinGHS, canMove returned only [2,3] + a capability.withdrawn event was appended. All 4 exit criteria pass:
+  ✓ publish/withdraw LP capabilities
+  ✓ canMove('KES','TwinGHS') returns the right LPs
+  ✓ capability add/remove updates the graph
+  ✓ Domain Events emitted (capability.published / capability.withdrawn)
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- Fourth permanent artifact delivered: INTERFACE-CONTRACT-CATALOG.md (per-primitive contracts + measurable exit criteria + deployment order + runtime coverage burndown).
+- M-RT-2 (Capability Graph) COMPLETE — the first real runtime logic. CapabilityGraphService emits Domain Events on publish/withdraw; seed function derives capabilities from kernel LP data; API route exposes GET/POST/DELETE/PUT.
+- Four permanent documents now in place: Constitution + Dependency Map + Roadmap + Interface Contract Catalog.
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- Runtime coverage: Capability Graph 0% → 100%. Overall ~32%.
+- NEXT: M-RT-3 (Reserve Market + Liquidity Market + Reserve Engine) — parallelizable with M-RT-2; then M-RT-4 (Minimal Financial Compiler, pulled earlier per roadmap adjustment).
