@@ -2797,3 +2797,45 @@ Stage Summary:
 - Maturity matrix: 5 primitives feature-complete (Capability Graph + Reserve Ledger + Reserve Market + Liquidity Marketplace + Route Graph + Routing); all applicable columns ✅, only Prod ⏳.
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - NEXT: M-RT-7 Minimal Financial Compiler (resolve_identities + settlement_planning only — transforms TypedIntent → basic ExecutionPlan; every subsequent component integrates through the real execution path).
+
+---
+Task ID: M-RT-7 (Minimal Financial Compiler — pure, deterministic, the first cross-domain integration point)
+Agent: main (Z.ai Code)
+Task: Implement M-RT-7 Minimal Financial Compiler. SCOPE: intentionally narrow — integration milestone, not optimization. Pass 1: resolve identities + normalize participants. Pass 2: settlement planning using existing route/routing information. Output: minimal ExecutionPlan. NOT YET: reserve optimization, liquidity allocation, FX optimization, recommendation generation, economic optimization. PROPERTIES: pure (same inputs → same plan), reads-only (mutates no projections), inspectable (every pass leaves explicit artifact), emits nothing (no events, no side effects). Placeholder passes for policy/compliance/fraud record "not yet implemented" for Inspector visibility. Later milestones add passes without changing the public contract.
+
+Work Log:
+- Created src/runtime/compiler/real-compiler.ts:
+  · CompileResult (plan | null, routing | null, success, error?) — the compiler returns a result, not just a plan, so failures are explicit.
+  · RealCompilerContext (clock, environment, capabilityGraph, routeScoringEngine, reserveMarket, liquidityMarketplace) — all lower-layer projections, read-only.
+  · FinancialCompiler class (the real implementation, replacing NoOpFinancialCompiler):
+    - compile(intent, ctx) → CompileResult — the main entry point. Pure, deterministic, no side effects.
+    - Pass 1 (resolve_identities): validates the intent has resolved subject + desired. Produces a Decision (resolved/unresolved).
+    - Placeholder passes (policy, compliance, fraud): each records "skipped (not yet implemented)" with a Decision. These exist so the Inspector shows the full pass order even in M-RT-7. M-RT-8 replaces them with real logic.
+    - Pass 2 (settlement_planning): the real work — calls routeScoringEngine.rank() to find the best route, builds LPAllocations + SettlementLegs + ReserveAllocations from the winning ScoredRoute's decomposed components. Produces a Decision with alternatives, tradeoffs, costBps, riskScore.
+    - Builds the full ExecutionPlan from the settlement result: lpAllocations (from winner's hop), settlementLegs (from route), reserveAllocations (from score's reserveCostBps), fxHops (if crossing currencies), capitalAllocation, executionTiming, passes[] (all CompilationPassResults), rationale, alternativesConsidered (runner-up routes), estimatedCostBps (sum of 5 cost components), estimatedRisk, expectedProfitability (0 — M-RT-8 fills this).
+    - Returns CompileResult with success=false + error if no route available.
+
+- Updated src/runtime/compiler/index.ts — exports RealFinancialCompiler + CompileResult + RealCompilerContext.
+- Updated src/runtime/index.ts — imported RealFinancialCompiler; added `realCompiler: RealFinancialCompiler` to the Runtime container; createRuntime() instantiates it. The old NoOpFinancialCompiler remains as `compiler` for backward compatibility.
+- Created src/app/api/runtime/compiler/compile/route.ts — POST (compile a TypedIntent → ExecutionPlan). Rebuilds Route Graph from Capability Graph, creates a fresh RouteScoringEngine, builds the RealCompilerContext, calls realCompiler.compile(). Note: "The compiler is PURE — it reads projections but mutates nothing."
+- Updated INTERFACE-CONTRACT-CATALOG.md Appendix C — Financial Compiler row: Contracts ✅ + Logic ✅ + Events n/a + Projection n/a + Invariants n/a + Replay ✅ + API ✅ + Prod ⬜.
+
+Verification (M-RT-7 exit criteria — all pass):
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors.
+- End-to-end test (full pipeline: capabilities → offers → reserve → routes → compile):
+  1. Compile result: success=true, plan id=plan_intent_test_1 ✓
+  2. ExecutionPlan: lpAllocations=[{lpId:2, feeBps:80}], settlementLegs=[{KES→TwinGHS}], reserveAllocations=1, estimatedCostBps=170, estimatedRisk=0.2, alternativesConsidered=1 ✓
+  3. Compiler passes (5): resolve_identities (resolved, 0ms), policy (skipped placeholder, 0ms), compliance (skipped placeholder, 0ms), fraud (skipped placeholder, 0ms), settlement_planning (route via 2, 1ms) ✓ — every pass leaves an explicit artifact
+  4. Determinism: same inputs → same plan (PASS) ✓
+  5. Purity: event store unchanged (4 events before compile, 4 after — compiler added 0) ✓
+  6. Failure case: USD→EUR (no route) → success=false, error="No route available" ✓
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- M-RT-7 (Minimal Financial Compiler) COMPLETE. The compiler is the first component that reasons across ALL domains simultaneously. It's pure (no side effects), deterministic (same inputs → same plan), and reads-only (mutates no projections). Every pass leaves an explicit CompilationPassResult artifact for the Inspector. Placeholder passes (policy/compliance/fraud) record "not yet implemented" — M-RT-8 replaces them with real logic.
+- The compiler is the natural integration point: every later milestone (M-RT-8 full compiler, M-RT-9 opportunity discovery, M-RT-10 digital twin, M-RT-12 payments slice) adds passes or consumes the ExecutionPlan without changing the compiler's public contract.
+- The four-stage pattern is now complete end-to-end: source-of-truth → projection → pure analysis → compiler (integration) → ExecutionPlan → (future: pipeline execution).
+- Maturity matrix: 6 primitives feature-complete (Capability Graph + Reserve Ledger + Reserve Market + Liquidity Marketplace + Route Graph + Routing + Financial Compiler). Financial Compiler: Contracts ✅ + Logic ✅ + Replay ✅ + API ✅ (Events/Projection/Invariants n/a for a pure compiler; Prod ⬜).
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- NEXT: M-RT-8 Full Compiler (all 8 passes: resolve → policy → compliance → fraud → reserve_allocation → reserve_aware_routing → liquidity → fx → settlement. Cost decomposition exposed. ExecutionPlan carries ReserveAwareRoutingPassResult).

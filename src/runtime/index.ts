@@ -53,7 +53,7 @@ import { NoOpEconomicScoreEngine, type EconomicScoreEngine } from './engines/eco
 import { NoOpCounterfactualEngine, type CounterfactualEngine } from './engines/counterfactual';
 import { InMemoryRecommendationLifecycle, type RecommendationLifecycle } from './engines/recommendation-lifecycle';
 // v1.4 True Final Freeze — Financial Compiler + Knowledge Graph:
-import { NoOpFinancialCompiler, type FinancialCompiler } from './compiler';
+import { NoOpFinancialCompiler, type FinancialCompiler, RealFinancialCompiler, type RealCompilerContext } from './compiler';
 import { NoOpFinancialKnowledgeGraph, type FinancialKnowledgeGraph } from './graphs/knowledge-graph';
 
 // Re-export the public surface.
@@ -161,6 +161,8 @@ export interface Runtime {
   // M-RT-6: Route Graph (compiled projection) + Reserve-Aware Routing (pure scoring):
   routeCompiler: RouteCompiler;
   routeScoringEngine: RouteScoringEngine;
+  // M-RT-7: The real Financial Compiler (pure, deterministic, reads-only):
+  realCompiler: RealFinancialCompiler;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -230,6 +232,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     liquidityMarketplace,
     clock,
   });
+  // M-RT-7: The real Financial Compiler (pure, deterministic, reads-only).
+  const realCompiler = new RealFinancialCompiler();
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
   const reserveDiscovery = new NoOpReserveDiscoveryEngine();
@@ -276,6 +280,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     liquidityMarketplace,
     routeCompiler,
     routeScoringEngine,
+    realCompiler,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

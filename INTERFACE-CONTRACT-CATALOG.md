@@ -893,7 +893,7 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | **Reserve Market** | ✅ | ✅ | n/a | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | **Liquidity Marketplace** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | **Route Graph + Routing** | ✅ | ✅ | n/a | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Financial Compiler (M-RT-7/8) | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
+| Financial Compiler (M-RT-7/8) | ✅ | ✅ | n/a | n/a | n/a | ✅ | ✅ | ⬜ |
 | Runtime Pipeline | ✅ | ⏳ | ✅ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Settlement Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
 | Reserve Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -909,14 +909,13 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | Digital Twin | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Economic Health Dashboard | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 
-**Current state (post M-RT-6):** Five primitives are feature-complete (all
-applicable columns ✅, only Prod ⏳ remains): **Capability Graph**, **Reserve
-Ledger**, **Reserve Market**, **Liquidity Marketplace**, and **Route Graph +
-Routing**. The four-stage pattern is consistent across all five. The Route Graph
-is a compiled projection (connectivity only — no economics), and the scoring
-engine is pure + deterministic + decomposed (9 score components visible). The
-dependency chain is clean: each milestone consumes lower-layer outputs without
-cyclic dependencies. The Financial Compiler (M-RT-7) will be the first component
-that reasons across all domains simultaneously.
+**Current state (post M-RT-7):** Six primitives are feature-complete. The
+**Financial Compiler** (M-RT-7) is now live — it's the first component that
+reasons across ALL domains simultaneously. It's pure (no side effects),
+deterministic (same inputs → same plan), and reads-only (mutates no projections).
+Every pass leaves an explicit artifact for the Inspector. Placeholder passes
+(policy/compliance/fraud) record "not yet implemented" — M-RT-8 will replace
+them with real logic. The compiler is the natural integration point: every
+later milestone adds passes without changing the public contract.
 
-*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-6 done, M-RT-7 next.*
+*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-7 done, M-RT-8 next.*
