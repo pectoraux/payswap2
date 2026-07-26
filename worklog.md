@@ -2114,3 +2114,56 @@ Stage Summary:
 - Components: RuntimeClock (LiveClock 1× + VirtualClock), IntentEngine (overridable hooks), Pipeline (14-stage scaffold, registrable handlers), InMemoryEventStore (OCC + immediate projection), Decision/Policy/Inspector interfaces, ProjectionRunner.
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - Next: M-RT-2 (One Vertical Slice — Payments end-to-end through the runtime: register payment intent hooks + real stage handlers for Settlement/Reserve/Liquidity/Ledger + PaymentView projection + Inspector UI, then connect the payments page).
+
+---
+Task ID: RT-AMEND-1 (Architecture Amendment 1 — Liquidity Intelligence & Reserve-Aware Economic Routing)
+Agent: main (Z.ai Code)
+Task: Pause implementation. Apply the final architecture amendment before resuming. Add Liquidity Intelligence Runtime, Opportunity Discovery, Reserve-Aware Economic Routing (Shadow Price + Reserve Market State), LP Pricing Curves, Liquidity Graph (third graph), Economic Digital Twin (what-if), Liquidity Memory, Runtime Recommendations, expanded Decision Engine (9 dimensions), expanded Inspector, Liquidity Strategy Marketplace. Update philosophy to "continuously optimize the global financial network while executing." Declare frozen again (v1.1). Then extend M-RT-1 skeleton with the Amendment 1 interfaces (no business logic) and resume.
+
+Work Log:
+ARCHITECTURE DOC (PROTOCOL-RUNTIME-ARCHITECTURE.md):
+- Renamed to "PaySwap Runtime — Architecture (v1.1 Runtime Constitution, Amendment 1)". Added "Architecture Frozen (Amendment 1 applied)" block.
+- Amended philosophy: "The Runtime continuously optimizes the global financial network while executing financial intents — execution and optimization are equally important." Added 6th property "Self-improving."
+- Added Principle 11 — Continuous Optimization.
+- Added 8 Amendment 1 vocabulary terms (Liquidity Intelligence, Opportunity Discovery, Reserve Shadow Price, Reserve Market State, Liquidity Graph, Liquidity Strategy, Recommendation, Liquidity Memory).
+- Added "Amendment 1" summary table mapping all 16 additions.
+- Updated the Four Runtimes diagram: Economic Runtime now shows LP market + strategies, reserves + shadow prices, routing (reserve-aware), LIQUIDITY INTELLIGENCE, OPPORTUNITY DISCOVERY; Shared Core shows Liquidity Memory, Liquidity Graph, Reserve Market State, Recommendations.
+- Expanded §7 Economic Runtime: Treasury Allocator receives Treasury Opportunity Recs; Reserve Engine publishes Reserve Market State; Liquidity Market uses pricing curves + programmable strategies.
+- Added §7A Liquidity Intelligence Runtime (continuous analyzer; answers why-LP-underutilized/why-corridor-expensive/which-reserve-exhausted; contract with analyze/explainLP/explainCorridor/explainReserve/findings).
+- Added §7B Opportunity Discovery (4 kinds: missing corridor, LP opportunity, treasury opportunity, connector gap; Recommendation first-class object with audience/kind/rationale/expectedImpact/requiredAction/capitalRequired/evidence/confidence/status).
+- Added §7C Reserve-Aware Economic Routing (Reserve Shadow Price primitive; Reserve Market State: available/locked/utilization/forecast-depletion/refill/capital-cost/risk/confidence/shadow-price; routing minimizes execution cost + shadow price + capital cost + risk cost).
+- Added §7D Liquidity Strategy Marketplace (LPs publish programmable strategies with eligible predicates + pricing curves; evaluated during clearing; "only > $1000" / "avoid payroll days" examples; the differentiator Stripe/Paystack/Flutterwave/DEXs don't expose).
+- Expanded §9.4 Digital Twin → Economic Digital Twin (what-if: reserve exhaustion, LP exits, treasury injections, FX shocks, seasonality; via clock.branch() + forecast diff).
+- Expanded §9.6 Forecasting (includes shadow-price trajectories, reserve depletion curves, Opportunity Discovery recs from forecast).
+- Expanded §10.1 Decision Engine (9 routing dimensions: fee/latency/reserve-util/shadow-price/LP-util/profitability/resilience/compliance/CX; routing objective + tradeoff exposure).
+- Expanded §12 Runtime Memory (Liquidity Memory kinds: lp_congestion_window, reserve_depletion_cycle, connector_recovery_time, corridor_concentration, fx_spread_pattern, missed_opportunity + examples).
+- Expanded §13 Explainability/Inspector (payment inspection adds: liquidity market, reserve market, shadow prices, LP bids, rejected routes, treasury decisions, capital consumed, expected profitability, missed opportunities).
+- Updated §16 → "Three Graphs" (added Liquidity Graph as third: nodes LPs/corridors/currencies/twin-currencies/reserves/connectors; edges capacity/cost/risk/latency/confidence/profitability/availability; Opportunity Discovery operates on it; LiquidityGraphQuery contract).
+- Updated §22 roadmap (M-RT-1 done + Amendment 1 interfaces; M-RT-4 Reserve-Aware Routing; M-RT-5 Liquidity Strategy Marketplace; M-RT-6 Liquidity Intelligence + Opportunity Discovery; M-RT-7 Economic Digital Twin; M-RT-8 Runtime Memory + Liquidity Memory; M-RT-9 Three Graphs + Full Inspector; M-RT-10 API Gateway + Scheduling; M-RT-11 Read Models; M-RT-12 Capability Migration; M-RT-13 Integrity Hardening).
+- Updated §25 scorecard (added Liquidity intelligence/Reserve-aware routing/LP programmability rows: absent→full).
+- Updated §26 → "Architecture Frozen (Amendment 1 applied). Resume Implementation."
+
+M-RT-1 SKELETON EXTENSION (src/runtime/):
+- Created engines/reserve-market/types.ts — ReserveMarketState + ReserveMarket + InMemoryReserveMarket (publish/query shadowPrice). index.ts barrel.
+- Created engines/liquidity-market/types.ts — PricingTier, RiskAppetite, CorridorPref, Rail, ClearingContext, LiquidityStrategy (eligible predicate + pricingCurve + constraints), StrategyEvaluation, LiquidityStrategyMarketplace + InMemoryLiquidityStrategyMarketplace (publish/withdraw/strategies/evaluate with quoteFee). index.ts barrel.
+- Created engines/liquidity-intelligence/types.ts — IntelligenceFindingKind/IntelligenceFinding, LPDiagnostics, CorridorDiagnostics, ReserveDiagnostics, IntelligenceReport, LiquidityIntelligenceEngine + NoOpLiquidityIntelligenceEngine (M-RT-1 placeholder). index.ts barrel.
+- Created engines/opportunity-discovery/types.ts — RecommendationAudience, RecommendationKind, RecommendationStatus, RecommendationImpact, Recommendation (first-class: id/version/audience/subject/kind/title/rationale/expectedImpact/requiredAction/capitalRequired/evidence/confidence/status/createdAt), OpportunityDiscoveryEngine + NoOpOpportunityDiscoveryEngine. index.ts barrel.
+- Created recommendations/types.ts — RecommendationStore + InMemoryRecommendationStore (add/get/all/byAudience/bySubject/setStatus). index.ts barrel.
+- Created graphs/liquidity-graph/types.ts — LiquidityNodeType, LiquidityNode, LiquidityEdge (capacity/cost/risk/latency/confidence/profitability/availability), LiquidityPath, ConcentrationReport, LiquidityGraphQuery + InMemoryLiquidityGraph (addNode/addEdge/paths/corridor/concentration; trivial direct-edge path lookup for M-RT-1, full multi-hop DFS in M-RT-9). index.ts barrel.
+- Updated principles.ts — added Principle 11 (Continuous Optimization).
+- Updated vocabulary.ts — added 8 Amendment 1 terms.
+- Updated index.ts barrel — imports + re-exports all 6 new modules; extended Runtime container interface with reserveMarket/liquidityStrategyMarketplace/liquidityIntelligence/opportunityDiscovery/recommendationStore/liquidityGraph; createRuntime() instantiates all 6 (In-memory + NoOp placeholders for M-RT-1).
+
+Verification:
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors in src/runtime/ (incl. all Amendment 1 modules; fixed the liquidity-graph edges Map typing).
+- Load check: 11 principles (P11 Continuous Optimization present), 32 vocabulary terms (24 + 8 Amendment 1). All 6 Amendment 1 engines present on the runtime singleton.
+- End-to-end dispatch (no regression): no-op payment intent → status 'completed', 15 trace stages, 12 events appended. Skeleton spine intact.
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- Amendment 1 applied to the architecture (PROTOCOL-RUNTIME-ARCHITECTURE.md). Architecture re-frozen as v1.1 Runtime Constitution.
+- M-RT-1 skeleton extended with 6 Amendment 1 interface modules (all interface-only / NoOp / in-memory placeholders — no business logic).
+- Amendment 1 engines on the Runtime container: reserveMarket (Reserve Market State + Shadow Price), liquidityStrategyMarketplace (programmable LP strategies + pricing curves), liquidityIntelligence (NoOp analyzer), opportunityDiscovery (NoOp discoverer), recommendationStore (first-class Recommendations), liquidityGraph (third graph).
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- Architecture is FROZEN again. Implementation resumes at M-RT-2 (One Vertical Slice — Payments end-to-end), now with the Amendment 1 concepts incorporated into the skeleton and the roadmap (M-RT-4 Reserve-Aware Routing, M-RT-5 Strategy Marketplace, M-RT-6 Liquidity Intelligence + Opportunity Discovery, M-RT-7 Economic Digital Twin, M-RT-8 Liquidity Memory, M-RT-9 Three Graphs + Full Inspector).

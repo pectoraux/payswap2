@@ -20,6 +20,13 @@ import { IntentEngine } from './intent';
 import { Pipeline } from './pipeline';
 import { DefaultPolicyEngine, type PolicyEngine } from './policy';
 import { ProjectionRunner } from './read-models';
+// Amendment 1 engines:
+import { InMemoryReserveMarket, type ReserveMarket } from './engines/reserve-market';
+import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
+import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
+import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine } from './engines/opportunity-discovery';
+import { InMemoryRecommendationStore, type RecommendationStore } from './recommendations';
+import { InMemoryLiquidityGraph, type LiquidityGraphQuery } from './graphs/liquidity-graph';
 
 // Re-export the public surface.
 export * from './types';
@@ -33,6 +40,13 @@ export * from './policy';
 export * from './pipeline';
 export * from './inspector';
 export * from './read-models';
+// Amendment 1 public surface:
+export * from './engines/reserve-market';
+export * from './engines/liquidity-market';
+export * from './engines/liquidity-intelligence';
+export * from './engines/opportunity-discovery';
+export * from './recommendations';
+export * from './graphs/liquidity-graph';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -47,6 +61,13 @@ export interface Runtime {
   pipeline: Pipeline;
   policyEngine: PolicyEngine;
   projectionRunner: ProjectionRunner;
+  // Amendment 1 engines (interface-only in M-RT-1; wired in later milestones):
+  reserveMarket: ReserveMarket;
+  liquidityStrategyMarketplace: LiquidityStrategyMarketplace;
+  liquidityIntelligence: LiquidityIntelligenceEngine;
+  opportunityDiscovery: OpportunityDiscoveryEngine;
+  recommendationStore: RecommendationStore;
+  liquidityGraph: LiquidityGraphQuery;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -78,6 +99,14 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const projectionRunner = new ProjectionRunner();
   projectionRunner.start(eventStore);
 
+  // Amendment 1 engines — interface-only implementations for M-RT-1.
+  const reserveMarket = new InMemoryReserveMarket();
+  const liquidityStrategyMarketplace = new InMemoryLiquidityStrategyMarketplace();
+  const liquidityIntelligence = new NoOpLiquidityIntelligenceEngine();
+  const opportunityDiscovery = new NoOpOpportunityDiscoveryEngine();
+  const recommendationStore = new InMemoryRecommendationStore();
+  const liquidityGraph = new InMemoryLiquidityGraph();
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -85,6 +114,12 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     pipeline,
     policyEngine,
     projectionRunner,
+    reserveMarket,
+    liquidityStrategyMarketplace,
+    liquidityIntelligence,
+    opportunityDiscovery,
+    recommendationStore,
+    liquidityGraph,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

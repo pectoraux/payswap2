@@ -36,6 +36,15 @@ export const RUNTIME_VOCABULARY: readonly VocabTerm[] = [
   { term: 'Environment', meaning: 'sandbox or live. Same runtime, same code; only data, connectors, credentials, and clock differ.' },
   { term: 'Connector', meaning: 'A uniform driver implementing authorize / capture / refund / webhook / health / capabilities.' },
   { term: 'Runtime Clock', meaning: 'The virtual clock. Everything reads clock.now(), never Date.now(). Live = 1× real time; sandbox = 10×/100×/1000×.' },
+  // Amendment 1 terms:
+  { term: 'Liquidity Intelligence', meaning: 'The continuous engine that analyzes the liquidity network and improves it. Answers why corridors are expensive, which reserves are exhausted, where LPs should deploy capital.' },
+  { term: 'Opportunity Discovery', meaning: 'The continuous search for missing corridors, LP opportunities, treasury opportunities, and connector gaps. Produces Recommendations.' },
+  { term: 'Reserve Shadow Price', meaning: 'The internal opportunity cost of consuming one more unit of a reserve. An optimization signal, not customer pricing. Routing minimizes (execution cost + shadow price + capital cost + risk cost).' },
+  { term: 'Reserve Market State', meaning: 'The continuously-published state of a reserve: available, locked, utilization, forecast depletion, refill rate, capital cost, risk, confidence, shadow price. A runtime input, not a dashboard metric.' },
+  { term: 'Liquidity Graph', meaning: 'The third graph. Nodes: LPs, corridors, currencies, twin currencies, reserves, connectors. Edges carry capacity/cost/risk/latency/confidence/profitability/availability. Opportunity Discovery operates on it.' },
+  { term: 'Liquidity Strategy', meaning: 'A programmable strategy an LP publishes alongside liquidity ("Maximize yield", "Only operate when reserve utilization < 60%"). Strategies are evaluated during market clearing.' },
+  { term: 'Recommendation', meaning: 'A first-class runtime object advising an actor (merchant/LP/treasury/ops/compliance/developer) to act. Versioned, explainable, actionable.' },
+  { term: 'Liquidity Memory', meaning: 'Runtime Memory facts specific to liquidity: LP congestion windows, reserve depletion cycles, connector recovery times, corridor concentration, FX spread patterns, missed opportunities.' },
 ] as const;
 
 export const VOCABULARY_TERMS = RUNTIME_VOCABULARY.map((t) => t.term);

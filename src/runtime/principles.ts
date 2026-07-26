@@ -73,6 +73,12 @@ export const ARCHITECTURAL_PRINCIPLES: readonly Principle[] = [
     statement:
       'Whenever a design choice exists between adding another screen or strengthening the runtime, the runtime wins.',
   },
+  {
+    number: 11,
+    name: 'Continuous Optimization',
+    statement:
+      'The Runtime continuously optimizes the global financial network while executing. Execution and optimization are equally important; the Runtime improves the network it runs on. (Amendment 1)',
+  },
 ] as const;
 
 export const PRINCIPLE_NAMES = ARCHITECTURAL_PRINCIPLES.map((p) => p.name);
