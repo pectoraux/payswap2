@@ -19,6 +19,8 @@
 import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
 import { v4 as uuidv4 } from 'uuid';
+import { paymentService, payoutService, refundService, invoiceService } from '@/services';
+import '@/services/projections'; // Register event projections
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -180,299 +182,6 @@ const CUSTOMER_TYPES: CustomerProfile['type'][] = [
 import { requireMerchantId } from '@/lib/api-auth';
 import bcrypt from 'bcryptjs';
 
-/**
- * Create a payment — mirrors POST /api/payments/create
- * This is the SAME logic the API route runs.
- */
-async function protocolCreatePayment(params: {
-  merchantId: string;
-  amount: number;
-  currency: string;
-  method: string;
-  description: string;
-  customerName: string;
-  customerEmail: string;
-  lpId: string;
-  lpFeeBps: number;
-  environment: string;
-  timestamp: Date;
-  success: boolean;
-}): Promise<{ payment: any; error?: string }> {
-  try {
-    const fee = Math.round(params.amount * (params.lpFeeBps / 10000) * 100) / 100;
-    const netAmount = params.success ? Math.round((params.amount - fee) * 100) / 100 : 0;
-
-    // Find or create customer record (same as the API route)
-    let customer = await db.customerRecord.findFirst({
-      where: { merchantId: params.merchantId, email: params.customerEmail, environment: params.environment },
-    });
-    if (!customer) {
-      customer = await db.customerRecord.create({
-        data: {
-          merchantId: params.merchantId,
-          name: params.customerName,
-          email: params.customerEmail,
-          phone: `+23324${Math.floor(1000000 + Math.random() * 8999999)}`,
-          country: 'Ghana',
-          environment: params.environment,
-        },
-      });
-    }
-
-    const reference = `SIM-${uuidv4().slice(0, 8)}`;
-    const payment = await db.payment.create({
-      data: {
-        merchantId: params.merchantId,
-        customerId: null, // Payment.customerId references Customer table, not CustomerRecord
-        amount: params.amount,
-        currency: params.currency,
-        sourceCurrency: params.currency,
-        destinationCurrency: params.currency,
-        status: params.success ? 'COMPLETED' : 'FAILED',
-        method: params.method,
-        corridor: `${params.currency}-${params.currency}`,
-        lpId: params.lpId,
-        fee,
-        netAmount,
-        fxRate: 1,
-        reference,
-        description: params.description,
-        settledAt: params.success ? params.timestamp : null,
-        environment: params.environment,
-        createdAt: params.timestamp,
-        updatedAt: params.timestamp,
-      },
-    });
-
-    // Update customer stats (same as the API route)
-    if (params.success) {
-      await db.customerRecord.update({
-        where: { id: customer.id },
-        data: {
-          totalSpent: { increment: params.amount },
-          transactionCount: { increment: 1 },
-        },
-      });
-    }
-
-    // Deliver webhooks (same as the API route would trigger)
-    const webhooks = await db.webhookEndpoint.findMany({
-      where: { merchantId: params.merchantId, status: 'ACTIVE', environment: params.environment },
-    });
-    for (const wh of webhooks) {
-      const webhookSuccess = Math.random() > BASE_PROBS.webhookFailure;
-      await db.webhookDelivery.create({
-        data: {
-          endpointId: wh.id,
-          eventType: params.success ? 'payment.completed' : 'payment.failed',
-          payload: JSON.stringify({
-            id: payment.id, reference, amount: params.amount,
-            currency: params.currency, status: payment.status,
-            merchantId: params.merchantId, customerName: params.customerName,
-            timestamp: params.timestamp.toISOString(),
-          }),
-          signature: `sha256=${uuidv4().slice(0, 64)}`,
-          status: webhookSuccess ? 'DELIVERED' : 'FAILED',
-          attempts: webhookSuccess ? 1 : 3,
-          responseStatus: webhookSuccess ? 200 : 500,
-          responseBody: webhookSuccess ? 'OK' : 'Internal Server Error',
-          deliveredAt: webhookSuccess ? params.timestamp : null,
-          createdAt: params.timestamp,
-        },
-      });
-    }
-
-    // Audit log (same as the API route)
-    await db.auditLog.create({
-      data: {
-        action: 'SIMULATE.PAYMENT',
-        resourceType: 'Payment',
-        resourceId: payment.id,
-        result: 'SUCCESS',
-        details: JSON.stringify({
-          reference, amount: params.amount,
-          merchant: params.merchantId, customer: params.customerName,
-          method: params.method, status: payment.status,
-        }),
-        createdAt: params.timestamp,
-      },
-    });
-
-    return { payment };
-  } catch (e) {
-    return { payment: null, error: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-/**
- * Create a payout — mirrors POST /api/payouts/create
- */
-async function protocolCreatePayout(params: {
-  merchantId: string;
-  method: string;
-  amount: number;
-  currency: string;
-  environment: string;
-  timestamp: Date;
-}): Promise<{ payout: any; error?: string }> {
-  try {
-    const fee = Math.round(params.amount * 0.005 * 100) / 100;
-    const net = Math.round((params.amount - fee) * 100) / 100;
-
-    const payout = await db.payout.create({
-      data: {
-        merchantId: params.merchantId,
-        method: params.method,
-        sourceAmount: params.amount,
-        sourceAsset: `TWIN${params.currency}`,
-        sourceCurrency: params.currency,
-        destinationCurrency: params.currency,
-        destination: JSON.stringify({ bankAccount: `GH${Math.floor(Math.random() * 1e12)}`, accountName: 'Merchant' }),
-        fxRate: 1, feeBps: 50, fee, netAmount: net,
-        status: 'COMPLETED',
-        txHash: `sim_tx_${uuidv4().slice(0, 8)}`,
-        evidence: JSON.stringify({ source: 'open_banking', verificationLevel: 'institutional' }),
-        createdAt: params.timestamp, processedAt: params.timestamp, completedAt: params.timestamp,
-        environment: params.environment,
-      },
-    });
-
-    await db.auditLog.create({
-      data: {
-        action: 'SIMULATE.PAYOUT',
-        resourceType: 'Payout',
-        resourceId: payout.id,
-        result: 'SUCCESS',
-        details: JSON.stringify({ amount: params.amount, merchant: params.merchantId }),
-        createdAt: params.timestamp,
-      },
-    });
-
-    return { payout };
-  } catch (e) {
-    return { payout: null, error: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-/**
- * Create a refund — mirrors POST /api/refunds/create
- */
-async function protocolCreateRefund(params: {
-  merchantId: string;
-  paymentId: string;
-  amount: number;
-  type: string;
-  reason: string;
-  environment: string;
-  timestamp: Date;
-}): Promise<{ refund: any; error?: string }> {
-  try {
-    const refund = await db.refund.create({
-      data: {
-        merchantId: params.merchantId,
-        paymentId: params.paymentId,
-        amount: params.amount,
-        type: params.type,
-        reason: params.reason,
-        status: 'PROCESSED',
-        requestedBy: 'system',
-        processedAt: new Date(params.timestamp.getTime() + 3600000),
-        createdAt: new Date(params.timestamp.getTime() + 3600000),
-      },
-    });
-
-    await db.auditLog.create({
-      data: {
-        action: 'SIMULATE.REFUND',
-        resourceType: 'Refund',
-        resourceId: refund.id,
-        result: 'SUCCESS',
-        details: JSON.stringify({ amount: params.amount, paymentId: params.paymentId }),
-        createdAt: params.timestamp,
-      },
-    });
-
-    return { refund };
-  } catch (e) {
-    return { refund: null, error: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-/**
- * Create an invoice — mirrors POST /api/invoices/create
- */
-async function protocolCreateInvoice(params: {
-  merchantId: string;
-  customerEmail: string;
-  items: { description: string; quantity: number; unitPrice: number }[];
-  tax: number;
-  currency: string;
-  environment: string;
-  timestamp: Date;
-}): Promise<{ invoice: any; error?: string }> {
-  try {
-    const items = params.items.map(item => ({
-      ...item,
-      total: Math.round(item.quantity * item.unitPrice * 100) / 100,
-    }));
-    const subtotal = items.reduce((s, i) => s + i.total, 0);
-    const tax = Math.round(subtotal * (params.tax / 100) * 100) / 100;
-    const total = Math.round((subtotal + tax) * 100) / 100;
-    const invCount = await db.invoice.count({ where: { merchantId: params.merchantId } });
-    const number = `INV-${String(invCount + 1).padStart(5, '0')}`;
-
-    const invoice = await db.invoice.create({
-      data: {
-        merchantId: params.merchantId,
-        number,
-        items: JSON.stringify(items),
-        subtotal, tax, total,
-        currency: params.currency,
-        status: Math.random() < 0.5 ? 'PAID' : 'SENT',
-        dueDate: new Date(params.timestamp.getTime() + 7 * 86400000),
-        sentAt: params.timestamp,
-        paidAt: Math.random() < 0.5 ? params.timestamp : null,
-        createdAt: params.timestamp,
-        updatedAt: params.timestamp,
-      },
-    });
-
-    return { invoice };
-  } catch (e) {
-    return { invoice: null, error: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-/**
- * Create an AML alert — mirrors what the compliance system would produce
- */
-async function protocolCreateAMLAlert(params: {
-  entityType: string;
-  entityId: string;
-  alertType: string;
-  severity: string;
-  score: number;
-  details: any;
-  timestamp: Date;
-}): Promise<{ alert: any; error?: string }> {
-  try {
-    const alert = await db.aMLAlert.create({
-      data: {
-        entityType: params.entityType,
-        entityId: params.entityId,
-        alertType: params.alertType,
-        severity: params.severity,
-        score: params.score,
-        details: JSON.stringify(params.details),
-        status: 'OPEN',
-        createdAt: params.timestamp,
-      },
-    });
-    return { alert };
-  } catch (e) {
-    return { alert: null, error: e instanceof Error ? e.message : String(e) };
-  }
-}
 
 // ─── Actor Pool Builder ─────────────────────────────────────────────────────
 
@@ -656,24 +365,25 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
       const roundedAmount = Math.round(amount * 100) / 100;
       const method = merchant.paymentMethods[Math.floor(Math.random() * merchant.paymentMethods.length)];
 
-      // 1. Create payment through protocol API
-      const paymentResult = await protocolCreatePayment({
-        merchantId: merchant.id,
-        amount: roundedAmount,
-        currency: merchant.currency,
-        method,
-        description: `${method === 'QR' ? 'QR Payment' : method === 'CHECKOUT' ? 'Checkout' : method === 'BANK' ? 'Bank Transfer' : 'Mobile Money'} - ${customer.name}`,
-        customerName: customer.name,
-        customerEmail: customer.email,
-        lpId: lp.id,
-        lpFeeBps: lp.feeBps,
-        environment: env,
-        timestamp: ts,
-        success,
-      });
-
-      if (paymentResult.error) {
-        errors.push(`Payment ${i + 1}: ${paymentResult.error}`);
+      // 1. Create payment through application service
+      let paymentResult;
+      try {
+        paymentResult = await paymentService.create({
+          merchantId: merchant.id,
+          amount: roundedAmount,
+          currency: merchant.currency,
+          method,
+          description: `${method === 'QR' ? 'QR Payment' : method === 'CHECKOUT' ? 'Checkout' : method === 'BANK' ? 'Bank Transfer' : 'Mobile Money'} - ${customer.name}`,
+          customerName: customer.name,
+          customerEmail: customer.email,
+          lpId: lp.id,
+          lpFeeBps: lp.feeBps,
+          environment: env,
+          timestamp: ts,
+          success,
+        });
+      } catch (e) {
+        errors.push(`Payment ${i + 1}: ${e instanceof Error ? e.message : String(e)}`);
         continue;
       }
 
@@ -697,23 +407,23 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
         action: 'payment',
         description: `${customer.name} paid ${merchant.name} ${roundedAmount} ${merchant.currency} via ${method}`,
         resourceType: 'Payment',
-        resourceId: paymentResult.payment?.id,
+        resourceId: paymentResult.id,
       });
 
       // 2. Refund (occasionally, based on customer profile + scenario)
       if (success && Math.random() < (probs.refund + customer.refundLikelihood)) {
         const refundAmount = Math.random() < 0.3 ? roundedAmount : Math.round(roundedAmount * 0.5 * 100) / 100;
-        const refundResult = await protocolCreateRefund({
-          merchantId: merchant.id,
-          paymentId: paymentResult.payment.id,
-          amount: refundAmount,
-          type: refundAmount === roundedAmount ? 'FULL' : 'PARTIAL',
-          reason: ['Customer request', 'Product out of stock', 'Duplicate charge', 'Service not rendered'][Math.floor(Math.random() * 4)],
-          environment: env,
-          timestamp: ts,
-        });
+        try {
+          const refundResult = await refundService.create({
+            merchantId: merchant.id,
+            paymentId: paymentResult.id,
+            amount: refundAmount,
+            type: refundAmount === roundedAmount ? 'FULL' : 'PARTIAL',
+            reason: ['Customer request', 'Product out of stock', 'Duplicate charge', 'Service not rendered'][Math.floor(Math.random() * 4)],
+            environment: env,
+            timestamp: ts,
+          });
 
-        if (!refundResult.error) {
           refundsCreated++;
           auditLogs++;
           events.push({
@@ -722,9 +432,9 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
             action: 'refund',
             description: `${merchant.name} refunded ${refundAmount} ${merchant.currency} to ${customer.name}`,
             resourceType: 'Refund',
-            resourceId: refundResult.refund?.id,
+            resourceId: refundResult.id,
           });
-        }
+        } catch { /* refund failed, continue */ }
       }
 
       // 3. Compliance alert (occasionally)
@@ -738,7 +448,7 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
           severity: severities[Math.floor(Math.random() * severities.length)],
           score: Math.random() * 100,
           details: {
-            paymentId: paymentResult.payment.id,
+            paymentId: paymentResult.id,
             amount: roundedAmount,
             customer: customer.name,
             merchant: merchant.name,
@@ -767,7 +477,8 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
           quantity: 1 + Math.floor(Math.random() * 5),
           unitPrice: Math.round((20 + Math.random() * 200) * 100) / 100,
         }));
-        const invoiceResult = await protocolCreateInvoice({
+        try {
+        const invoiceResult = await invoiceService.create({
           merchantId: merchant.id,
           customerEmail: customer.email,
           items: invoiceItems,
@@ -777,32 +488,31 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
           timestamp: ts,
         });
 
-        if (!invoiceResult.error) {
-          invoicesCreated++;
-          events.push({
-            ts: ts.getTime(),
-            actor: merchant.name,
-            action: 'invoice',
-            description: `${merchant.name} created invoice ${invoiceResult.invoice.number} for ${customer.name}`,
+        invoicesCreated++;
+        events.push({
+          ts: ts.getTime(),
+          actor: merchant.name,
+          action: 'invoice',
+          description: `${merchant.name} created invoice ${invoiceResult.number} for ${customer.name}`,
             resourceType: 'Invoice',
-            resourceId: invoiceResult.invoice?.id,
+            resourceId: invoiceResult.id,
           });
-        }
+        } catch { /* invoice failed, continue */ }
       }
 
       // 5. Merchant payout (occasionally)
       if (Math.random() < probs.merchantPayout) {
         const payoutAmount = Math.round((100 + Math.random() * 2000) * 100) / 100;
-        const payoutResult = await protocolCreatePayout({
-          merchantId: merchant.id,
-          method: ['BANK', 'MOBILE_MONEY', 'ONCHAIN'][Math.floor(Math.random() * 3)],
-          amount: payoutAmount,
-          currency: merchant.currency,
-          environment: env,
-          timestamp: new Date(ts.getTime() + 7200000),
-        });
+        try {
+          const payoutResult = await payoutService.create({
+            merchantId: merchant.id,
+            method: ['BANK', 'MOBILE_MONEY', 'ONCHAIN'][Math.floor(Math.random() * 3)],
+            amount: payoutAmount,
+            currency: merchant.currency,
+            environment: env,
+            timestamp: new Date(ts.getTime() + 7200000),
+          });
 
-        if (!payoutResult.error) {
           payoutsCreated++;
           auditLogs++;
           events.push({
@@ -811,9 +521,9 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
             action: 'payout',
             description: `${merchant.name} withdrew ${payoutAmount} ${merchant.currency}`,
             resourceType: 'Payout',
-            resourceId: payoutResult.payout?.id,
+            resourceId: payoutResult.id,
           });
-        }
+        } catch { /* payout failed, continue */ }
       }
     } catch (e) {
       errors.push(`Cycle ${i + 1}: ${e instanceof Error ? e.message : String(e)}`);
