@@ -2409,3 +2409,33 @@ Stage Summary:
 - M-RT-1 skeleton extended with 1 type-only optimization-loop module. No business logic.
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - PER USER INSTRUCTION: Architecture PERMANENTLY frozen v1.5. The remaining unknowns are algorithmic and operational, not structural. Implementation resumes at M-RT-2 (Capability Graph + Reserve Market). STOP here.
+
+---
+Task ID: RT-DEPENDENCY-MAP (Architecture → Implementation transition: Dependency Map + Build Matrix + Milestone Execution Plan)
+Agent: main (Z.ai Code)
+Task: Architecture has reached diminishing returns. Do NOT produce another amendment. Produce the highest-value next artifact: an Architecture Dependency Map + Build Matrix + Milestone Execution Plan. This is implementation planning, not architecture. Engineers implement from diagrams/contracts/dependency maps, not 100-page prose docs.
+
+Work Log:
+- Created RUNTIME-DEPENDENCY-MAP.md (313 lines) — the second of three permanent documents (Constitution / Dependency Map / Roadmap).
+- §1 Layered Dependency Graph: organized the 18 primitives (+ supporting concepts) into 10 build layers (L0 Foundation → L10 Simulation & Health). Full dependency-arrow diagram showing how Runtime Clock → Event Store/Intent Engine → Policy/Decision/Projection/Inspector → Capability Graph/Reserve Market/Liquidity Marketplace/Runtime Memory → Route/Liquidity/Resource/Economic Graphs → Knowledge Graph → Compiler → Pipeline/Settlement → Reserve Engine/Liquidity Market/Treasury/Economic Score → Economic Intelligence/Opportunity Discovery/LP&Treasury Growth/Counterfactual/Recommendation Lifecycle → Digital Twin/Economic Health.
+- §2 Build Matrix: 31-row table (Primitive | Layer | Depends On | Needed By | Milestone). Every primitive knows its dependencies and consumers. Marks which are already built (M-RT-1 ✅) vs which milestone implements the real logic.
+- §3 Milestone Execution Plan: all 19 milestones (M-RT-1 through M-RT-19) with Prerequisites + Can-Parallelize-With + Validation Checkpoint each. The golden path is M-RT-12 (payments vertical slice): Intent → Compiler (8 passes) → Execution Plan → Pipeline (14 stages) → Settlement → Ledger → Events → Projections → Inspector, with full explainability + missed opportunities + counterfactual projections, replayable in sandbox.
+- §4 Parallelization Opportunities: 6 parallel groups identified (A: Layer 3 Capability Graph ‖ Reserve Market; B: Route Graph ‖ Economic Score prep; C: LP Growth ‖ Treasury Growth; D: Digital Twin ‖ Runtime Memory 3-tier; E: Simulator ‖ Inspector ‖ Gateway; F: Read Models ‖ Capability Migration ‖ Integrity). Critical path: M-RT-1 → M-RT-2 → M-RT-4 → M-RT-5 → M-RT-6 → M-RT-10 → M-RT-11 → M-RT-12 → M-RT-13/14/15 → M-RT-17/18/19. M-RT-5 (Compiler real) is the highest-leverage early milestone.
+- §5 Validation Checkpoints (cross-cutting): 7 gates every milestone must pass (lint, tsc, kernel untouched, existing app unbroken, trace integrity, economic integrity, explainability).
+- §6 The Three Permanent Documents: Constitution (frozen v1.5, never changes) / Dependency Map (this doc, changes rarely) / Roadmap (§22, can evolve). Everything else is implementation docs.
+- §7 Doc-Reduction Note: flagged that the Constitution is ~3,200 lines and would benefit from a reduction pass (extract contracts/state machines/execution flows into a terse reference; move amendment history to appendix) — to be done when implementation begins, not now.
+
+Verification:
+- bun run lint → 0 errors, 0 warnings (no code changed; pure markdown addition).
+- bunx tsc --noEmit → 0 errors in src/runtime/.
+- Dev server: healthy (homepage 200).
+
+Stage Summary:
+- Deliverable: /home/z/my-project/RUNTIME-DEPENDENCY-MAP.md (313 lines) — the implementation guide.
+- Transitions the project from architecture (done, frozen v1.5) to execution planning.
+- Every primitive has a layer, dependencies, consumers, and owning milestone.
+- Every milestone has prerequisites, parallelization opportunities, and a concrete validation checkpoint.
+- Critical path identified: M-RT-5 (real Compiler) is the highest-leverage early milestone.
+- Three permanent documents now in place: Constitution + Dependency Map + Roadmap.
+- No code changes. No kernel changes. No architecture changes. Lint: clean. tsc: clean. Dev server: healthy.
+- NEXT: implementation begins at M-RT-2 (Capability Graph) and M-RT-3 (Reserve Market + Liquidity Market + Reserve Engine) — parallelizable Layer 3 primitives. The architecture work is complete.
