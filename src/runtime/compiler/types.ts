@@ -33,6 +33,8 @@ export type CompilationPassName =
   | 'compliance'
   | 'fraud'
   | 'reserve_optimization'
+  | 'reserve_allocation'           // Integration Pass: split from reserve_optimization
+  | 'reserve_aware_routing'        // Integration Pass: split from reserve_optimization
   | 'liquidity_optimization'
   | 'fx_optimization'
   | 'settlement_planning';

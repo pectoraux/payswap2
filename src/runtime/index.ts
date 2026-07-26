@@ -81,6 +81,8 @@ export * from './engines/recommendation-lifecycle';
 // v1.4 True Final Freeze public surface:
 export * from './compiler';
 export * from './graphs/knowledge-graph';
+// Integration Pass public surface (type-only — compresses peer concepts):
+export * from './integration';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';

@@ -2314,3 +2314,50 @@ Stage Summary:
 - M-RT-1 skeleton now holds 19 engines/components total (17 from prior amendments + Financial Compiler + Financial Knowledge Graph).
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - PER USER INSTRUCTION: Architecture is PERMANENTLY frozen around 18 primitives. All future work must fit within this architecture as compiler passes / graph projections / plugins / strategies / optimizers. Implementation resumes at M-RT-2 (Capability Graph) when the user gives the go-ahead. The remaining risks are execution risks, not conceptual ones. STOP here.
+
+---
+Task ID: RT-INTEGRATION-PASS (Runtime Constitution Integration Pass — compressing peer concepts under existing primitives; NOT a new amendment)
+Agent: main (Z.ai Code)
+Task: NOT a redesign. An integration pass: make the relationships between the many peer concepts explicit so the Runtime feels like one coherent operating system. Compress: Liquidity Intelligence ⊂ Economic Intelligence; reserve-aware routing = compiler pass (not engine); Route Graph = compiled artifact from Capability Graph; Route Synthesis; Opportunity Discovery = graph analysis; Recommendations = graph transformations; Missed Opportunity Detection; LP/Treasury Evolution as recommendation producers; Knowledge Graph = learning substrate; Economic Health = Network Scorecard; Inspector explains optimization; Digital Twin = recommendation testing ground. NO new top-level primitives. Update ONLY canonical architecture + roadmap + constitution + frozen vocabulary + M-RT-1 interfaces (type-only). No business logic. Keep Constitution frozen. STOP.
+
+Work Log:
+ARCHITECTURE DOC (PROTOCOL-RUNTIME-ARCHITECTURE.md):
+- Added "Integration Pass — Compressing Peer Concepts Under Existing Primitives" section near the top (after v1.4 summary table). Explicitly states this is NOT a new amendment; the 18 primitives are unchanged; everything is expressed as compiler passes / graph projections / recommendation producers / Economic Intelligence plugins. 14-row integration summary table.
+- NEW §7T Economic Intelligence Subsystem Hierarchy: Liquidity Intelligence is NOT a standalone runtime — it is a specialization WITHIN Economic Intelligence. Hierarchy diagram: Economic Intelligence Runtime owns Liquidity Intelligence, Treasury Intelligence, Reserve Intelligence, Opportunity Discovery, LP Growth, Treasury Growth, Economic Health, Counterfactual Analysis, Recommendation Engine. One Economic Intelligence Runtime, nine specializations, all reading the same Knowledge Graph + writing to the same Runtime Memory.
+- NEW §7U Reserve-Aware Routing as a Compiler Pass: NOT a routing algorithm — two compiler optimization passes (reserve_allocation → reserve_aware_routing). Extended pass order. Every Execution Plan records reserves considered/rejected, utilization, opportunity cost, shadow prices, exhaustion forecasts. Full cost decomposition: Execution + Capital + Reserve (shadow price) + Liquidity + Risk + Settlement Delay + FX. CostDecomposition + ReserveAwareRoutingPassResult types.
+- NEW §7V Route Graph as Compiled Artifact + Route Synthesis: the Runtime never stores routes manually — routes are generated from capabilities by the compiler. Route Synthesis: compiler synthesizes multi-hop execution plans (Buyer→Reserve→LP A→LP B→LP C→Merchant) without human creation. SynthesizedRoute + RouteSynthesisResult types. Route Graph's regenerate() is a compilation step.
+- NEW §7W Opportunity Discovery as Graph Analysis: NOT an engine — continuous graph analysis over all six graphs (Capability, Route, Liquidity, Reserve, Economic, Knowledge) producing Recommendations. OpportunityGraphAnalysis interface. Every opportunity kind is a graph pattern the analysis detects. A projection of the Knowledge Graph, not a peer subsystem.
+- NEW §7X Recommendations as Graph Transformations: a Recommendation is NOT advice — it is a proposed transformation of the Financial Network (Graph Diff + Economic Justification + Expected Value + Simulation + Implementation Plan). GraphTransformationRecommendation extends Recommendation. GraphDiff + ImplementationStep types. Only transformations passing the simulation threshold surface.
+- NEW §7Y Missed Opportunity Detection: Economic Intelligence continuously asks "what almost happened?" (payment failed: no LP; expensive: reserve unavailable; delayed: connector down; compiler almost produced better plan: missing capability). Every "almost" becomes an Opportunity. MissedOpportunity type. Compiler records these during compilation.
+- NEW §7Z Digital Twin as Recommendation Testing Ground: every Recommendation auto-generates a counterfactual simulation; only those passing thresholds surface. RecommendationSimulationGate + RecommendationSimulationResult + SimulationThreshold types. Unifies the Recommendation Lifecycle "simulated" stage with the Counterfactual Engine. Makes the Runtime self-filtering.
+- NEW §7AA Economic Health as Network Scorecard + Inspector Optimization Explanation: Economic Health reframed as Network Scorecard (network efficiency, unused liquidity, idle reserves, capital velocity, route utilization, missed opportunities, recommendation adoption, LP/treasury growth, network evolution — NOT payment statistics). Inspector gains OptimizationExplanation (Why this LP/reserve/route? Why not the others? What opportunity prevented a better outcome? How would this look if rec #184 were implemented?). OptimizationExplanation type.
+
+M-RT-1 SKELETON EXTENSION (src/runtime/) — 1 new type-only module:
+- Created integration/types.ts — TYPE-ONLY: CostDecomposition, ReserveAwareRoutingPassResult (extends CompilationPassResult with pass='reserve_aware_routing'); SynthesizedRoute, RouteSynthesisResult; GraphDiff, ImplementationStep, GraphTransformationRecommendation (extends Recommendation); MissedOpportunity; SimulationThreshold, RecommendationSimulationResult, RecommendationSimulationGate; OptimizationExplanation; EconomicIntelligenceSubsystem (9 subsystems), EconomicIntelligencePlugin (tag interface). index.ts barrel (type-only exports).
+- Updated compiler/types.ts — added 'reserve_allocation' + 'reserve_aware_routing' to CompilationPassName union (Integration Pass splits reserve_optimization into two passes).
+- Updated vocabulary.ts — added 7 Integration Pass terms (Economic Intelligence Subsystem, Route Synthesis, Graph Transformation, Missed Opportunity, Cost Decomposition, Recommendation Simulation Gate, Optimization Explanation).
+- Updated index.ts barrel — re-exports integration module (type-only).
+
+Verification:
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors in src/runtime/ (fixed 1: ReserveAwareRoutingPassResult incorrectly extended CompilationPassResult because 'reserve_aware_routing' wasn't in the CompilationPassName union; added it + 'reserve_allocation').
+- Load check: 15 principles, 61 vocabulary terms (54 + 7 integration). All integration types compile and import. Financial Compiler + Knowledge Graph still present.
+- End-to-end dispatch (no regression): no-op payment intent → status 'completed', 15 trace stages, 12 events appended. Skeleton spine intact.
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- Integration Pass applied. NOT a new amendment — the 18 permanent primitives are unchanged. The peer concepts are now explicitly compressed under existing primitives:
+  · Liquidity Intelligence ⊂ Economic Intelligence (subsystem, not sibling runtime)
+  · Reserve-aware routing = compiler pass (reserve_allocation → reserve_aware_routing), not an engine
+  · Route Graph = compiled artifact from Capability Graph (Route Synthesis)
+  · Opportunity Discovery = graph analysis (projection of Knowledge Graph)
+  · Recommendations = graph transformations (Graph Diff + simulation + implementation plan)
+  · Missed Opportunity Detection ("what almost happened?")
+  · LP/Treasury Evolution = recommendation producers within Economic Intelligence
+  · Knowledge Graph = learning substrate (writes to Runtime Memory)
+  · Economic Health = Network Scorecard (not payment statistics)
+  · Inspector explains optimization (why this LP/reserve/route + missed opportunities + counterfactual projections)
+  · Digital Twin = recommendation testing ground (simulation gate; self-filtering)
+- M-RT-1 skeleton extended with 1 type-only integration module (integration/types.ts + barrel). No business logic. No new top-level primitives.
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- PER USER INSTRUCTION: The Constitution stays frozen. The objective was not to increase concepts but to make the Runtime feel like one coherent operating system. Implementation resumes at M-RT-2 (Capability Graph) when the user gives the go-ahead. STOP here.

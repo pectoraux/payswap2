@@ -70,6 +70,14 @@ export const RUNTIME_VOCABULARY: readonly VocabTerm[] = [
   { term: 'Financial Knowledge Graph', meaning: 'The single root graph containing all five existing graphs (Capability, Route, Liquidity, Resource, Economic). Answers cross-graph queries no individual graph can. The single source of truth the Financial Compiler reads at compile time.' },
   { term: 'Coordinate', meaning: 'The fourth Runtime responsibility (Execute / Optimize / Coordinate / Evolve). The Runtime coordinates independent economic actors (LPs, Treasury, banks, merchants, connectors, regulators, customers, reserves, FX providers) toward shared outcomes.' },
   { term: 'Protocol Object', meaning: 'A first-class runtime citizen with identity, lifecycle, and learnability. Recommendations are Protocol Objects: searchable, versionable, assignable, discussable, acceptable, rejectable, measurable, and learnable.' },
+  // Integration Pass terms (compression, not new primitives):
+  { term: 'Economic Intelligence Subsystem', meaning: 'A specialization WITHIN Economic Intelligence (not a sibling runtime). Includes Liquidity Intelligence, Treasury Intelligence, Reserve Intelligence, Opportunity Discovery, LP/Treasury Growth, Economic Health, Counterfactual, Recommendation Engine. All read the same Knowledge Graph and write to the same Runtime Memory.' },
+  { term: 'Route Synthesis', meaning: 'The compiler synthesizes multi-hop execution plans (Buyer→Reserve→LP A→LP B→LP C→Merchant) from capabilities without human creation. Routes are compiled artifacts, not manually stored.' },
+  { term: 'Graph Transformation', meaning: 'A Recommendation is not advice — it is a proposed transformation of the Financial Network: Graph Diff + Economic Justification + Expected Value + Simulation + Implementation Plan. Only transformations passing the simulation threshold surface.' },
+  { term: 'Missed Opportunity', meaning: 'What almost happened — payment failed (no LP), expensive (reserve unavailable), delayed (connector down), or the compiler almost produced a better plan (missing capability). Every "almost" becomes an Opportunity.' },
+  { term: 'Cost Decomposition', meaning: 'The full cost the reserve_aware_routing compiler pass optimizes: Execution + Capital + Reserve (shadow price) + Liquidity + Risk + Settlement Delay + FX. Every component is exposed in the Execution Plan.' },
+  { term: 'Recommendation Simulation Gate', meaning: 'The Digital Twin as testing ground: every Recommendation auto-generates a counterfactual simulation; only those passing thresholds (min revenue/volume/confidence) surface to actors. Makes the Runtime self-filtering.' },
+  { term: 'Optimization Explanation', meaning: 'Inspector answers for every payment: Why this LP/reserve/route? Why not the others? What opportunity prevented a better outcome? How would this look if recommendation #184 were already implemented?' },
 ] as const;
 
 export const VOCABULARY_TERMS = RUNTIME_VOCABULARY.map((t) => t.term);

@@ -229,6 +229,43 @@ The Runtime coordinates independent economic actors toward shared outcomes.
 
 ---
 
+## Integration Pass — Compressing Peer Concepts Under Existing Primitives
+
+> **The Constitution is architecturally frozen. This is NOT a new amendment.**
+> It is an **integration pass**: making the relationships between the many
+> peer concepts explicit, so the Runtime feels like one coherent operating
+> system — not a pile of sibling engines.
+
+The previous amendments (correctly) promoted good ideas into first-class
+engines during exploration. That risks an architecture with dozens of sibling
+subsystems. This pass **compresses complexity**: reserve-aware routing
+becomes a **compiler pass**; opportunity discovery becomes **graph analysis**;
+LP/treasury growth become **recommendation producers** within Economic
+Intelligence; routes become **compiled artifacts** generated from capabilities;
+recommendations become **graph transformations** with measurable economic
+impact. The 18 permanent primitives do not change — everything below is
+expressed as compiler passes, graph projections, recommendation producers,
+or Economic Intelligence plugins.
+
+| # | Integration | Effect |
+|---|---|---|
+| 1 | **Liquidity Intelligence ⊂ Economic Intelligence** | Liquidity Intelligence is a specialization *within* Economic Intelligence, not a standalone runtime. Economic Intelligence owns: Liquidity, Treasury, Reserve, Opportunity Discovery, LP/Treasury Growth, Economic Health, Counterfactual, Recommendation Engine. |
+| 2 | **Reserve-aware routing = compiler pass** | Not a routing algorithm — a compiler optimization pass (`reserve_allocation` → `reserve_aware_routing`). Deterministic, inspectable. Every Execution Plan records reserves considered/rejected, utilization, opportunity cost, shadow prices, exhaustion forecasts. |
+| 3 | **Route Graph = compiled artifact** | The Runtime never stores routes manually. Routes are **generated from capabilities** by the compiler. The Route Graph is a compiled projection of the Capability Graph. |
+| 4 | **Route Synthesis** | The compiler doesn't just discover routes — it **synthesizes** multi-hop execution plans (Buyer→Reserve→LP A→LP B→LP C→Merchant) without human creation. Multi-hop routes are compiled execution plans. |
+| 5 | **Opportunity Discovery = graph analysis** | Not an engine — continuous graph analysis over all six graphs (Capability, Route, Liquidity, Reserve, Economic, Knowledge) producing Recommendations. |
+| 6 | **Recommendations = graph transformations** | A Recommendation is not advice — it's "a proposed transformation of the Financial Network": Graph Diff + Economic Justification + Expected Value + Simulation + Implementation Plan. |
+| 7 | **Missed Opportunity Detection** | Economic Intelligence continuously asks "what almost happened?" (payment failed: no LP; expensive: reserve unavailable; delayed: connector down; compiler almost produced a better plan: missing capability). Every "almost" becomes an Opportunity. |
+| 8 | **LP/Treasury Capability Evolution** | LPs and Treasury evolve via recommendation producers within Economic Intelligence (new corridors/currencies/reserves/connectors/pricing/collateral/FX for LPs; new/larger/smaller/relocated/seasonal/pre-funded reserves for Treasury). |
+| 9 | **Reserve-aware routing = full cost decomposition** | Routing optimizes Execution Cost × Capital Cost × Reserve Cost × Liquidity Cost × Risk Cost × Settlement Delay × FX Cost. The compiler exposes every component. |
+| 10 | **Knowledge Graph = learning substrate** | Economic Intelligence writes discoveries (Friday payroll demand, holiday liquidity shortage, LP congestion, FX widening, reserve depletion cycles, connector instability) into Runtime Memory *through* the Knowledge Graph. |
+| 11 | **Economic Health = Network Scorecard** | Not payment statistics — network efficiency, unused liquidity, idle reserves, capital velocity, route utilization, missed opportunities, recommendation adoption, LP/treasury growth, network evolution. |
+| 12 | **Inspector explains optimization** | Why this LP? Why not the others? Why this reserve? Why this route? What opportunity prevented a better outcome? How would this look if recommendation #184 had already been implemented? |
+| 13 | **Digital Twin = recommendation testing ground** | Every Recommendation auto-generates counterfactual simulations (Current Network vs Alternative Network across throughput/revenue/capital/settlement-time). Only recs passing simulation thresholds surface. |
+| 14 | **No new top-level primitives** | The 18 primitives are unchanged. Extension points: Compiler Passes · Knowledge Graph · Economic Intelligence · Runtime Memory · Recommendation Lifecycle · Digital Twin. |
+
+---
+
 ## Final Amendment — Economic Discovery & Network Evolution
 
 This is the **final** architecture amendment. After it, the Runtime
@@ -1783,6 +1820,324 @@ built on top of these — never a change to the Constitution itself.
 **The rule:** any future capability must be expressible as one of: a compiler
 pass, a graph projection, a plugin, a strategy, or an optimizer built on
 these 18 primitives. The primitives themselves do not change.
+
+---
+
+## 7T. Economic Intelligence Subsystem Hierarchy *(Integration Pass §1)*
+
+Liquidity Intelligence is **not** a standalone runtime. It is one
+specialization **within** Economic Intelligence. The peer engines from prior
+amendments become subsystems of one Economic Intelligence Runtime:
+
+```
+Economic Intelligence Runtime
+    ├── Liquidity Intelligence      (network analysis: why-LP-underutilized, etc.)
+    ├── Treasury Intelligence       (Capital Allocator + Treasury Growth)
+    ├── Reserve Intelligence        (Reserve Market State + Shadow Price + Reserve Discovery)
+    ├── Opportunity Discovery       (graph analysis → Recommendations)
+    ├── LP Growth                   (recommendation producer: next corridor/reserve/pricing)
+    ├── Treasury Growth             (recommendation producer: capital deployment, bootstrap)
+    ├── Economic Health             (Network Scorecard — the operating console)
+    ├── Counterfactual Analysis     (Current vs Alternative Network)
+    └── Recommendation Engine       (graph transformations + lifecycle + learning)
+```
+
+Economic Intelligence owns **continuous optimization** (#2 of the four
+responsibilities). Every subsystem above is a plugin/projection/producer
+**within** it — not a sibling runtime. This compresses the architecture:
+one Economic Intelligence Runtime, nine specializations, all reading the
+same Financial Knowledge Graph and writing to the same Runtime Memory.
+
+---
+
+## 7U. Reserve-Aware Routing as a Compiler Pass *(Integration Pass §2, §9)*
+
+Reserve-aware routing is **not a routing algorithm** — it is two compiler
+optimization passes, making it deterministic and inspectable.
+
+**Extended compiler pass order:**
+```
+Intent → resolve_identities → policy → compliance → fraud →
+reserve_allocation → reserve_aware_routing → liquidity_optimization →
+fx_optimization → settlement_planning → Execution Plan
+```
+
+**Every Execution Plan records (per the `reserve_aware_routing` pass):**
+- reserves considered
+- reserves rejected (and why)
+- reserve utilization at execution time
+- reserve opportunity cost
+- reserve shadow prices used
+- reserve exhaustion forecasts
+
+**Full cost decomposition (Integration Pass §9).** The pass optimizes the
+**total cost**, not just execution fee:
+
+```
+Total Cost = Execution Cost
+           + Capital Cost
+           + Reserve Cost (shadow price × amount)
+           + Liquidity Cost (LP fees + clearing)
+           + Risk Cost
+           + Settlement Delay Cost
+           + FX Cost
+```
+
+The compiler exposes **every component** in the Execution Plan's
+`CompilationPassResult.decision`, so the Inspector can show why Route B
+(higher fee, lower reserve+capital cost) beat Route A.
+
+```ts
+interface CostDecomposition {
+  executionCostBps: number;
+  capitalCostBps: number;
+  reserveCostBps: number;       // sum of (amount × shadowPriceBps)
+  liquidityCostBps: number;
+  riskCostBps: number;
+  settlementDelayCostBps: number;
+  fxCostBps: number;
+  totalBps: number;
+}
+
+interface ReserveAwareRoutingPassResult extends CompilationPassResult {
+  pass: 'reserve_aware_routing';
+  reservesConsidered: { reserveId: string; shadowPriceBps: number; utilization: number }[];
+  reservesRejected: { reserveId: string; reason: string }[];
+  costDecomposition: CostDecomposition;
+  exhaustionForecast?: { reserveId: string; forecastDepletionMs: number }[];
+}
+```
+
+---
+
+## 7V. Route Graph as a Compiled Artifact + Route Synthesis *(Integration Pass §3, §4)*
+
+The Runtime **never stores routes manually**. Routes are **generated from
+capabilities** by the compiler. The Route Graph is a **compiled projection**
+of the Capability Graph.
+
+**Route Synthesis** (Integration Pass §4): the compiler doesn't just discover
+routes — it **synthesizes** multi-hop execution plans without human creation:
+
+```
+Buyer → Reserve → LP A → LP B → LP C → Merchant
+```
+
+A synthesized route is a compiled execution plan where each hop cites the
+capability it was generated from. Adding/removing a capability automatically
+re-synthesizes the affected routes.
+
+```ts
+interface RouteSynthesisResult {
+  from: string;
+  to: string;
+  synthesizedRoutes: SynthesizedRoute[];
+  /** Capabilities that, if added, would unlock more synthesized routes. */
+  missingCapabilitiesForSynthesis: LPCapability[];
+}
+
+interface SynthesizedRoute {
+  id: string;
+  hops: { lpId: string; capabilityId: string; from: string; to: string }[];
+  isMultiHop: boolean;
+  generatedFromCapabilities: string[];
+  estimatedTotalCostBps: number;
+  estimatedTotalLatencyMs: number;
+  compoundedReliability: number;
+}
+```
+
+The Route Graph's `regenerate()` is a **compilation step**: it runs Route
+Synthesis over the current Capability Graph. The Financial Compiler's
+`settlement_planning` pass consumes synthesized routes when building an
+Execution Plan.
+
+---
+
+## 7W. Opportunity Discovery as Graph Analysis *(Integration Pass §5)*
+
+Opportunity Discovery is **not an engine** — it is **continuous graph
+analysis** over all six graphs (Capability, Route, Liquidity, Reserve,
+Economic, Knowledge), producing Recommendations.
+
+```ts
+interface OpportunityGraphAnalysis {
+  /** Analyze all six graphs for opportunities. Returns Recommendations. */
+  analyze(): Promise<Recommendation[]>;
+  /** The graphs analyzed. */
+  readonly projections: GraphProjection[];
+}
+```
+
+The analysis traverses the Financial Knowledge Graph (§7Q) — it doesn't
+maintain its own state. Every opportunity kind (§7B: missing_bridge,
+missing_lp_capability, unused_reserve, expensive_corridor, etc.) is a
+**graph pattern** the analysis detects. This makes Opportunity Discovery a
+**projection of the Knowledge Graph**, not a peer subsystem.
+
+---
+
+## 7X. Recommendations as Graph Transformations *(Integration Pass §6)*
+
+A Recommendation is **not advice** — it is "a proposed transformation of the
+Financial Network." It carries a **Graph Diff** + economic justification +
+expected value + simulation + implementation plan.
+
+```
+Current Graph:   Twin GHS → XOF
+Proposed Graph:  Twin GHS → Twin XOF → XOF
+```
+
+```ts
+interface GraphTransformationRecommendation extends Recommendation {
+  /** The proposed change to the Financial Knowledge Graph. */
+  graphDiff: GraphDiff;
+  /** Why this transformation is economically justified. */
+  economicJustification: string;
+  /** Quantified expected value (volume/revenue/cost). */
+  expectedValue: { dimension: string; delta: number }[];
+  /** Auto-generated counterfactual simulation (§7Z). */
+  simulation: Counterfactual;
+  /** How to implement the transformation (steps). */
+  implementationPlan: ImplementationStep[];
+  /** Did it pass the simulation threshold to surface? */
+  passedSimulationThreshold: boolean;
+}
+
+interface GraphDiff {
+  addNodes: { id: string; type: string; projection: GraphProjection }[];
+  removeNodes: { id: string; projection: GraphProjection }[];
+  addEdges: { from: string; to: string; relationship: string }[];
+  removeEdges: { from: string; to: string; relationship: string }[];
+}
+
+interface ImplementationStep {
+  action: string;          // "publish capability Twin GHS→Twin XOF"
+  actor: RecommendationAudience;
+  estimatedEffort: 'low' | 'medium' | 'high';
+  dependsOn?: string[];    // other step ids
+}
+```
+
+Only Recommendations that pass the Digital Twin's simulation threshold
+(§7Z) surface to actors — so every surfaced Recommendation is
+evidence-backed and simulation-validated.
+
+---
+
+## 7Y. Missed Opportunity Detection *(Integration Pass §7)*
+
+Economic Intelligence continuously asks **"what almost happened?"** Every
+"almost" becomes an Opportunity (and, if actionable, a Recommendation).
+
+**Examples:**
+- Payment failed because **no LP** could serve the corridor → `missing_lp_capability` opportunity.
+- Payment expensive because a **reserve was unavailable** → `unused_reserve` / `missing_reserve` opportunity.
+- Settlement delayed because a **connector was unavailable** → `unused_connector` / `slow_connector` opportunity.
+- Compiler **almost produced a better plan** because a capability was missing → `missing_bridge` / `missing_lp_capability` opportunity.
+
+```ts
+interface MissedOpportunity {
+  id: string;
+  detectedAt: number;
+  /** The execution that almost had a better/different outcome. */
+  executionId?: string;
+  /** What almost happened. */
+  kind: RecommendationKind;
+  description: string;
+  /** What prevented the better outcome. */
+  preventedBy: string;
+  /** The opportunity it becomes (if actionable). */
+  recommendationId?: string;
+}
+```
+
+The compiler records `MissedOpportunity` artifacts during compilation (e.g.
+"rejected Route C because LP D lacks capability Twin GHS→Twin XOF"). Economic
+Intelligence aggregates these into Recommendations.
+
+---
+
+## 7Z. Digital Twin as Recommendation Testing Ground *(Integration Pass §13, §14)*
+
+Every Recommendation **auto-generates a counterfactual simulation**. Only
+Recommendations passing simulation thresholds surface to actors.
+
+```
+Current Network  →  Throughput / Revenue / Capital / Settlement Time
+Alternative Net  →  (apply the Recommendation's Graph Diff)
+                 →  Compare
+                 →  Expected Improvement
+                 →  Pass threshold?  → surface / suppress
+```
+
+The Digital Twin is the **testing ground** for Recommendations. This unifies
+the Recommendation Lifecycle's "simulated" stage (§7O) with the Counterfactual
+Engine (§7N): the twin runs the counterfactual; the Recommendation carries
+the result; the threshold gates surfacing.
+
+```ts
+interface RecommendationSimulationGate {
+  /** Auto-simulate a Recommendation; returns whether it passes the threshold. */
+  simulate(rec: GraphTransformationRecommendation): Promise<RecommendationSimulationResult>;
+  /** The thresholds a Recommendation must pass to surface. */
+  thresholds: SimulationThreshold;
+}
+
+interface RecommendationSimulationResult {
+  recommendationId: string;
+  counterfactual: Counterfactual;
+  passed: boolean;
+  reasonsForRejection?: string[];   // if !passed
+}
+
+interface SimulationThreshold {
+  minExpectedRevenueDelta: number;
+  minExpectedVolumeDelta: number;
+  minConfidence: number;
+  maxCapitalRequired?: number;
+}
+```
+
+This makes the Runtime **self-filtering**: weak Recommendations are suppressed
+by simulation before they reach actors; strong ones surface with full
+evidence. The Digital Twin stops being a separate "what-if tool" and becomes
+the **gate** every Recommendation passes through.
+
+---
+
+## 7AA. Economic Health as Network Scorecard + Inspector Optimization Explanation *(Integration Pass §11, §12)*
+
+**Economic Health** (§7E) is reframed as a **Network Scorecard** — not
+payment statistics. It aggregates: network efficiency, unused liquidity, idle
+reserves, capital velocity, route utilization, missed opportunities,
+recommendation adoption rate, LP growth, treasury growth, network evolution.
+
+**The Inspector** (§13) gains **optimization explanation** for every payment:
+- Why this LP? Why not the others?
+- Why this reserve? Why not reserve B?
+- Why this route? Why not another?
+- What opportunity prevented a better outcome? (links to §7Y MissedOpportunity)
+- How would this look if recommendation #184 had already been implemented?
+  (links to §7Z counterfactual — "recompile with the rec's Graph Diff applied")
+
+```ts
+interface OptimizationExplanation {
+  chosenLP: { lpId: string; reason: string };
+  rejectedLPs: { lpId: string; reason: string }[];
+  chosenReserve: { reserveId: string; reason: string };
+  rejectedReserves: { reserveId: string; reason: string }[];
+  chosenRoute: { routeId: string; reason: string };
+  rejectedRoutes: { routeId: string; reason: string }[];
+  missedOpportunities: MissedOpportunity[];
+  /** "How would this look if rec #184 were implemented?" */
+  counterfactualProjections: { recommendationId: string; counterfactual: Counterfactual }[];
+}
+```
+
+The Inspector renders `OptimizationExplanation` alongside the existing
+8-field explainability panel, so every payment's full economic reasoning —
+including the opportunities it *missed* — is inspectable.
 
 ---
 
