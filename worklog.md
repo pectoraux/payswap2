@@ -1978,3 +1978,48 @@ Verification:
 - Kernel: 0 files modified (FROZEN)
 - GitHub: pushed to pectoraux/payswap2 (commit 22261b8)
 - Vercel: deployed to https://my-project-one-flax-80.vercel.app (200 OK)
+
+---
+Task ID: RT-ARCH-1 (Protocol Runtime Architecture — Phase 1 v1: Design, no code)
+Agent: main (Z.ai Code)
+Task: Respond to the first architectural review directing PaySwap toward a Stripe-class command/event/projection runtime. Spend one pass as an architect designing the complete target architecture (10 layers) before any implementation. Phase 1 design document only — no code.
+
+Work Log:
+- Read existing state: src/kernel/index.ts (26+ engines, 7 frozen primitives), src/kernel/command.ts (Command vocabulary + Commands builders), src/kernel/transition.ts (Transition w/ evidence/preconditions/postconditions/rollback), src/kernel/state-machine.ts (9 object kinds, full edge table, in-memory only), src/kernel/event.ts (EventEngine in-memory sim pub/sub), src/services/event-bus.ts (in-memory, 10k rolling cap — events are side-effects not source of truth), src/services/payment-service.ts (writes status='COMPLETED' straight to Prisma, bypassing STATE_MACHINES), src/services/projections/index.ts (audit/webhook/customer-stats on the volatile bus).
+- Diagnosed the core problem: PRODUCTION (UI→API→Service→Prisma→in-mem bus) and SIMULATION (scenario→kernel engines→in-mem EventEngine) are two separate worlds that never meet.
+- Wrote PROTOCOL-RUNTIME-ARCHITECTURE.md (v1) — 10 layers: Command Bus, Event Store (as DB), Read Models, Protocol State Machine, Resource Graph, Workflow Engine, Connector Runtime, Treasury Engine, Liquidity Engine, Protocol Inspector. Plus end-to-end flow, economic invariants, strangler migration, M-RT-1..12 roadmap, quality gates.
+
+Stage Summary:
+- Deliverable: PROTOCOL-RUNTIME-ARCHITECTURE.md (v1, ~54KB). Kernel untouched. No implementation code.
+- v1 reframed around Command handlers replacing services; this was corrected in v2 (next task).
+
+---
+Task ID: RT-ARCH-2 (Protocol Runtime Architecture — Phase 1 v2: Revised per 15-point feedback, no code)
+Agent: main (Z.ai Code)
+Task: Revise the architecture per the second, deeper review. Key reframe: objective changes from "build a better Stripe" to "build the execution runtime of a programmable financial network." Incorporate all 15 corrections: keep Application Services (don't replace with command handlers); Event Store as audit/replay/sim/debug/inspect source NOT the read path; split Domain vs Runtime events; dedicated Settlement Engine (the product); Treasury as Capital Allocator; separate Reserve Engine; Liquidity Engine as a Market (LP strategies + clearing); Decision Engine; two graphs (Resource + Economic); Policy Engine; Scheduling Engine; API Gateway; Runtime-as-product; the execution pipeline as a first-class 14-stage spine; simulator as a Runtime client.
+
+Work Log:
+- Re-read v1 document and the 15-point feedback. Mapped each point to a concrete architectural change.
+- Rewrote PROTOCOL-RUNTIME-ARCHITECTURE.md as v2 (supersedes v1 in place — one source of truth). Added a "Changes from v1" table mapping all 15 corrections.
+- §0 Objective reframe: "execution runtime of a programmable financial network"; Runtime is the product, everything is a client.
+- §1 The execution pipeline as the 14-stage first-class spine (Intent → Validation → Policy → Risk/Fraud → Treasury&Reserve Allocation → Liquidity Market → Settlement Planning → Execution → Ledger → Event Emission → Projection Updates → Notifications/Webhooks → Analytics → Protocol Inspection). Uniform for payments/payouts/refunds/subscriptions/invoices/wallet transfers/treasury ops.
+- §3 Product reframe diagram: Clients → API Gateway → Application Services → Protocol Runtime (pipeline) → Domain Services + Engines → Event Store → Projections → Read Models → Clients.
+- §4 Application Services KEPT as orchestration (build Intent → drive pipeline → return read model). Not replaced by command handlers.
+- §5 Eight dedicated engines with contracts: Settlement Engine (the product — connector/LP/reserve/FX/routing/execution/confirmation/reconciliation); Treasury Capital Allocator (idle capital/corridor+LP demand/traffic/FX/float/yield/risk); Reserve Engine (lock/release/collateral/mint-burn/backing/proofs/snapshots, separated from Treasury); Liquidity Market (LP strategies: pricing curves/risk appetite/corridor prefs/supported rails/reserve reqs/latency/utilization/yield targets → quote → clear → execute); Decision Engine (every important decision = recorded artifact w/ score/confidence/alternatives/tradeoffs/constraints/evidence); Policy Engine (can-settle/can-mint/can-refund/can-release/can-retry as explicit data rules); Scheduling Engine (one_shot/cron/fixed_rate deferred jobs that dispatch through the pipeline); Risk & Fraud Engine (stage 4).
+- §6 Events split: Domain Events (business state, replayed) vs Runtime Events (operational, not replayed). Two logical streams per aggregate (domain: / runtime:).
+- §7 Event Store reframed: audit/replay/sim/debug/inspect source ONLY. Pages NEVER replay — they read read models, which projections update IMMEDIATELY on append (same transaction). Append-only, OCC by stream version, snapshotable.
+- §8 Two graphs: Resource Graph (business: Payment→Refund→Invoice→Customer→Merchant→Subscription→Dispute) + Economic Graph (money: Reserve→LP→Wallet→Treasury→FX→Settlement→Escrow→TwinToken). Distinct from kernel's liquidity graph (optimizer's in-memory traversal).
+- §9 API Gateway: auth/rate-limit/idempotency/versioning/correlationId/quota in one middleware; routes thin to validate→call service→return.
+- §10 Simulator as Runtime client: SDK→REST/gRPC→Gateway→App Service→Pipeline. Indistinguishable from a merchant. Sandbox/live differ ONLY by data sources + config, not execution paths. Failure injection via Intent.
+- §11 End-to-end payment traced through all 14 stages with simulator parity.
+- §12 Economic integrity: trial balance + twin supply reconciliation, continuous, halt-on-violation (kernel Constitution made production-enforceable).
+- §14 Strangler-fig migration in 6 phases (A runtime core → B projections own tables → C engines behind pipeline → D read models + gateway → E two graphs + inspector + sim-as-client → F integrity hardening).
+- §15 Roadmap revised to 13 milestones (M-RT-1..13) reorganized around the pipeline + dedicated engines.
+- §16 Quality gates, §17 what doesn't change, §18 scorecard (adds "Programmable-network capability: full").
+
+Stage Summary:
+- Deliverable: /home/z/my-project/PROTOCOL-RUNTIME-ARCHITECTURE.md (v2, supersedes v1 in place).
+- Core reframe: Runtime is the product; one 14-stage pipeline for every operation; Application Services kept as orchestration; Event Store is audit/replay not read path; 8 dedicated engines (Settlement/Treasury Allocator/Reserve/Liquidity Market/Decision/Policy/Scheduling/Risk-Fraud); two graphs; Domain vs Runtime events; API Gateway; simulator = client.
+- Kernel changes: 0. Implementation code changes: 0 (Phase 1 = design only).
+- Lint: clean. Dev server: healthy.
+- Next: Phase 2 implementation begins with M-RT-1 (Runtime Core + 14-stage pipeline scaffold + Event Store + Domain/Runtime event split + immediate projection runner + App Service back-compat shim).
