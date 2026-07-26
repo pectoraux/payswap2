@@ -32,6 +32,8 @@ import { DigitalTwinEngine } from './engines/digital-twin';
 import { ExecutionPipeline } from './engines/execution-pipeline';
 import { SimulatorEngine } from './engines/simulator';
 import { InspectorService } from './engines/inspector';
+import { APIGateway } from './engines/api-gateway';
+import { SchedulingEngine } from './engines/scheduling';
 import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
 import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
 import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine as OldOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
@@ -109,6 +111,8 @@ export { DEFAULT_TWIN_CONFIG } from './engines/digital-twin';
 export * from './engines/execution-pipeline';
 export * from './engines/simulator';
 export * from './engines/inspector';
+export * from './engines/api-gateway';
+export * from './engines/scheduling';
 export * from './engines/liquidity-market';
 export * from './engines/liquidity-intelligence';
 // v1 opportunity-discovery (legacy NoOp — replaced by v2):
@@ -201,6 +205,10 @@ export interface Runtime {
   simulator: SimulatorEngine;
   // M-RT-14: Inspector (read-only visualization, explanation, provenance):
   inspector: InspectorService;
+  // M-RT-15: API Gateway (single ingress; auth, validation, idempotency, rate limiting, tracing):
+  apiGateway: APIGateway;
+  // M-RT-15: Scheduling Engine (clock-driven, deterministic, retry, dead-letter):
+  schedulingEngine: SchedulingEngine;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -322,6 +330,10 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     opportunityDiscovery: opportunityDiscoveryV2,
     recLifecycle,
   });
+  // M-RT-15: API Gateway (single ingress; auth, validation, idempotency, rate limiting, tracing).
+  const apiGateway = new APIGateway(clock);
+  // M-RT-15: Scheduling Engine (clock-driven, deterministic, retry, dead-letter).
+  const schedulingEngine = new SchedulingEngine(clock);
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
   const reserveDiscovery = new NoOpReserveDiscoveryEngine();
@@ -375,6 +387,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     executionPipeline,
     simulator,
     inspector,
+    apiGateway,
+    schedulingEngine,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

@@ -3213,3 +3213,31 @@ Stage Summary:
 - Maturity matrix: 13 primitives feature-complete.
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc (runtime): clean.
 - NEXT: M-RT-14 Full Inspector + Three Graphs (Resource Graph + Economic Graph + Capability/Route Graphs projections; full Inspector UI with recommendation inspection).
+
+---
+Task ID: FIX-VERCEL-LOGIN + M-RT-14 (Full Inspector) + M-RT-15 (API Gateway + Scheduling Engine)
+Agent: main (Z.ai Code)
+Task: Fix Vercel login (switch from SQLite to PostgreSQL/Neon), implement M-RT-14 Inspector (read-only visualization + provenance), implement M-RT-15 API Gateway + Scheduling Engine.
+
+Work Log:
+VERCEL LOGIN FIX:
+- Root cause: Prisma schema was set to `sqlite` provider, but Vercel's serverless environment doesn't support local SQLite files. The DATABASE_URL env var on Vercel pointed to a Postgres database, but the schema provider was still `sqlite`.
+- Fix: Changed `prisma/schema.prisma` datasource provider from `sqlite` to `postgresql`.
+- Updated Vercel env vars: DATABASE_URL (pooled Neon connection, removed `channel_binding=require` which breaks Prisma), DIRECT_DATABASE_URL (direct Neon connection for migrations), NEXTAUTH_URL (https://aigros.vercel.app).
+- Added `postinstall: "prisma generate"` to package.json to ensure Vercel builds generate a fresh Prisma client from the current schema (the old cached client didn't recognize the `roles` field on the User model).
+- Pushed schema to Neon: `prisma db push --accept-data-loss` (23.3s, all tables created).
+- Verified: admin account (ekontetevi@gmail.com / SUPER_ADMIN / ACTIVE) exists in Neon. Login returns 200 with session: {user: {name, email, id, roles: ["SUPER_ADMIN"]}}.
+- Local .env updated to use Neon pooled connection for development.
+
+M-RT-14 (INSPECTOR) — already implemented + deployed:
+- InspectorService: read-only visualization, explanation, provenance.
+- 5 API endpoints: /inspector/network, /inspector/graphs/resource, /inspector/graphs/economic, /inspector/graphs/capability-route, /inspector/recommendations/[id]/provenance.
+- All read-only (GET only). Consumes existing projections. No mutations.
+
+M-RT-15 (API GATEWAY + SCHEDULING ENGINE):
+- Will be implemented next.
+
+Stage Summary:
+- Vercel login FIXED: switched from SQLite to PostgreSQL (Neon). Login returns 200 with valid session. Deployed to https://aigros.vercel.app.
+- M-RT-14 (Inspector) deployed. 14 primitives feature-complete.
+- M-RT-15 (API Gateway + Scheduling Engine) is next.
