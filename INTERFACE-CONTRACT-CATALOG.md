@@ -890,7 +890,7 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | Protocol Inspector | ✅ | ⏳ | ⏳ | ⬜ | n/a | ⬜ | ⬜ | ⬜ |
 | **Capability Graph** | ✅ | ✅ | ✅ | ✅ | n/a | ✅ | ✅ | ⏳ |
 | **Reserve Ledger** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Reserve Market (M-RT-4) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **Reserve Market** | ✅ | ✅ | n/a | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Liquidity Marketplace (M-RT-5) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 | Route Graph (M-RT-6) | ✅ | ⬜ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ |
 | Financial Compiler (M-RT-7/8) | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -909,10 +909,12 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | Digital Twin | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Economic Health Dashboard | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 
-**Current state (post M-RT-3):** Two primitives are feature-complete (all
-applicable columns ✅, only Prod ⏳ remains): **Capability Graph** and **Reserve
-Ledger**. The Reserve Ledger establishes the event-derived-projection pattern
-with enforced invariants + replay verification — the same pattern every later
-graph and ledger will reuse.
+**Current state (post M-RT-4):** Three primitives are feature-complete (all
+applicable columns ✅, only Prod ⏳ remains): **Capability Graph**, **Reserve
+Ledger**, and **Reserve Market**. The four-stage pattern is now established:
+(1) source of truth → (2) projection → (3) pure analysis → (4) consumers.
+The Reserve Market is a pure read model (no persistent state; deterministic;
+economic invariants enforced) — the same discipline every later analysis engine
+will reuse.
 
-*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 + M-RT-3 done, M-RT-4 next.*
+*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 + M-RT-3 + M-RT-4 done, M-RT-5 next.*

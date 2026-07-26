@@ -23,6 +23,7 @@ import { ProjectionRunner } from './read-models';
 // Amendment 1 engines:
 import { InMemoryReserveMarket, type ReserveMarket } from './engines/reserve-market';
 import { ReserveLedgerService } from './engines/reserve-ledger';
+import { ReserveMarketEngine } from './engines/reserve-market-v2';
 import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
 import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
 import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine } from './engines/opportunity-discovery';
@@ -68,6 +69,7 @@ export * from './read-models';
 // Amendment 1 public surface:
 export * from './engines/reserve-market';
 export * from './engines/reserve-ledger';
+export * from './engines/reserve-market-v2';
 export * from './engines/liquidity-market';
 export * from './engines/liquidity-intelligence';
 export * from './engines/opportunity-discovery';
@@ -109,7 +111,7 @@ export interface Runtime {
   policyEngine: PolicyEngine;
   projectionRunner: ProjectionRunner;
   // Amendment 1 engines (interface-only in M-RT-1; wired in later milestones):
-  reserveMarket: ReserveMarket;
+  reserveMarketState: ReserveMarket;  // A1 shadow-price publisher (legacy interface)
   liquidityStrategyMarketplace: LiquidityStrategyMarketplace;
   liquidityIntelligence: LiquidityIntelligenceEngine;
   opportunityDiscovery: OpportunityDiscoveryEngine;
@@ -137,6 +139,8 @@ export interface Runtime {
   capabilityProjection: CapabilityGraphProjection;
   // M-RT-3: Reserve Ledger (event-derived projection; the only writer):
   reserveLedger: ReserveLedgerService;
+  // M-RT-4: Reserve Market (pure read model — no persistent state; derived from ledger):
+  reserveMarket: ReserveMarketEngine;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -169,7 +173,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   projectionRunner.start(eventStore);
 
   // Amendment 1 engines — interface-only implementations for M-RT-1.
-  const reserveMarket = new InMemoryReserveMarket();
+  const reserveMarketState = new InMemoryReserveMarket();
   const liquidityStrategyMarketplace = new InMemoryLiquidityStrategyMarketplace();
   const liquidityIntelligence = new NoOpLiquidityIntelligenceEngine();
   const opportunityDiscovery = new NoOpOpportunityDiscoveryEngine();
@@ -193,6 +197,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const routeGraph = new InMemoryRouteGraph();
   // M-RT-3: Reserve Ledger (event-derived projection; the only writer).
   const reserveLedger = new ReserveLedgerService(eventStore, clock);
+  // M-RT-4: Reserve Market (pure read model — no persistent state; derived from ledger).
+  const reserveMarket = new ReserveMarketEngine(reserveLedger, clock);
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
   const reserveDiscovery = new NoOpReserveDiscoveryEngine();
@@ -212,7 +218,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     pipeline,
     policyEngine,
     projectionRunner,
-    reserveMarket,
+    reserveMarketState,
     liquidityStrategyMarketplace,
     liquidityIntelligence,
     opportunityDiscovery,
@@ -235,6 +241,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     capabilityCompiler,
     capabilityProjection,
     reserveLedger,
+    reserveMarket,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

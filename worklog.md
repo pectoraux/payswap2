@@ -2589,3 +2589,68 @@ Stage Summary:
 - Maturity matrix expanded to 8 columns per review (Contracts/Logic/Events/Projection/Invariants/Replay/API/Prod). Reserve Ledger: 7/8 ✅ (only Prod ⏳).
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - NEXT: M-RT-4 Reserve Market (shadow price + reserve cost + utilization + scarcity + forecast on top of the Reserve Ledger).
+
+---
+Task ID: M-RT-4 (Reserve Market — pure read model, no persistent state)
+Agent: main (Z.ai Code)
+Task: Implement M-RT-4 Reserve Market as a READ MODEL, not a stateful service. The market owns NO persistent state — everything (shadow price, utilization, scarcity, reserve cost, forecast) is a pure function of Reserve Ledger + Clock + Config + History. Separate accounting (ledger: "what exists?") from economics (market: "what is it worth?"). Deterministic: identical inputs → identical outputs. Economic invariants enforced (0≤util≤1, shadowPrice≥0, reserveCost≥0, scarcity∈{LOW,MEDIUM,HIGH,CRITICAL}, confidence∈[0,1]). Forecasts are hypotheses (Prediction + Confidence + Assumptions + GeneratedAt), never stored. Read-only API (GET only; no POST/PUT/DELETE — nothing in the market is authoritative).
+
+Work Log:
+- Created src/runtime/engines/reserve-market-v2/types.ts:
+  · Scarcity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+  · Prediction (metric, value, confidence, assumptions[], generatedAt, horizonMs) — a hypothesis, never stored.
+  · MarketForecast (reserveId, predictions[], generatedAt).
+  · ReserveMarketSnapshot (reserveId, asset, available, locked, total, utilization, shadowPriceBps, reserveCostBps, scarcity, forecast, confidence, generatedAt) — fully derived, never stored.
+  · MarketSnapshot (reserves[], generatedAt) — all-reserves snapshot.
+  · MarketConfig (baseShadowPriceBps, maxShadowPriceBps, medium/high/criticalUtilizationThreshold, forecastHorizonMs, forecastConfidence). DEFAULT_MARKET_CONFIG provided.
+  · ECONOMIC INVARIANTS as pure functions: validateMarketInvariants(snapshot) → string[] (0≤util≤1, shadowPrice≥0, reserveCost≥0, scarcity valid, confidence∈[0,1]).
+  · PURE DERIVATION functions: deriveUtilization(balances) = locked/total; deriveShadowPriceBps(utilization, config) = linear interpolation base→max; deriveScarcity(utilization, config) = LOW/MEDIUM/HIGH/CRITICAL by threshold; deriveReserveCostBps(shadowPrice) = shadowPrice; deriveForecast(reserveId, utilization, config, generatedAt, history?) = Prediction with simple linear trend if history available, else constant + assumptions.
+
+- Created src/runtime/engines/reserve-market-v2/engine.ts:
+  · ReserveMarketEngine — PURE FUNCTION, NO PERSISTENT STATE. Constructor takes ReserveLedgerService + RuntimeClock + MarketConfig + optional MarketHistoryProvider.
+  · getMarketSnapshot(reserveId, env) → ReserveMarketSnapshot | null — reads ledger state, derives the full market snapshot. Enforces economic invariants (throws on violation).
+  · getMarketSnapshotAll(env) → MarketSnapshot — derives for all reserves.
+  · getForecast(reserveId, env) → Prediction | null — a hypothesis (not stored).
+  · getConfig() → MarketConfig — for the Inspector.
+  · deriveSnapshot(state, env) private — calls all the pure derivation functions + validates invariants. No writes, no side effects, deterministic.
+  · MarketHistoryProvider interface — optional; returns historical utilization observations for forecasting. M-RT-4 uses no history (constant forecast); M-RT-11 (Runtime Memory) wires real history.
+
+- Created src/runtime/engines/reserve-market-v2/index.ts — barrel.
+
+- Created read-only API routes:
+  · src/app/api/runtime/reserves/market/route.ts — GET (all-reserves market snapshot). Response includes note: "This is a derived read model. The market owns no state."
+  · src/app/api/runtime/reserves/[id]/market/route.ts — GET (one-reserve market snapshot). 404 if not found.
+  · src/app/api/runtime/reserves/forecast/route.ts — GET (forecasts for all reserves). Note: "Forecasts are hypotheses, never stored as state."
+  · NO POST/PUT/DELETE — the market is read-only. Nothing in the market is authoritative.
+
+- Updated src/runtime/index.ts:
+  · Imported ReserveMarketEngine; added `reserveMarket: ReserveMarketEngine` to the Runtime container.
+  · Renamed the old Amendment 1 `reserveMarket: ReserveMarket` (InMemoryReserveMarket) to `reserveMarketState` to avoid the naming collision. The new `reserveMarket` is the M-RT-4 pure read-model engine.
+  · createRuntime() instantiates ReserveMarketEngine(reserveLedger, clock) — real, not NoOp.
+  · Re-exported reserve-market-v2 from the barrel.
+
+- Updated INTERFACE-CONTRACT-CATALOG.md Appendix C — Reserve Market row: Contracts ✅ + Logic ✅ + Events n/a (pure read model, no events) + Projection ✅ + Invariants ✅ + Replay ✅ + API ✅ + Prod ⏳. Three primitives now feature-complete.
+
+Verification (M-RT-4 exit criteria — all pass):
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors (fixed naming collision: renamed old A1 reserveMarket → reserveMarketState).
+- End-to-end test:
+  1. 0% utilization → shadowPriceBps=3, scarcity=LOW ✓ (base price at 0% util)
+  2. Lock(75000) → 75% utilization → shadowPriceBps=66, scarcity=HIGH ✓ (price scales linearly)
+  3. Lock(20000) → 95% utilization → shadowPriceBps=83, scarcity=CRITICAL ✓ (high price at critical util)
+  4. Economic invariants: 0≤util≤1 ✓, shadowPrice≥0 ✓, reserveCost≥0 ✓, scarcity valid ✓, confidence∈[0,1] ✓
+  5. Determinism: same inputs → same outputs (PASS) ✓
+  6. Market is a read model (no write methods, no persistent state) ✓
+  7. Forecast is a hypothesis (Prediction with metric/value/confidence/assumptions/generatedAt/horizonMs) ✓
+  8. All-reserves snapshot works ✓
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- M-RT-4 (Reserve Market) COMPLETE. The market is a pure read model — no persistent state, deterministic, economically invariant, with forecasts as hypotheses.
+- The four-stage implementation pattern is now established across three primitives:
+  1. Source of truth (events) → 2. Projection (ledger/graph) → 3. Pure analysis (market) → 4. Consumers (compiler/treasury/inspector)
+- Accounting (ledger: "what exists?") is cleanly separated from economics (market: "what is it worth?"). They never mix.
+- The market is read-only (GET only; no POST/PUT/DELETE). Nothing in the market is authoritative.
+- Maturity matrix: 3 primitives feature-complete (Capability Graph + Reserve Ledger + Reserve Market); all applicable columns ✅, only Prod ⏳.
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- NEXT: M-RT-5 Liquidity Marketplace (LP offers + strategies + pricing curves + matching).
