@@ -50,6 +50,19 @@ export const RUNTIME_VOCABULARY: readonly VocabTerm[] = [
   { term: 'Economic Health', meaning: 'A first-class Runtime surface (the operating console of the financial network). Shows network efficiency, unused liquidity, idle reserves, utilization, concentration, capital velocity, route efficiency, missed revenue, lost volume, optimization backlog, recommendation impact. Not analytics — the operating console.' },
   { term: 'Multi-hop Liquidity Composition', meaning: 'A payment route may compose across multiple LPs and reserve pools (Buyer→LP A→LP B→LP C→Merchant). The architecture supports it; implementation deferred to M-RT-14.' },
   { term: 'Missing Bridge', meaning: 'An Opportunity Discovery kind: a liquidity link between two nodes (e.g. Twin GHS→Twin XOF) whose absence forces extra settlement hops. Building it eliminates hops and unlocks composite routes.' },
+  // Final Amendment terms:
+  { term: 'Economic Discovery', meaning: 'The third Runtime responsibility: continuously discovering missing liquidity, missing reserves, missing corridors, missing FX bridges, missing LP capabilities, idle capital, capital bottlenecks, and profitable expansion opportunities — and transforming them into executable recommendations.' },
+  { term: 'Network Evolution', meaning: 'The liquidity network is modeled as an evolving ecosystem, not a static graph. LPs join/leave, reserves grow/shrink, corridors appear/disappear, demand shifts. The Runtime models and drives this evolution.' },
+  { term: 'Capability Graph', meaning: "What each LP CAN do (e.g. LP A supports GHS→Twin GHS). Every capability is an explicit, discoverable object. The source of truth for 'what's possible.' Split from the Liquidity Graph in the Final Amendment." },
+  { term: 'Route Graph', meaning: "What routes currently exist. Generated FROM the Capability Graph, never manually maintained. The source of truth for 'what's routable right now.' Split from the Liquidity Graph in the Final Amendment." },
+  { term: 'Capability Discovery', meaning: 'The Runtime continuously asks "what capability is missing?" — detects latent capabilities an LP could expose and generates recommendations.' },
+  { term: 'Corridor Discovery', meaning: 'The Runtime discovers corridors that do not yet exist (demand with no direct route), proposes composite paths, and recommends opening with quantified estimates.' },
+  { term: 'Reserve Discovery', meaning: 'The Runtime discovers new reserve pools that should exist (open Twin XOF reserve, $200k, +$18k/mo, +$2.1M throughput, 92% confidence).' },
+  { term: 'LP Growth Engine', meaning: 'A first-class Runtime engine whose job is growing LP businesses — next corridor, next reserve, pricing strategy, missing capability, connector integration, utilization target, available yield.' },
+  { term: 'Treasury Growth Engine', meaning: 'A first-class Runtime engine giving treasury growth recommendations — capital deployment, reserve expand/shrink, corridor bootstrap, temporary LP role, LP incentivization.' },
+  { term: 'Economic Score', meaning: 'A per-corridor score (demand/supply/competition/capital-efficiency/reserve-health/risk/latency/profitability/growth) that powers BOTH routing AND recommendations.' },
+  { term: 'Counterfactual', meaning: 'A what-if simulation comparing the Current Network vs an Alternative Network across revenue/volume/latency/capital/reserve-utilization. Powers the Digital Twin counterfactual evolution and the Recommendation "Simulated" lifecycle stage.' },
+  { term: 'Recommendation Lifecycle', meaning: 'The 9-stage lifecycle of a Recommendation: Detected → Scored → Simulated → Recommended → Accepted → Implemented → Observed → Measured → Learning stored. The Runtime learns which recommendation types create real value.' },
 ] as const;
 
 export const VOCABULARY_TERMS = RUNTIME_VOCABULARY.map((t) => t.term);

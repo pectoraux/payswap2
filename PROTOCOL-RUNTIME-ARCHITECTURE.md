@@ -1,28 +1,29 @@
-# PaySwap Runtime — Architecture (v1.2 Runtime Constitution, Amendment 2)
+# PaySwap Runtime — Architecture (v1.3 Runtime Constitution, Final Amendment)
 
-> **Architecture Frozen — v1.2 Runtime Constitution (Amendment 2).**
-> Amendment 2 completes the transition from a payment runtime to an
-> **economic operating system**. It renames the Economic Runtime to the
-> **Economic Intelligence Runtime**, makes Liquidity Intelligence analyze the
-> **network** (not payments) every few minutes, enriches Recommendations into
-> protocol objects, introduces the **Economic Health Dashboard** as a
-> first-class surface, and designs (but does not implement) **Multi-hop
-> Liquidity Composition**. The architecture is frozen again after this
-> amendment. Every future milestone either **implements**, **validates**, or
-> **improves performance**. Future ideas must be expressed as plugins or
-> engines within this architecture, not as changes to the Runtime
-> Constitution itself.
+> **Runtime Constitution PERMANENTLY FROZEN — v1.3 (Final Amendment).**
+> This is the **final** architecture amendment. After this, the Runtime
+> Constitution is frozen **permanently**. No further architectural redesigns.
+> All future work must fit within this architecture — implemented as engines,
+> plugins, policies, or strategies **within** the Constitution, never by
+> changing the Constitution itself.
+>
+> The Final Amendment introduces the last missing primitive: **Economic
+> Discovery and Network Evolution.** The Runtime now has **three continuous
+> responsibilities** — (1) execute today's payment, (2) optimize today's
+> execution, (3) improve tomorrow's network — and models the liquidity
+> network as an **evolving ecosystem**, not a static graph. The crucial
+> conceptual shift: **separate "what an LP is capable of" (Capability Graph)
+> from "what routes currently exist" (Route Graph).**
 >
 > **Status:** Implementation-ready. Phase 2 resumes from M-RT-1 with the
-> Amendment 2 interfaces incorporated into the skeleton.
-> **Supersedes:** v1 (Stripe-mirror) and v2 (programmable-network reframe).
-> Amendment 1 added Liquidity Intelligence, Reserve-Aware Economic Routing,
-> Opportunity Discovery, the Liquidity Graph, the Liquidity Strategy
-> Marketplace, and the Economic Digital Twin.
-> **Philosophy (one sentence, amended A2):** *The Runtime continuously
-> executes financial intents, optimizes the financial network, discovers new
-> economic opportunities, and helps every participant become more
-> profitable.*
+> Final Amendment interfaces incorporated into the skeleton.
+> **Supersedes:** v1 (Stripe-mirror), v2 (programmable-network reframe),
+> Amendment 1 (Liquidity Intelligence + Reserve-Aware Routing), Amendment 2
+> (Economic Operating System + Economic Health + Multi-hop design).
+> **Philosophy (one sentence, Final Amendment):** *The Runtime executes
+> financial intents, optimizes execution, and continuously evolves the
+> financial network — discovering new economic opportunities and growing
+> every participant.*
 > **Kernel constraint:** The frozen kernel (`src/kernel/*`) is never
 > modified. Everything below is built **above** the kernel primitives.
 
@@ -86,6 +87,18 @@ responsibilities: (1) execute today's payment optimally, and (2) improve
 tomorrow's liquidity network. It discovers new economic opportunities and
 helps every participant (LPs, treasury, merchants) become more profitable.
 
+### Principle 13 — Economic Discovery & Network Evolution *(Final Amendment)*
+The Runtime has **three** continuous responsibilities — execute, optimize,
+and **evolve** the network. The liquidity network is an evolving ecosystem,
+not a static graph: LPs join/leave, reserves grow/shrink, corridors appear/
+disappear, demand shifts. The Runtime continuously discovers missing
+liquidity, missing reserves, missing corridors, missing FX bridges, and
+missing LP capabilities — and transforms those discoveries into executable,
+measured recommendations. Crucially, **what an LP is capable of** (Capability
+Graph) is separated from **what routes currently exist** (Route Graph), so
+the Runtime can discover routes that *could* exist, not just route through
+routes that *do* exist.
+
 ---
 
 ## Runtime Vocabulary (Frozen)
@@ -130,6 +143,67 @@ and AI agent uses exactly this vocabulary. Terminology never drifts.
 | **Economic Health** *(Amendment 2)* | A first-class Runtime surface (the operating console of the financial network). Shows network efficiency, unused liquidity, idle reserves, utilization, concentration, capital velocity, route efficiency, missed revenue, lost volume, optimization backlog, recommendation impact. Not analytics — the operating console. |
 | **Multi-hop Liquidity Composition** *(Amendment 2, design only)* | A payment route may compose across multiple LPs and reserve pools (Buyer→LP A→LP B→LP C→Merchant). The architecture supports it; implementation deferred. The Liquidity Intelligence Engine discovers missing bridges that would enable more composite routes. |
 | **Missing Bridge** *(Amendment 2)* | An Opportunity Discovery kind: a liquidity link between two nodes (e.g. Twin GHS→Twin XOF) whose absence forces extra settlement hops. Building it eliminates hops and unlocks composite routes. |
+| **Economic Discovery** *(Final Amendment)* | The third Runtime responsibility: continuously discovering missing liquidity, missing reserves, missing corridors, missing FX bridges, missing LP capabilities, idle capital, capital bottlenecks, and profitable expansion opportunities — and transforming them into executable recommendations. |
+| **Network Evolution** *(Final Amendment)* | The liquidity network is modeled as an evolving ecosystem, not a static graph. LPs join/leave, reserves grow/shrink, corridors appear/disappear, demand shifts. The Runtime models and drives this evolution. |
+| **Capability Graph** *(Final Amendment)* | What each LP CAN do (e.g. LP A supports GHS→Twin GHS; LP A supports Twin GHS→XOF). Every capability is an explicit, discoverable object. The source of truth for "what's possible." |
+| **Route Graph** *(Final Amendment)* | What routes currently exist. Generated FROM the Capability Graph (never manually maintained). The source of truth for "what's routable right now." |
+| **Capability Discovery** *(Final Amendment)* | The Runtime continuously asks "what capability is missing?" — e.g. an LP supports Twin GHS→XOF but not Twin GHS→Twin XOF. Generates recommendations to expose latent capabilities. |
+| **Corridor Discovery** *(Final Amendment)* | The Runtime discovers corridors that do not yet exist (e.g. GHS→KES demand with no direct route), proposes composite paths, and recommends opening the corridor with estimated volume/revenue/capital/utilization/confidence. |
+| **Reserve Discovery** *(Final Amendment)* | The Runtime discovers new reserve pools that should exist (e.g. "Open Twin XOF reserve, $200k capital, +$18k/mo, +$2.1M throughput, 92% confidence"). |
+| **LP Growth Engine** *(Final Amendment)* | A first-class Runtime engine whose job is growing LP businesses — what corridor to open next, what reserve to fund, which pricing strategy increases profit, which capability is missing, which connectors to integrate. |
+| **Treasury Growth Engine** *(Final Amendment)* | A first-class Runtime engine giving treasury growth recommendations — where to deploy capital, which reserve to expand/shrink, which corridor to bootstrap, whether to temporarily become an LP, whether to incentivize LP participation. |
+| **Economic Score** *(Final Amendment)* | A per-corridor score (demand/supply/competition/capital-efficiency/reserve-health/risk/latency/profitability/growth) that powers BOTH routing AND recommendations. |
+| **Counterfactual** *(Final Amendment)* | A what-if simulation comparing the Current Network vs an Alternative Network (e.g. "what if LP A had funded XOF?") across revenue/volume/latency/capital/reserve-utilization. Powers the Digital Twin's counterfactual evolution. |
+| **Recommendation Lifecycle** *(Final Amendment)* | The 9-stage lifecycle of a Recommendation: Detected → Scored → Simulated → Recommended → Accepted → Implemented → Observed → Measured → Learning stored. The Runtime learns which recommendation types create real value. |
+
+---
+
+## Final Amendment — Economic Discovery & Network Evolution
+
+This is the **final** architecture amendment. After it, the Runtime
+Constitution is frozen **permanently**. The amendment introduces the last
+missing primitive and closes the last conceptual gap.
+
+**The Core Realization:** The Runtime is not merely responsible for executing
+financial intents. It is responsible for **continuously improving the
+financial network itself.** Execution and optimization are only two of its
+responsibilities. There is a third: **Economic Discovery.**
+
+**The Runtime now has three continuous responsibilities:**
+1. **Execute today's payment.**
+2. **Optimize today's execution.**
+3. **Improve tomorrow's network.**
+
+These responsibilities are equally important. The Runtime is the economic
+intelligence layer of the network.
+
+**The crucial conceptual shift:** separate **what an LP is capable of**
+(Capability Graph) from **what routes currently exist** (Route Graph). That
+distinction unlocks automatic discovery of new corridors, LP expansion
+recommendations, reserve recommendations, multi-hop synthesis, and a
+self-improving liquidity marketplace.
+
+| # | Addition | Effect |
+|---|---|---|
+| 1 | **Three responsibilities** | Execute + Optimize + **Evolve**. Philosophy amended to make evolution equal to execution. |
+| 2 | **Network Evolution** | The liquidity network is modeled as an evolving ecosystem (LPs join/leave, reserves grow/shrink, corridors appear/disappear, demand shifts). |
+| 3 | **Capability Graph** (split from Liquidity Graph) | What each LP CAN do — explicit, discoverable capability objects. The source of truth for "what's possible." |
+| 4 | **Route Graph** (split from Liquidity Graph) | What routes currently exist. Generated FROM the Capability Graph, never manually maintained. |
+| 5 | **Capability Discovery** | Detects latent capabilities ("LP supports Twin GHS→XOF but not Twin GHS→Twin XOF") and recommends exposing them. |
+| 6 | **Corridor Discovery** | Discovers corridors that don't yet exist (GHS→KES demand, no direct route), proposes composite paths, recommends opening with quantified estimates. |
+| 7 | **Reserve Discovery** | Discovers new reserve pools that should exist (open Twin XOF reserve, $200k, +$18k/mo, +$2.1M throughput, 92% confidence). |
+| 8 | **LP Growth Engine** | First-class engine growing LP businesses — next corridor, next reserve, pricing strategy, missing capability, connector integration, utilization target, available yield. |
+| 9 | **Treasury Growth Engine** | First-class engine giving treasury growth recommendations — capital deployment, reserve expand/shrink, corridor bootstrap, temporary LP role, LP incentivization. |
+| 10 | **Liquidity Marketplace Analytics** | The Runtime understands the marketplace: most profitable/underutilized LP, fastest growing/highest spread/least competitive corridor, biggest liquidity gap, highest missed revenue/routing cost/unrealized volume. |
+| 11 | **Economic Score** | Per-corridor score (demand/supply/competition/capital-efficiency/reserve-health/risk/latency/profitability/growth) powering BOTH routing AND recommendations. |
+| 12 | **Reserve-Aware Multi-Hop** (extended) | Routing optimizes overall network value, not just fees/latency. Route B ($0.04 more expensive but preserves critical liquidity) beats Route A. Tradeoff exposed. |
+| 13 | **Recommendation Lifecycle** (9 stages) | Detected → Scored → Simulated → Recommended → Accepted → Implemented → Observed → Measured → Learning stored. |
+| 14 | **Runtime Memory extension** | Memory learns which recommendations succeed. Accepted+implemented recs that generated +38% volume increase future confidence; rejected/no-improvement recs decrease it. |
+| 15 | **Digital Twin extension** | Counterfactual evolution: "what if this recommendation had been accepted?" / "what if LP A had funded XOF?" Compare Current Network vs Alternative Network across revenue/volume/latency/capital/reserve-utilization. |
+| 16 | **Inspector extension** | Every recommendation is inspectable: why generated, what evidence/data/simulation, what tradeoffs, expected revenue, confidence, counterfactual, learning history. |
+| 17 | **Counterfactual Engine** | Powers the Digital Twin's counterfactual evolution and the Recommendation "Simulated" lifecycle stage. |
+| 18 | **Roadmap reorder** | Economic-network milestones (Capability Graph → Reserve Market → Route Graph → Reserve-aware Routing → Opportunity Discovery → LP Growth → Treasury Growth → Economic Health → Economic Twin) inserted BEFORE the payment vertical slice, because payments should execute on top of a fully modeled economic network. |
+| 19 | **Permanent freeze** | After this amendment, the Constitution is frozen permanently. All future work fits within this architecture as engines/plugins/policies/strategies. |
 
 ---
 
@@ -205,32 +279,35 @@ The architecture is frozen again after this amendment.
 
 ---
 
-## Implementation Order (revised — Amendment 2)
+## Implementation Order (revised — Final Amendment)
 
-Per Amendment 2, the economic milestones are placed **immediately after
-M-RT-1** (before the payments vertical slice), because they change what the
-Economic Intelligence Runtime optimizes. The payments slice then lands on a
-runtime that already reasons about reserves, liquidity, and opportunities.
+Per the Final Amendment, the economic-network milestones are placed
+**immediately after M-RT-1** (before the payments vertical slice), because
+payments should execute on top of a fully modeled economic network. The
+payments slice then lands on a runtime that already reasons about
+capabilities, routes, reserves, liquidity, opportunities, and growth.
 
 | Milestone | Goal | Exit criteria |
 |---|---|---|
-| **M-RT-1** Runtime Skeleton *(done)* | Runtime container, Intent Engine, Runtime Clock, Pipeline scaffold, Event/Decision/Policy interfaces, + Amendment 1 & 2 interfaces (Liquidity Intelligence, Opportunity Discovery, Reserve Market/Shadow Price, Liquidity Graph, Liquidity Strategy Marketplace, Recommendations, Economic Health, Multi-hop route types). **No business logic.** | Skeleton compiles, imports, dispatches a no-op intent through all 14 stages, appends a no-op event. All Amendment interfaces importable. Existing app untouched. |
-| **M-RT-2** Reserve Market + Liquidity Graph *(Am2)* | Reserve Market State + Shadow Price published continuously; Liquidity Graph populated from reserves/LPs/corridors/connectors. | Every reserve publishes state; the Liquidity Graph is queryable for paths/corridor/concentration. |
-| **M-RT-3** Strategy Marketplace + Pricing Curves *(Am2)* | LPs publish programmable strategies with utilization-tiered pricing curves; the Runtime evaluates them during clearing. | An LP with "only > $1000" is excluded from sub-$1000 clears; the Decision explains why; pricing-curve fee varies by utilization. |
-| **M-RT-4** Reserve-Aware Routing *(Am2)* | Routes scored on 9+ dimensions (fee/latency/reserve-util/shadow-price/LP-util/profitability/resilience/compliance/CX/opportunity-cost). Routing minimizes execution cost × shadow price × risk × capital cost. | A routing Decision exposes every tradeoff; Route B (higher fee, lower reserve cost) can beat Route A; Inspector shows shadow prices + rejected routes. |
-| **M-RT-5** Liquidity Intelligence *(Am2)* | The Engine runs every few minutes analyzing the **network** (not payments): discover/predict/recommend/score/rank/simulate. Outputs Findings, Recommendations, Predictions, Opportunities, Warnings. | "Why is corridor KE-GH expensive?" returns an explainable Finding with evidence. |
-| **M-RT-6** Opportunity Discovery + Advisors *(Am2)* | 12 opportunity kinds (missing bridge, missing LP capability, missing reserve, unused reserve, expensive corridor, LP under/overpricing, unbalanced corridor, missing FX pair, unused/slow connector, unnecessary hop). LP Business Advisor + Reserve Advisor produce protocol-object Recommendations. | "Building Twin GHS→Twin XOF eliminates one hop, +42% volume, +$24k/mo, 91% confidence" is a tracked Recommendation. |
-| **M-RT-7** Economic Health Dashboard *(Am2)* | First-class surface: network efficiency, unused liquidity, idle reserves, utilization, concentration, capital velocity, route efficiency, missed revenue, lost volume, optimization backlog, recommendation impact. | The Economic Health console renders for operators; recommendation impact is measured post-implementation. |
-| **M-RT-8** One Vertical Slice (Payments) | Payment Intent → pipeline → Settlement → Reserve → Liquidity Market → Ledger → Events → Projections → Inspector. End-to-end on the now-economic runtime. | A real payment is inspectable end-to-end incl. reserve-aware routing, LP selection rationale, shadow prices, missed opportunities. Replayable in sandbox. |
-| **M-RT-9** Simulator Integration | Simulator's payment generation replaced with Payment Intents through the runtime. | A twin payment trace is structurally identical to a live payment trace. Architecture proven. |
-| **M-RT-10** Economic Digital Twin *(Am2)* | Twin simulates the whole network: reserve growth, LP growth, yield, profitability, capital utilization, reserve exhaustion, LP exits, treasury injections, new corridors, FX shocks. What-if via clock.branch() + forecast diff. | "What happens if LP A exits?" produces a forecast with shadow-price/reserve/throughput/profitability deltas. |
-| **M-RT-11** Runtime Memory + Liquidity Memory | Fact store with Liquidity Memory kinds; engines consult facts as Evidence; twin produces, live validates. | A corridor-congestion fact changes routing; a reserve-depletion-cycle fact triggers pre-positioning. |
-| **M-RT-12** Three Graphs + Full Inspector | Resource Graph + Economic Graph + Liquidity Graph projections; full Inspector UI with the Amendment 1 & 2 expansion. | Inspector shows all three graphs + full economic reasoning for any operation. |
-| **M-RT-13** API Gateway + Scheduling Engine | Auth/rate-limit/idempotency/versioning/correlationId in one middleware; deferred/recurring jobs dispatch Intents. | No route owns cross-cutting concerns; "settle in 4 hours" fires correctly. |
-| **M-RT-14** Multi-hop Liquidity Composition *(Am2, future)* | Routes may compose across multiple LPs/reserve pools (Buyer→LP A→LP B→LP C→Merchant). Direct vs multi-hop evaluation. | A payment can route through 3 LPs; the Decision explains why direct lost to multi-hop. *(Deferred — design only until this milestone.)* |
-| **M-RT-15** Read Models migration | Pages migrated off direct Prisma onto read-model façades. Lint rule forbids `db.<DomainTable>` outside runtime. | Zero direct Prisma calls in pages. |
-| **M-RT-16** Capability Migration | Migrate one capability at a time: refunds → payouts → invoices → subscriptions → wallets → treasury → LPs. | Each capability runs on the same execution model. No new architecture invented. |
-| **M-RT-17** Economic Integrity Hardening | Continuous reconciliation (trial balance + twin supply) at every commit; halt-on-violation; alert. | Injected imbalance halts the environment + alerts. |
+| **M-RT-1** Runtime Skeleton *(done)* | Runtime container, Intent Engine, Runtime Clock, Pipeline scaffold, Event/Decision/Policy interfaces, + all amendment interfaces (Liquidity Intelligence, Opportunity Discovery, Reserve Market/Shadow Price, Capability Graph, Route Graph, Liquidity Strategy Marketplace, Recommendations, Economic Health, Multi-hop route types, LP/Treasury Growth, Economic Score, Corridor/Capability/Reserve Discovery, Recommendation Lifecycle, Counterfactual). **No business logic.** | Skeleton compiles, imports, dispatches a no-op intent through all 14 stages, appends a no-op event. All interfaces importable. Existing app untouched. |
+| **M-RT-2** Capability Graph *(Final)* | LP capabilities as explicit, discoverable objects (what each LP CAN do). The source of truth for "what's possible." | Every LP's capabilities are queryable; a capability can be added/removed and the graph updates. |
+| **M-RT-3** Reserve Market + Liquidity Market *(Am1/2)* | Reserve Market State + Shadow Price published continuously; Liquidity Strategy Marketplace with pricing curves. | Every reserve publishes state; LPs publish strategies + pricing curves; market evaluates eligibility at clearing. |
+| **M-RT-4** Route Graph *(Final)* | Routes generated FROM the Capability Graph (never manually maintained). The source of truth for "what's routable right now." | Adding/removing a capability automatically adds/removes routes; the Route Graph is queryable. |
+| **M-RT-5** Reserve-Aware Routing *(Am1/2)* | Routes scored on 9+ dimensions (fee/latency/reserve-util/shadow-price/LP-util/profitability/resilience/compliance/CX/opportunity-cost). Routing minimizes execution cost × shadow price × risk × capital cost — optimizing overall network value, not just fees. | Route B ($0.04 more expensive but preserves critical liquidity) beats Route A; the Decision exposes the tradeoff. |
+| **M-RT-6** Opportunity Discovery *(Am2 + Final)* | 12+ opportunity kinds + Capability Discovery + Corridor Discovery + Reserve Discovery. Produces protocol-object Recommendations with the 9-stage lifecycle. | "Building Twin GHS→Twin XOF eliminates one hop, +42% volume, +$24k/mo, 91% confidence" is a tracked Recommendation; "open Twin XOF reserve, $200k, +$18k/mo, 92% confidence" is another. |
+| **M-RT-7** LP Growth Engine *(Final)* | First-class engine growing LP businesses — next corridor, next reserve, pricing strategy, missing capability, connector integration, utilization target, available yield. | An LP receives a growth plan with quantified recommendations + counterfactual projections. |
+| **M-RT-8** Treasury Growth Engine *(Final)* | First-class engine giving treasury growth recommendations — capital deployment, reserve expand/shrink, corridor bootstrap, temporary LP role, LP incentivization. | Treasury receives a growth plan; "become a temporary LP on corridor X" is a tracked, simulated Recommendation. |
+| **M-RT-9** Economic Health + Economic Score *(Am2 + Final)* | Economic Health Dashboard (operating console) + per-corridor Economic Score (demand/supply/competition/capital-efficiency/reserve-health/risk/latency/profitability/growth) powering routing AND recommendations. | The Economic Health console renders; Economic Score drives both routing weights and recommendation ranking. |
+| **M-RT-10** Economic Digital Twin + Counterfactual *(Am2 + Final)* | Twin simulates the whole network with counterfactual evolution: "what if this recommendation had been accepted?" / "what if LP A had funded XOF?" Compare Current vs Alternative Network. | A counterfactual returns revenue/volume/latency/capital/reserve-utilization deltas vs the baseline. |
+| **M-RT-11** Runtime Memory + Learning *(Final)* | Fact store with Liquidity Memory + Recommendation Learning (successful recs increase future confidence; rejected/no-improvement recs decrease it). | The Runtime's recommendation confidence adjusts based on measured historical impact. |
+| **M-RT-12** One Vertical Slice (Payments) | Payment Intent → pipeline → Settlement → Reserve → Liquidity Market → Ledger → Events → Projections → Inspector. End-to-end on the fully-modeled economic runtime. | A real payment is inspectable end-to-end incl. reserve-aware routing, LP selection rationale, shadow prices, missed opportunities, Economic Score. Replayable in sandbox. |
+| **M-RT-13** Simulator Integration | Simulator's payment generation replaced with Payment Intents through the runtime. | A twin payment trace is structurally identical to a live payment trace. Architecture proven. |
+| **M-RT-14** Full Inspector + Three Graphs | Resource Graph + Economic Graph + Capability/Route Graphs projections; full Inspector UI with recommendation inspection (why/evidence/data/simulation/tradeoffs/expected-revenue/confidence/counterfactual/learning-history). | Inspector shows all graphs + full economic reasoning + recommendation provenance for any operation. |
+| **M-RT-15** API Gateway + Scheduling Engine | Auth/rate-limit/idempotency/versioning/correlationId in one middleware; deferred/recurring jobs dispatch Intents. | No route owns cross-cutting concerns; "settle in 4 hours" fires correctly. |
+| **M-RT-16** Multi-hop Liquidity Composition *(future)* | Routes may compose across multiple LPs/reserve pools (Buyer→LP A→LP B→LP C→Merchant). Direct vs multi-hop, scored on overall network value. | A payment can route through 3 LPs; the Decision explains why direct lost to multi-hop. |
+| **M-RT-17** Read Models migration | Pages migrated off direct Prisma onto read-model façades. Lint rule forbids `db.<DomainTable>` outside runtime. | Zero direct Prisma calls in pages. |
+| **M-RT-18** Capability Migration | Migrate one capability at a time: refunds → payouts → invoices → subscriptions → wallets → treasury → LPs. | Each capability runs on the same execution model. No new architecture invented. |
+| **M-RT-19** Economic Integrity Hardening | Continuous reconciliation (trial balance + twin supply) at every commit; halt-on-violation; alert. | Injected imbalance halts the environment + alerts. |
 
 **The measure of success:** after a few milestones, you can point to a
 payment in the UI and inspect the original intent, every policy evaluated,
@@ -259,16 +336,21 @@ execution deterministically in the sandbox.
 
 ---
 
-## 0. The Philosophy (Amendment 2)
+## 0. The Philosophy (Final Amendment)
 
-> **The Runtime continuously executes financial intents, optimizes the
-> financial network, discovers new economic opportunities, and helps every
-> participant become more profitable.**
+> **The Runtime executes financial intents, optimizes execution, and
+> continuously evolves the financial network — discovering new economic
+> opportunities and growing every participant.**
 
-The Runtime has **two simultaneous responsibilities**: (1) execute today's
-payment optimally, and (2) improve tomorrow's liquidity network. Stripe
-never attempts #2. PaySwap does — it is an economic operating system, not a
-payment runtime.
+The Runtime now has **three continuous responsibilities**, equally important:
+1. **Execute today's payment.**
+2. **Optimize today's execution.**
+3. **Improve tomorrow's network.**
+
+The third responsibility — **Economic Discovery & Network Evolution** — is
+what makes PaySwap an economic network that can evolve itself, not merely a
+payment runtime or an economic operating system. Stripe never attempts #3.
+PaySwap does.
 
 The Runtime no longer exists merely to execute financial intents. It exists
 to **continuously improve the liquidity network itself** while executing.
@@ -1020,6 +1102,359 @@ graph queries that will enable it.
 
 ---
 
+## 7G. Capability Graph + Route Graph *(Final Amendment — the crucial split)*
+
+The Final Amendment's key conceptual shift: **separate what an LP is capable
+of from what routes currently exist.** The Liquidity Graph (Amendment 1) is
+split into two distinct graphs.
+
+### Capability Graph — what each LP CAN do
+
+Every LP capability is an explicit, discoverable object. The source of truth
+for "what's possible."
+
+```ts
+interface LPCapability {
+  id: string;
+  lpId: string;
+  from: string;          // currency or twin-currency (e.g. 'GHS', 'TwinGHS')
+  to: string;            // currency or twin-currency (e.g. 'TwinGHS', 'XOF')
+  rail: Rail;            // mobile_money | bank | card | stablecoin | blockchain
+  maxAmount: number;
+  latencyMs: number;
+  active: boolean;
+}
+
+interface CapabilityGraph {
+  // LPs publish capabilities (what they CAN do).
+  publish(capability: LPCapability): void;
+  withdraw(capabilityId: string): void;
+  // Query: all capabilities of an LP, or all LPs that can move X→Y.
+  forLP(lpId: string): LPCapability[];
+  canMove(from: string, to: string): LPCapability[];
+  all(): LPCapability[];
+}
+```
+
+### Route Graph — what routes currently exist
+
+Routes are **generated FROM the Capability Graph**, never manually
+maintained. The source of truth for "what's routable right now." When an LP
+publishes or withdraws a capability, the Route Graph updates automatically.
+
+```ts
+interface Route {
+  id: string;
+  from: string;
+  to: string;
+  hops: { lpId: string; capabilityId: string }[];   // 1 hop = direct; N = composite
+  isDirect: boolean;
+  generatedFrom: string[];   // capability ids
+  active: boolean;
+}
+
+interface RouteGraph {
+  // Regenerate routes from the current Capability Graph.
+  regenerate(): Promise<void>;
+  // Query: direct routes, multi-hop routes, all routes X→Y.
+  direct(from: string, to: string): Route[];
+  multiHop(from: string, to: string, maxHops?: number): Route[];
+  all(from: string, to: string): Route[];
+}
+```
+
+**Why the split matters:** with capabilities explicit, the Runtime can
+discover routes that *could* exist (by composing latent capabilities), not
+just route through routes that *do* exist. This unlocks Capability Discovery
+(§7H), Corridor Discovery (§7I), and multi-hop synthesis.
+
+---
+
+## 7H. Capability Discovery *(Final Amendment)*
+
+The Runtime continuously asks: **what capability is missing?**
+
+```
+LP A supports: Twin GHS → XOF
+LP A does NOT support: Twin GHS → Twin XOF
+Runtime detects: "LP A could expose Twin GHS→Twin XOF with almost no additional capital."
+→ Recommendation generated.
+
+LP B settles: GHS → Twin GHS  AND  Twin GHS → NGN
+Runtime discovers: "Enable GHS→NGN (composite via existing capabilities)."
+→ Recommendation generated.
+```
+
+```ts
+interface CapabilityDiscoveryEngine {
+  discover(): Promise<Recommendation[]>;
+  // For a specific LP: what capabilities could it add?
+  forLP(lpId: string): Promise<Recommendation[]>;
+  // Latent composite routes enabled by a new capability.
+  latentRoutes(capabilityId: string): Promise<Route[]>;
+}
+```
+
+---
+
+## 7I. Corridor Discovery *(Final Amendment)*
+
+Current routing chooses the best corridor. The new responsibility: **discover
+corridors that do not yet exist.**
+
+```
+Demand: GHS → KES exists (merchants asking for it).
+No direct route.
+Runtime discovers composite paths:
+  GHS → Twin GHS → USDC → KES
+  GHS → Twin GHS → Twin KES → KES
+  GHS → USD → KES
+→ Proposes: "Open corridor GHS→KES."
+  Estimated volume: $1.2M/mo · revenue: +$14k/mo ·
+  required capital: $300k · expected utilization: 68% · confidence: 88%.
+```
+
+```ts
+interface CorridorDiscoveryEngine {
+  discover(): Promise<Recommendation[]>;
+  // For a demand signal (from→to with no direct route), propose corridors.
+  proposeCorridor(from: string, to: string): Promise<Recommendation>;
+  // Composite paths that would work if the corridor opened.
+  candidatePaths(from: string, to: string): Promise<Route[]>;
+}
+```
+
+---
+
+## 7J. Reserve Discovery *(Final Amendment)*
+
+Extends the Reserve Advisor (Amendment 2) from reallocating existing
+reserves to **discovering new reserve pools that should exist.**
+
+```
+Open reserve: Twin XOF
+  Required capital: $200k
+  Expected monthly revenue: +$18k
+  Expected throughput: +$2.1M
+  Confidence: 92%
+```
+
+```ts
+interface ReserveDiscoveryEngine {
+  discover(): Promise<Recommendation[]>;
+  // Propose opening a new reserve.
+  proposeReserve(currency: string, region?: string): Promise<Recommendation>;
+  // What corridors/volume would a new reserve unlock?
+  unlockedCorridors(reserveId: string): Promise<{ corridor: string; volume: number }[]>;
+}
+```
+
+---
+
+## 7K. LP Growth Engine *(Final Amendment)*
+
+A first-class Runtime engine whose job is **growing LP businesses** — not
+routing.
+
+**It answers:**
+```
+What corridor should this LP open next?
+What reserve should this LP fund?
+Which pricing strategy would increase profit?
+Which capability is missing?
+Which connectors should this LP integrate?
+What utilization target should this LP pursue?
+How much more yield is available?
+```
+
+```ts
+interface LPGrowthEngine {
+  // A growth plan for an LP: prioritized recommendations + counterfactual projections.
+  growthPlan(lpId: string): Promise<LPGrowthPlan>;
+  // Drill-down: best next corridor for this LP.
+  nextCorridor(lpId: string): Promise<Recommendation>;
+  // Drill-down: pricing-strategy optimization.
+  pricingOptimization(lpId: string): Promise<Recommendation>;
+}
+
+interface LPGrowthPlan {
+  lpId: string;
+  recommendations: Recommendation[];
+  projectedRevenueDelta: number;
+  projectedVolumeDelta: number;
+  projectedYieldDelta: number;
+  counterfactual: Counterfactual;   // §7N
+}
+```
+
+---
+
+## 7L. Treasury Growth Engine *(Final Amendment)*
+
+A first-class Runtime engine giving treasury **growth** recommendations — not
+merely optimization.
+
+**It answers:**
+```
+Where should capital be deployed?
+What reserve should expand?
+What reserve should shrink?
+Which corridor deserves bootstrap liquidity?
+Should Treasury temporarily become an LP?
+Should Treasury incentivize LP participation?
+```
+
+```ts
+interface TreasuryGrowthEngine {
+  growthPlan(): Promise<TreasuryGrowthPlan>;
+  // Should Treasury become a temporary LP on a corridor? (With quantified upside.)
+  temporaryLPProposal(corridorId: string): Promise<Recommendation>;
+  // Should Treasury incentivize LP participation? (E.g. fee rebates to attract LPs.)
+  incentivizationProposal(corridorId: string): Promise<Recommendation>;
+}
+
+interface TreasuryGrowthPlan {
+  recommendations: Recommendation[];
+  projectedThroughputDelta: number;
+  projectedRevenueDelta: number;
+  capitalReallocation: { from: string; to: string; amount: number }[];
+  counterfactual: Counterfactual;
+}
+```
+
+---
+
+## 7M. Economic Score + Marketplace Analytics *(Final Amendment)*
+
+Every corridor receives an **Economic Score** that powers BOTH routing AND
+recommendations.
+
+**Score factors:** demand · supply · competition · capital efficiency ·
+reserve health · risk · latency · profitability · growth.
+
+```ts
+interface EconomicScoreEngine {
+  score(corridorId: string): Promise<EconomicScore>;
+  rank(by: ScoreDimension): Promise<{ corridor: string; score: EconomicScore }[]>;
+}
+
+interface EconomicScore {
+  corridor: string;
+  demand: number;            // 0..1
+  supply: number;            // 0..1
+  competition: number;       // 0..1 (higher = more competitive)
+  capitalEfficiency: number; // 0..1
+  reserveHealth: number;     // 0..1
+  risk: number;              // 0..1 (lower = safer)
+  latency: number;           // ms
+  profitabilityBps: number;
+  growth: number;            // 0..1 (trend)
+  composite: number;         // weighted 0..1 — powers routing + recommendations
+}
+
+type ScoreDimension = 'demand' | 'supply' | 'competition' | 'capitalEfficiency'
+                     | 'reserveHealth' | 'risk' | 'latency' | 'profitability' | 'growth';
+```
+
+**Liquidity Marketplace Analytics** (powered by the Economic Score):
+most profitable LP · most underutilized LP · fastest growing corridor ·
+highest spread corridor · least competitive corridor · highest reserve
+utilization · biggest liquidity gap · highest missed revenue · highest
+routing cost · highest unrealized volume. These are queries over the
+Economic Score, surfaced on the Economic Health Dashboard (§7E).
+
+---
+
+## 7N. Counterfactual Engine *(Final Amendment)*
+
+Powers the Digital Twin's counterfactual evolution (§9.7) and the
+Recommendation "Simulated" lifecycle stage. Compares the **Current Network**
+vs an **Alternative Network** across revenue/volume/latency/capital/
+reserve-utilization.
+
+```ts
+interface CounterfactualEngine {
+  // "What if this recommendation had been accepted?"
+  evaluate(hypothesis: CounterfactualHypothesis): Promise<Counterfactual>;
+}
+
+interface CounterfactualHypothesis {
+  description: string;          // "LP A funds XOF reserve"
+  mutations: NetworkMutation[]; // the changes to apply to the network
+  durationMs: number;           // how long to simulate
+}
+
+interface NetworkMutation {
+  kind: 'add_capability' | 'remove_capability' | 'add_reserve' | 'resize_reserve'
+      | 'add_lp' | 'remove_lp' | 'change_pricing' | 'fx_shock';
+  target: string;
+  params: Record<string, unknown>;
+}
+
+interface Counterfactual {
+  hypothesis: string;
+  baseline: NetworkSnapshot;     // Current Network
+  alternative: NetworkSnapshot;  // Alternative Network
+  deltas: {
+    revenue: number; volume: number; latency: number;
+    capital: number; reserveUtilization: Record<string, number>;
+  };
+  confidence: number;
+  simulatedAt: number;
+}
+
+interface NetworkSnapshot {
+  revenue: number; volume: number; avgLatencyMs: number;
+  capitalDeployed: number; reserveUtilization: Record<string, number>;
+  corridorCount: number; lpCount: number;
+}
+```
+
+---
+
+## 7O. Recommendation Lifecycle *(Final Amendment — 9 stages)*
+
+Recommendations are protocol objects with a **9-stage lifecycle**. The
+Runtime learns which recommendation types create real value.
+
+```
+Detected → Scored → Simulated → Recommended → Accepted →
+Implemented → Observed → Measured → Learning stored
+```
+
+```ts
+type RecommendationLifecycleStage =
+  | 'detected'    // Opportunity Discovery found it
+  | 'scored'      // Economic Score + confidence assigned
+  | 'simulated'   // Counterfactual run (§7N)
+  | 'recommended' // Presented to the audience
+  | 'accepted'    // Actor accepted
+  | 'implemented' // Action taken (capability added, reserve opened, etc.)
+  | 'observed'    // Post-implementation observation window
+  | 'measured'    // ImpactMeasurement recorded
+  | 'learned';    // Learning stored in Runtime Memory (§12)
+
+interface RecommendationLifecycle {
+  transition(id: string, to: RecommendationLifecycleStage, evidence?: EvidenceCitation): void;
+  history(id: string): RecommendationLifecycleEvent[];
+}
+
+interface RecommendationLifecycleEvent {
+  recommendationId: string;
+  stage: RecommendationLifecycleStage;
+  ts: number;
+  evidence: EvidenceCitation[];
+  note?: string;
+}
+```
+
+The "learned" stage feeds Runtime Memory (§12): accepted+implemented recs
+that generated +38% volume increase future confidence for that rec type;
+rejected or no-improvement recs decrease it. The Runtime continuously learns
+which recommendations actually create value.
+
+---
+
 ## 8. Operational Runtime
 
 Owns everything that is not money movement but must react to it.
@@ -1722,18 +2157,22 @@ economic capabilities, then migrates the remaining capabilities.
 | **LP programmability** *(Am1)* | passive | **full** (Liquidity Strategy Marketplace) |
 | **Economic operating system** *(Am2)* | payment runtime | **full** (Economic Intelligence Runtime + Economic Health Dashboard + LP/Reserve Advisors + 12 Opportunity kinds + measured Recommendations) |
 | **Network self-improvement** *(Am2)* | absent | **full** (two feedback loops: execution → network learns → recommendations → better network tomorrow) |
-| **Multi-hop composition** *(Am2)* | absent | **designed** (architecture supports it; implementation deferred to M-RT-14) |
+| **Multi-hop composition** *(Am2)* | absent | **designed** (architecture supports it; implementation deferred to M-RT-16) |
+| **Economic Discovery & Network Evolution** *(Final)* | absent | **full** (three responsibilities; Capability/Route Graph split; Capability/Corridor/Reserve Discovery; LP/Treasury Growth Engines; Economic Score; Counterfactual; 9-stage Recommendation Lifecycle with learning) |
+| **Self-evolving network** *(Final)* | absent | **full** (the Runtime discovers what's missing and grows the network itself; it is an economic network that evolves itself) |
 
-The architecture no longer optimizes for Stripe parity. It optimizes for a
-**coherent, programmable financial runtime that continuously optimizes its
-own network** with clear principles: intent first, four runtimes, a virtual
-clock, an autonomous economic twin, learned memory (including liquidity
-memory), three graphs, reserve-aware routing, a liquidity strategy
-marketplace, and universal explainability. Stripe remains the benchmark for
-developer experience; PaySwap differentiates through programmable settlement,
-liquidity orchestration, transparent execution, simulation, and
-explainability — capabilities Stripe, Paystack, Flutterwave, and today's
-DEXs do not expose in this combination.
+The architecture no longer optimizes for Stripe parity. It is an **economic
+network that can evolve itself** with clear principles: intent first, four
+runtimes, a virtual clock, an autonomous economic twin with counterfactual
+evolution, learned memory (including liquidity memory and recommendation
+learning), three graphs (Resource + Economic + Capability/Route), reserve-
+aware routing optimizing overall network value, a liquidity strategy
+marketplace, universal explainability, and continuous economic discovery.
+Stripe remains the benchmark for developer experience; PaySwap differentiates
+through programmable settlement, liquidity orchestration, transparent
+execution, simulation, explainability, and **network self-evolution** —
+capabilities Stripe, Paystack, Flutterwave, and today's DEXs do not expose
+in this combination.
 
 The remaining gap to 100% is external systems (real Stellar mainnet, real
 bank APIs, real KYC, regulatory licensing) — explicitly out of scope for
@@ -1741,29 +2180,35 @@ application architecture.
 
 ---
 
-## 26. Architecture Frozen (Amendment 2 applied). Resume Implementation.
+## 26. Runtime Constitution PERMANENTLY FROZEN (Final Amendment applied).
 
-Amendment 2 is applied. The architecture is **frozen again** as the v1.2
-Runtime Constitution. The architecture now contains all the major
-long-lived concepts — Intent, Execution, Settlement, Reserves, Liquidity
-Markets, Multi-hop routing (designed), Treasury optimization, Opportunity
-discovery, LP growth intelligence, Economic Digital Twin, Runtime Memory,
-Protocol Inspector, Economic Health. **No further redesigns.** Future ideas
-must be expressed as plugins or engines within this architecture, not as
-changes to the Runtime Constitution itself. The next gains come from
-executing the milestone plan while keeping the runtime coherent.
+The Final Amendment is applied. The Runtime Constitution is **frozen
+permanently** as the v1.3 edition. The architecture now contains **all**
+major long-lived concepts — Intent, Execution, Settlement, Reserves,
+Liquidity Markets, Multi-hop routing (designed), Treasury optimization +
+growth, Opportunity discovery, LP growth intelligence, Economic Digital Twin
+with counterfactual evolution, Runtime Memory with recommendation learning,
+Protocol Inspector, Economic Health, Economic Score, and the Capability/
+Route Graph split that enables network self-evolution.
 
-**M-RT-1 is already built** (with Amendment 1 interfaces). The skeleton now
-needs the Amendment 2 interfaces added (Economic Health Dashboard, Multi-hop
-route types, enriched Recommendation, expanded Opportunity Discovery kinds)
-— all interface-only, no business logic — then implementation resumes at
-**M-RT-2: Reserve Market + Liquidity Graph** (the first economic milestone,
-per the reordered roadmap).
+**No further architectural redesigns — ever.** All future work must fit
+within this architecture, implemented as engines, plugins, policies, or
+strategies **within** the Constitution. The Constitution itself does not
+change. The next gains come from executing the milestone plan while keeping
+the runtime coherent.
 
-*The Runtime continuously executes financial intents, optimizes the
-financial network, discovers new economic opportunities, and helps every
-participant become more profitable.*
+**M-RT-1 is already built** (with Amendment 1 & 2 interfaces). The skeleton
+now needs the Final Amendment interfaces added (Capability Graph, Route
+Graph, LP/Treasury Growth Engines, Economic Score, Corridor/Capability/
+Reserve Discovery, Recommendation Lifecycle, Counterfactual Engine) — all
+interface-only, no business logic — then implementation resumes at
+**M-RT-2: Capability Graph** (the first economic-network milestone, per the
+reordered roadmap).
+
+*The Runtime executes financial intents, optimizes execution, and
+continuously evolves the financial network — discovering new economic
+opportunities and growing every participant.*
 
 ---
 
-*End of v1.2 Runtime Constitution (Amendment 2). Architecture frozen.*
+*End of v1.3 Runtime Constitution (Final Amendment). Architecture PERMANENTLY frozen.*

@@ -85,6 +85,12 @@ export const ARCHITECTURAL_PRINCIPLES: readonly Principle[] = [
     statement:
       'Liquidity is not just execution capacity — it is an evolving market the Runtime continuously improves. The Runtime has two simultaneous responsibilities: (1) execute today\'s payment optimally, and (2) improve tomorrow\'s liquidity network. It discovers new economic opportunities and helps every participant (LPs, treasury, merchants) become more profitable. (Amendment 2)',
   },
+  {
+    number: 13,
+    name: 'Economic Discovery & Network Evolution',
+    statement:
+      'The Runtime has three continuous responsibilities — execute, optimize, and evolve the network. The liquidity network is an evolving ecosystem, not a static graph. The Runtime continuously discovers missing liquidity, missing reserves, missing corridors, missing FX bridges, and missing LP capabilities — and transforms them into executable, measured recommendations. What an LP is capable of (Capability Graph) is separated from what routes currently exist (Route Graph), so the Runtime can discover routes that could exist, not just route through routes that do exist. (Final Amendment)',
+  },
 ] as const;
 
 export const PRINCIPLE_NAMES = ARCHITECTURAL_PRINCIPLES.map((p) => p.name);

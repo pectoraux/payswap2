@@ -30,6 +30,17 @@ import { InMemoryLiquidityGraph, type LiquidityGraphQuery } from './graphs/liqui
 // Amendment 2 engines:
 import { NoOpEconomicHealthDashboard, type EconomicHealthDashboard } from './engines/economic-health';
 import { NoOpMultiHopRouter, type MultiHopRouter } from './graphs/multi-hop';
+// Final Amendment engines + graphs:
+import { InMemoryCapabilityGraph, type CapabilityGraph } from './graphs/capability';
+import { InMemoryRouteGraph, type RouteGraph } from './graphs/route';
+import { NoOpCapabilityDiscoveryEngine, type CapabilityDiscoveryEngine } from './engines/capability-discovery';
+import { NoOpCorridorDiscoveryEngine, type CorridorDiscoveryEngine } from './engines/corridor-discovery';
+import { NoOpReserveDiscoveryEngine, type ReserveDiscoveryEngine } from './engines/reserve-discovery';
+import { NoOpLPGrowthEngine, type LPGrowthEngine } from './engines/lp-growth';
+import { NoOpTreasuryGrowthEngine, type TreasuryGrowthEngine } from './engines/treasury-growth';
+import { NoOpEconomicScoreEngine, type EconomicScoreEngine } from './engines/economic-score';
+import { NoOpCounterfactualEngine, type CounterfactualEngine } from './engines/counterfactual';
+import { InMemoryRecommendationLifecycle, type RecommendationLifecycle } from './engines/recommendation-lifecycle';
 
 // Re-export the public surface.
 export * from './types';
@@ -53,6 +64,17 @@ export * from './graphs/liquidity-graph';
 // Amendment 2 public surface:
 export * from './engines/economic-health';
 export * from './graphs/multi-hop';
+// Final Amendment public surface:
+export * from './graphs/capability';
+export * from './graphs/route';
+export * from './engines/capability-discovery';
+export * from './engines/corridor-discovery';
+export * from './engines/reserve-discovery';
+export * from './engines/lp-growth';
+export * from './engines/treasury-growth';
+export * from './engines/economic-score';
+export * from './engines/counterfactual';
+export * from './engines/recommendation-lifecycle';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -77,6 +99,17 @@ export interface Runtime {
   // Amendment 2 engines (interface-only in M-RT-1; wired in later milestones):
   economicHealth: EconomicHealthDashboard;
   multiHopRouter: MultiHopRouter;
+  // Final Amendment engines + graphs (interface-only in M-RT-1; wired in later milestones):
+  capabilityGraph: CapabilityGraph;
+  routeGraph: RouteGraph;
+  capabilityDiscovery: CapabilityDiscoveryEngine;
+  corridorDiscovery: CorridorDiscoveryEngine;
+  reserveDiscovery: ReserveDiscoveryEngine;
+  lpGrowth: LPGrowthEngine;
+  treasuryGrowth: TreasuryGrowthEngine;
+  economicScore: EconomicScoreEngine;
+  counterfactual: CounterfactualEngine;
+  recommendationLifecycle: RecommendationLifecycle;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -118,6 +151,17 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   // Amendment 2 engines — interface-only (NoOp) implementations for M-RT-1.
   const economicHealth = new NoOpEconomicHealthDashboard();
   const multiHopRouter = new NoOpMultiHopRouter();
+  // Final Amendment engines + graphs — interface-only (NoOp/In-memory) for M-RT-1.
+  const capabilityGraph = new InMemoryCapabilityGraph();
+  const routeGraph = new InMemoryRouteGraph();
+  const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
+  const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
+  const reserveDiscovery = new NoOpReserveDiscoveryEngine();
+  const lpGrowth = new NoOpLPGrowthEngine();
+  const treasuryGrowth = new NoOpTreasuryGrowthEngine();
+  const economicScore = new NoOpEconomicScoreEngine();
+  const counterfactual = new NoOpCounterfactualEngine();
+  const recommendationLifecycle = new InMemoryRecommendationLifecycle();
 
   const runtime: Runtime = {
     clock,
@@ -134,6 +178,16 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     liquidityGraph,
     economicHealth,
     multiHopRouter,
+    capabilityGraph,
+    routeGraph,
+    capabilityDiscovery,
+    corridorDiscovery,
+    reserveDiscovery,
+    lpGrowth,
+    treasuryGrowth,
+    economicScore,
+    counterfactual,
+    recommendationLifecycle,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

@@ -2211,3 +2211,60 @@ Stage Summary:
 - Roadmap reordered: economic milestones (Reserve Market, Liquidity Graph, Strategy Marketplace, Reserve-aware Routing, Liquidity Intelligence, Opportunity Discovery, Economic Health) now immediately after M-RT-1, before the payments vertical slice (M-RT-8). Multi-hop deferred to M-RT-14.
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - Architecture is FROZEN again (v1.2). Contains all major long-lived concepts: Intent, Execution, Settlement, Reserves, Liquidity Markets, Multi-hop routing (designed), Treasury optimization, Opportunity discovery, LP growth intelligence, Economic Digital Twin, Runtime Memory, Protocol Inspector, Economic Health. No further redesigns — future ideas must be plugins/engines within this architecture. Per user instruction: STOP here. Implementation resumes at M-RT-2 (Reserve Market + Liquidity Graph) when the user gives the go-ahead.
+
+---
+Task ID: RT-FINAL-AMEND (Runtime Constitution Final Amendment — Economic Discovery & Network Evolution; PERMANENT FREEZE)
+Agent: main (Z.ai Code)
+Task: Apply the FINAL architecture amendment (no A3/A4/...; this is the last one). Introduce the last missing primitive: Economic Discovery and Network Evolution. The Runtime now has THREE continuous responsibilities (Execute + Optimize + Evolve). The crucial conceptual shift: separate "what an LP is capable of" (Capability Graph) from "what routes currently exist" (Route Graph). Add: Capability/Route Graphs, Capability/Corridor/Reserve Discovery, LP Growth Engine, Treasury Growth Engine, Economic Score, Counterfactual Engine, Recommendation Lifecycle (9 stages), Network Evolution. Update ONLY canonical architecture + roadmap + constitution + frozen vocabulary + M-RT-1 interfaces. No business logic. PERMANENTLY freeze. Stop.
+
+Work Log:
+ARCHITECTURE DOC (PROTOCOL-RUNTIME-ARCHITECTURE.md):
+- Renamed to "PaySwap Runtime — Architecture (v1.3 Runtime Constitution, Final Amendment)". Added "Runtime Constitution PERMANENTLY FROZEN" block.
+- Amended philosophy to Final Amendment sentence: "The Runtime executes financial intents, optimizes execution, and continuously evolves the financial network — discovering new economic opportunities and growing every participant." Added the THREE continuous responsibilities (Execute / Optimize / Evolve) framing.
+- Added Principle 13 — Economic Discovery & Network Evolution (the crucial Capability/Route Graph split).
+- Added 12 Final Amendment vocabulary terms (Economic Discovery, Network Evolution, Capability Graph, Route Graph, Capability/Corridor/Reserve Discovery, LP/Treasury Growth Engine, Economic Score, Counterfactual, Recommendation Lifecycle).
+- Added "Final Amendment — Economic Discovery & Network Evolution" section with the Core Realization ("the Runtime is responsible for continuously improving the financial network itself; there is a third responsibility: Economic Discovery"), the three-responsibilities list, the crucial-split explanation, and a 19-row summary table.
+- §0 Philosophy updated to Final Amendment (three responsibilities, equally important; Economic Discovery is what makes PaySwap an economic network that can evolve itself).
+- NEW §7G Capability Graph + Route Graph: the crucial split. LPCapability type (lpId/from/to/rail/maxAmount/latencyMs/active); CapabilityGraph interface (publish/withdraw/forLP/canMove/all); Route type (hops/isDirect/generatedFrom/active); RouteGraph interface (regenerate/direct/multiHop/all — routes generated FROM capabilities, never manually maintained). Why the split matters: the Runtime can discover routes that COULD exist, not just route through routes that DO exist.
+- NEW §7H Capability Discovery: continuously asks "what capability is missing?"; examples (LP supports Twin GHS→XOF but not Twin GHS→Twin XOF; LP settles GHS→TwinGHS and TwinGHS→NGN so enable GHS→NGN); CapabilityDiscoveryEngine contract (discover/forLP/latentRoutes).
+- NEW §7I Corridor Discovery: discovers corridors that don't yet exist (GHS→KES demand, no direct route); proposes composite paths (GHS→TwinGHS→USDC→KES, etc.); recommends opening with estimated volume/revenue/capital/utilization/confidence; CorridorDiscoveryEngine contract.
+- NEW §7J Reserve Discovery: discovers new reserve pools that should exist (open Twin XOF reserve, $200k, +$18k/mo, +$2.1M throughput, 92% confidence); ReserveDiscoveryEngine contract (discover/proposeReserve/unlockedCorridors).
+- NEW §7K LP Growth Engine: first-class engine growing LP businesses (not routing); answers what corridor/reserve/pricing/capability/connector/utilization/yield; LPGrowthPlan type (recommendations + projectedRevenue/Volume/YieldDelta + counterfactual); LPGrowthEngine contract (growthPlan/nextCorridor/pricingOptimization).
+- NEW §7L Treasury Growth Engine: first-class engine giving treasury GROWTH recommendations (capital deployment, reserve expand/shrink, corridor bootstrap, temporary LP role, LP incentivization); TreasuryGrowthPlan type; TreasuryGrowthEngine contract (growthPlan/temporaryLPProposal/incentivizationProposal).
+- NEW §7M Economic Score + Marketplace Analytics: per-corridor score (demand/supply/competition/capitalEfficiency/reserveHealth/risk/latency/profitabilityBps/growth/composite) powering BOTH routing AND recommendations; EconomicScore type; EconomicScoreEngine contract (score/rank); Liquidity Marketplace Analytics (most profitable/underutilized LP, fastest growing/highest spread/least competitive corridor, biggest liquidity gap, highest missed revenue/routing cost/unrealized volume) = queries over the Economic Score.
+- NEW §7N Counterfactual Engine: powers Digital Twin counterfactual evolution + Recommendation "Simulated" lifecycle stage; compares Current Network vs Alternative Network across revenue/volume/latency/capital/reserveUtilization; CounterfactualHypothesis + NetworkMutation (8 kinds) + NetworkSnapshot + Counterfactual types; CounterfactualEngine.evaluate() contract.
+- NEW §7O Recommendation Lifecycle (9 stages): Detected → Scored → Simulated → Recommended → Accepted → Implemented → Observed → Measured → Learning stored; RecommendationLifecycleStage type (9 stages); RecommendationLifecycle interface (transition/history/current); RecommendationLifecycleEvent type; the "learned" stage feeds Runtime Memory (successful recs increase future confidence; rejected/no-improvement recs decrease it).
+- Updated §25 scorecard: added Economic Discovery & Network Evolution (absent→full), Self-evolving network (absent→full) rows; updated closing paragraph ("an economic network that can evolve itself").
+- Updated §26 → "Runtime Constitution PERMANENTLY FROZEN (Final Amendment applied)" — no further architectural redesigns EVER; all future work as engines/plugins/policies/strategies within the Constitution.
+- REORDERED roadmap (§22): economic-network milestones immediately after M-RT-1, before the payments vertical slice. New 19-milestone order: M-RT-1 (done) → M-RT-2 Capability Graph → M-RT-3 Reserve Market + Liquidity Market → M-RT-4 Route Graph → M-RT-5 Reserve-Aware Routing → M-RT-6 Opportunity Discovery → M-RT-7 LP Growth Engine → M-RT-8 Treasury Growth Engine → M-RT-9 Economic Health + Economic Score → M-RT-10 Economic Digital Twin + Counterfactual → M-RT-11 Runtime Memory + Learning → M-RT-12 One Vertical Slice (Payments) → M-RT-13 Simulator Integration → M-RT-14 Full Inspector + Three Graphs → M-RT-15 API Gateway + Scheduling → M-RT-16 Multi-hop Liquidity Composition (future) → M-RT-17 Read Models migration → M-RT-18 Capability Migration → M-RT-19 Economic Integrity Hardening.
+
+M-RT-1 SKELETON EXTENSION (src/runtime/) — 9 new interface modules:
+- Created graphs/capability/types.ts — LPCapability + CapabilityGraph + InMemoryCapabilityGraph (publish/withdraw/forLP/canMove/all). index.ts barrel.
+- Created graphs/route/types.ts — RouteHop, Route (hops/isDirect/generatedFrom/active), RouteGraph (regenerate/direct/multiHop/all) + InMemoryRouteGraph (M-RT-1: direct routes only; multi-hop deferred). index.ts barrel.
+- Created engines/capability-discovery/types.ts — CapabilityDiscoveryEngine (discover/forLP/latentRoutes) + NoOpCapabilityDiscoveryEngine. index.ts barrel.
+- Created engines/corridor-discovery/types.ts — CorridorDiscoveryEngine (discover/proposeCorridor/candidatePaths) + NoOpCorridorDiscoveryEngine. index.ts barrel.
+- Created engines/reserve-discovery/types.ts — ReserveDiscoveryEngine (discover/proposeReserve/unlockedCorridors) + NoOpReserveDiscoveryEngine. index.ts barrel.
+- Created engines/lp-growth/types.ts — LPGrowthPlan + LPGrowthEngine (growthPlan/nextCorridor/pricingOptimization) + NoOpLPGrowthEngine. index.ts barrel.
+- Created engines/treasury-growth/types.ts — TreasuryGrowthPlan + TreasuryGrowthEngine (growthPlan/temporaryLPProposal/incentivizationProposal) + NoOpTreasuryGrowthEngine. index.ts barrel.
+- Created engines/economic-score/types.ts — ScoreDimension, EconomicScore, EconomicScoreEngine (score/rank) + NoOpEconomicScoreEngine. index.ts barrel.
+- Created engines/counterfactual/types.ts — NetworkMutationKind, NetworkMutation, CounterfactualHypothesis, NetworkSnapshot, Counterfactual, CounterfactualEngine (evaluate) + NoOpCounterfactualEngine. index.ts barrel.
+- Created engines/recommendation-lifecycle/types.ts — RecommendationLifecycleStage (9 stages), RecommendationLifecycleEvent, RecommendationLifecycle (transition/history/current) + InMemoryRecommendationLifecycle. index.ts barrel.
+- Updated principles.ts — added Principle 13 (Economic Discovery & Network Evolution).
+- Updated vocabulary.ts — added 12 Final Amendment terms.
+- Updated index.ts barrel — imports + re-exports all 9 new modules; extended Runtime container with 9 new fields (capabilityGraph/routeGraph/capabilityDiscovery/corridorDiscovery/reserveDiscovery/lpGrowth/treasuryGrowth/economicScore/counterfactual/recommendationLifecycle); createRuntime() instantiates all 9 (In-memory for capability/route/recommendation-lifecycle; NoOp for the rest).
+
+Verification:
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors in src/runtime/ (all 9 new modules compile cleanly).
+- Load check: 13 principles (P13 Economic Discovery & Network Evolution present), 48 vocabulary terms (24 + 8 A1 + 4 A2 + 12 Final). All 9 Final Amendment engines present on the runtime singleton (17 engines total across all amendments).
+- End-to-end dispatch (no regression): no-op payment intent → status 'completed', 15 trace stages, 12 events appended. Skeleton spine intact.
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- Final Amendment applied to the architecture. Runtime Constitution PERMANENTLY FROZEN as v1.3 edition. No further architectural redesigns — ever.
+- The architecture is now an economic network that can evolve itself (not a payment runtime, not merely an economic operating system). Three responsibilities: Execute + Optimize + Evolve.
+- Crucial conceptual shift encoded: Capability Graph (what an LP CAN do) separated from Route Graph (what routes currently exist) — routes generated FROM capabilities, never manually maintained. This unlocks automatic discovery of new corridors, LP expansion recommendations, reserve recommendations, multi-hop synthesis, and a self-improving liquidity marketplace.
+- M-RT-1 skeleton extended with 9 new Final Amendment interface modules (all interface-only / NoOp / In-memory placeholders — no business logic). 17 engines total on the Runtime container.
+- Roadmap reordered to 19 milestones: economic-network modeling (M-RT-2..11) BEFORE the payments vertical slice (M-RT-12), because payments should execute on top of a fully modeled economic network.
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- PER USER INSTRUCTION: Architecture is PERMANENTLY frozen. All future work must fit within this architecture as engines/plugins/policies/strategies. Implementation resumes at M-RT-2 (Capability Graph) when the user gives the go-ahead. STOP here.
