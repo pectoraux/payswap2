@@ -2060,3 +2060,57 @@ Stage Summary:
 - Kernel changes: 0. Implementation code changes: 0 (Phase 1 = design only).
 - Lint: clean. Dev server: healthy.
 - User confirmed: stop redesigning, begin implementation. Phase 2 starts with M-RT-1 (Runtime Core + Intent Engine + 14-stage pipeline scaffold + Event Store + Domain/Runtime event split + immediate projection runner + Runtime Clock at 1×).
+
+---
+Task ID: RT-FREEZE (Architecture Frozen — v1 Runtime Constitution)
+Agent: main (Z.ai Code)
+Task: Freeze the architecture per the final review. Add 10 Architectural Principles + frozen Runtime Vocabulary (24 terms) + "Architecture Frozen" declaration to the top of the design doc. Revise implementation order to skeleton → one vertical slice → simulator → capability migration.
+
+Work Log:
+- Updated PROTOCOL-RUNTIME-ARCHITECTURE.md title to "PaySwap Runtime — Architecture (v1 Runtime Constitution)" with "Architecture Frozen" block at top.
+- Added "Architectural Principles" section: 10 principles (Runtime First, Intent Before Execution, Explainability by Default, One Runtime, Event Truth, Deterministic Replay, Simulation Is Production, Economic Safety, Everything Is Inspectable, Runtime Over Features).
+- Added "Runtime Vocabulary (Frozen)" section: 24 terms (Intent, Command, Decision, Policy, Workflow, Execution, Settlement, Reserve, Liquidity, Treasury, Projection, Read Model, Event, Behavior, Scenario, Actor, Resource Graph, Economic Graph, Protocol Trace, Runtime Memory, Twin, Environment, Connector, Runtime Clock) each with a fixed meaning.
+- Added revised "Implementation Order" section: M-RT-1 (skeleton) → M-RT-2 (one vertical slice: payments) → M-RT-3 (simulator integration) → M-RT-4+ (capability migration). Stated the measure of success: inspect a payment's intent/policies/LP choice/reserve allocation/settlement/events/projections + replay in sandbox.
+
+Stage Summary:
+- Architecture is FROZEN. No more redesigns. Future milestones implement/validate/optimize, never re-architect.
+- Deliverable: updated PROTOCOL-RUNTIME-ARCHITECTURE.md (now the v1 Runtime Constitution).
+- No code changes. Lint clean.
+
+---
+Task ID: M-RT-1 (Runtime Skeleton — no business logic)
+Agent: main (Z.ai Code)
+Task: Implement M-RT-1: the runtime shell. Runtime container, Intent Engine, Runtime Clock, 14-stage Pipeline scaffold, Event interfaces, Decision interfaces, Policy interfaces. No business logic — just the skeleton that exercises the entire architecture. Existing app untouched.
+
+Work Log:
+- Created src/runtime/ directory structure: clock/, events/, decisions/, intent/, pipeline/, policy/, read-models/, inspector/.
+- src/runtime/types.ts — shared core types: Environment, Actor, IntentSource, RequestContext, EvidenceCitation, FailureInjection + uid()/newCorrelationId() utils.
+- src/runtime/principles.ts — the 10 Architectural Principles as data (ARCHITECTURAL_PRINCIPLES array) for docs/CI/review citation.
+- src/runtime/vocabulary.ts — the 24 frozen Runtime Vocabulary terms as data (RUNTIME_VOCABULARY array).
+- src/runtime/clock/runtime-clock.ts — RuntimeClock interface + LiveClock (1× real, pause/seek throw) + VirtualClock (virtualAtEpoch + epoch + multiplier model; pause/resume/seekTo/branch work). index.ts barrel.
+- src/runtime/events/types.ts — UncommittedEvent, StoredEvent (with version/globalPosition/kind metadata), AppendMetadata, AppendResult, EventSubscriber. Domain vs Runtime event kinds.
+- src/runtime/events/event-store.ts — EventStore interface + InMemoryEventStore (global array, per-stream versioning, OCC via expectedVersions, synchronous subscriber notification for immediate projection). OptimisticConcurrencyError. index.ts barrel (split type/value exports for isolatedModules).
+- src/runtime/decisions/types.ts — Decision interface (kind/stage/subject/choice/score/confidence/alternatives/tradeoffs/constraints/evidence/reasoning/costBps/riskScore/policyRuleIds/ts) + decision() factory. index.ts barrel.
+- src/runtime/policy/types.ts — PolicyEngine interface + DefaultPolicyEngine (first-match-wins, default ALLOW rule for skeleton). PolicyRule/PolicyDecision/PolicyAction. index.ts barrel.
+- src/runtime/inspector/types.ts — TraceNode (id/parentId/stage/kind/label/status/startedAt/durationMs/detail/children/decision), ExecutionTrace, TraceBuilder class (mutable intentId, public root, beginStage/finishStage/attachDecision/addChild/finalize). TraceNodeStatus includes 'running'. index.ts barrel.
+- src/runtime/intent/types.ts — IntentKind (8 types: payment/refund/transfer/settlement/mint/reserve/liquidity/treasury), MerchantIntent, NormalizedIntent, ResolvedIntent, IntentValidationResult, IntentConstraints, TypedIntent, IntentValidationError, requestContext() helper.
+- src/runtime/intent/intent-engine.ts — IntentEngine class (register hooks per kind, ingest() drives normalize→resolve→validate→augment with overridable no-op defaults). index.ts barrel (IntentHooks exported from intent-engine).
+- src/runtime/pipeline/types.ts — PIPELINE_STAGES (15 ids 0-14), EXECUTION_STAGES (11 ids 4-14), STAGE_LABELS, StageContext, StageOutcome, StageHandler, ExecutionResult.
+- src/runtime/pipeline/pipeline.ts — Pipeline class: drives IntentEngine (stages 0-3), runs execution stages (4-14) in order, records TraceNode per stage, appends pendingEvents at event_emission stage (OCC), flushes remaining on exit. Default no-op handlers. Appends payment.intent_received Domain Event + pipeline.stage_reached Runtime Event per stage.
+- src/runtime/read-models/types.ts — Projection/ReadModel interfaces + ProjectionRunner (subscribes to EventStore, dispatches to projections by event-type prefix, tracks checkpoints). index.ts barrel.
+- src/runtime/index.ts — Runtime container interface + createRuntime() factory + runtime singleton (globalThis pattern) + dispatch() convenience function. Re-exports the full public surface.
+- src/runtime/README.md — quick start, structure, 14-stage diagram, milestone table, principles list.
+
+Verification:
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors in src/runtime/ (fixed 7 issues: isolatedModules type exports, IntentHooks export location, TraceNodeStatus 'running', private→public root, mutable intentId, finalize signature).
+- Runtime load check (bun -e): runtime loads true, 10 principles, 24 vocabulary terms, event store size 0.
+- End-to-end dispatch test: dispatched a no-op payment intent → status 'completed', 15 trace stages (ingest→normalize→resolve→validate→policy→risk_fraud→treasury_reserve→liquidity_market→settlement_planning→execution→ledger→event_emission→projection→notifications→analytics_inspection), 12 events appended (1 Domain 'payment.intent_received' + 11 Runtime 'pipeline.stage_reached'), root node ok with 15 children. Architecture proven end-to-end with zero business logic.
+- Agent Browser: homepage loads cleanly (200, no errors); existing app unaffected (runtime is a pure addition, no existing files modified).
+
+Stage Summary:
+- M-RT-1 complete. Runtime skeleton built in src/runtime/ (16 files across 8 submodules + README).
+- The spine works: dispatch() flows a raw intent through the Intent Engine (stages 0-3) and the execution Pipeline (stages 4-14), appends real Domain + Runtime events to the in-memory EventStore (with OCC), and produces a full ExecutionTrace — all with no business logic.
+- Components: RuntimeClock (LiveClock 1× + VirtualClock), IntentEngine (overridable hooks), Pipeline (14-stage scaffold, registrable handlers), InMemoryEventStore (OCC + immediate projection), Decision/Policy/Inspector interfaces, ProjectionRunner.
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- Next: M-RT-2 (One Vertical Slice — Payments end-to-end through the runtime: register payment intent hooks + real stage handlers for Settlement/Reserve/Liquidity/Ledger + PaymentView projection + Inspector UI, then connect the payments page).

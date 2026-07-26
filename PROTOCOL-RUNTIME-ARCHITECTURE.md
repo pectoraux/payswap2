@@ -1,18 +1,121 @@
-# PaySwap Runtime — Architecture (Phase 1, v3: Final)
+# PaySwap Runtime — Architecture (v1 Runtime Constitution)
 
-> **Status:** Final architecture design. No implementation in this phase.
+> **Architecture Frozen — v1 Runtime Constitution.**
+> No more redesigns. Every future milestone either **implements**,
+> **validates**, or **improves performance**. It does **not** change the
+> architecture unless a production lesson reveals a genuine flaw.
+>
+> **Status:** Implementation-ready. Phase 2 has begun.
 > **Supersedes:** v1 (Stripe-mirror) and v2 (programmable-network reframe).
-> v3 completes the design with the Intent Engine, the four-runtimes split,
+> v3 completed the design with the Intent Engine, the four-runtimes split,
 > the Runtime Clock, first-class Scenarios & Behaviors, the autonomous
 > Digital Twin, Runtime Memory, and universal explainability.
 > **Philosophy (one sentence):** *Every financial intent becomes an
 > explainable execution.*
-> **Governing rule:** No business logic in pages or API routes. The Runtime
-> is the product; every client — including the simulator and AI agents —
-> emits Intents. Every execution is inspectable, replayable, explainable,
-> and simulatable.
 > **Kernel constraint:** The frozen kernel (`src/kernel/*`) is never
 > modified. Everything below is built **above** the kernel primitives.
+
+---
+
+## Architectural Principles
+
+These ten principles are the constitution for every future milestone. A
+milestone that violates any principle is rejected on review.
+
+### Principle 1 — Runtime First
+No UI, API route, extension, AI agent, CLI, simulator, or mobile app may
+implement business logic. Everything enters through the Runtime.
+
+### Principle 2 — Intent Before Execution
+No financial operation executes directly. Everything begins as a typed
+Intent.
+
+### Principle 3 — Explainability by Default
+Every state transition, decision, policy evaluation, optimization, and
+settlement must be explainable. If it cannot be explained, it should not
+execute.
+
+### Principle 4 — One Runtime
+Sandbox and Live are different worlds running the **same runtime**. Only
+data, connectors, credentials, and clock differ.
+
+### Principle 5 — Event Truth
+Events are immutable. Read models are disposable. The runtime can always
+rebuild itself.
+
+### Principle 6 — Deterministic Replay
+Given the same events, policies, clock, and runtime version, replay must
+produce identical results.
+
+### Principle 7 — Simulation Is Production
+The simulator is simply another runtime client. There are no simulator-only
+code paths.
+
+### Principle 8 — Economic Safety
+Money invariants override feature correctness. If financial integrity and
+availability conflict, integrity wins.
+
+### Principle 9 — Everything Is Inspectable
+Every object must expose: history, decisions, policies, relationships,
+events, execution trace.
+
+### Principle 10 — Runtime Over Features
+Whenever a design choice exists between adding another screen or
+strengthening the runtime, the runtime wins.
+
+---
+
+## Runtime Vocabulary (Frozen)
+
+These terms have fixed meanings. Every document, API, SDK, UI, extension,
+and AI agent uses exactly this vocabulary. Terminology never drifts.
+
+| Term | Meaning (frozen) |
+|---|---|
+| **Intent** | A typed desire to perform a financial operation. The universal input. Never executed directly — normalized, resolved, validated, then handed to the pipeline. |
+| **Command** | The internal execution primitive (kernel). A Command is produced from a validated Intent; it expresses *do X*, not *I want Y*. |
+| **Decision** | A recorded, explainable artifact produced by every decision-producing stage. Answers Why / Why-not / Alternative / Evidence / Confidence / Policy / Cost / Risk. |
+| **Policy** | An explicit, evaluable rule that gates execution (can-settle / can-mint / can-refund / can-release / can-retry). Data, not hardcoded branches. |
+| **Workflow** | A declared, multi-step, resumable operation with compensation. Sub-commands flow through the same pipeline. |
+| **Execution** | The act of running a validated Intent through the 14-stage pipeline to completion or declared failure. |
+| **Settlement** | The movement of value to fulfill an obligation. The product. Every money movement flows through the Settlement Engine. |
+| **Reserve** | Fiat collateral backing twin tokens and operations. Locked, released, minted against, burned. Owned by the Reserve Engine. |
+| **Liquidity** | LP-provided capital offered in a market. LPs publish strategies; the market clears; the winner executes. |
+| **Treasury** | PaySwap's own capital position. Optimized (not just displayed) across corridors, LPs, FX, float, yield, risk. |
+| **Projection** | A function that subscribes to Domain Events and writes a read model. The only writer of read-model tables. |
+| **Read Model** | A query façade over projection-maintained tables. The only thing interfaces read. Never the Event Store. |
+| **Event** | An immutable recorded fact. **Domain Event** = business state (replayed). **Runtime Event** = operational (not replayed). |
+| **Behavior** | A named pattern an actor exhibits that produces Intents per tick (MorningRush, SalaryDay, Aggressive, …). Not a random probability. |
+| **Scenario** | A first-class versioned object describing a world's initial conditions and evolution rules. A regression test is "run scenario v3; compare to baseline." |
+| **Actor** | A participant in a scenario (merchant, customer, LP, connector). Actors own behaviors. |
+| **Resource Graph** | The business-object graph (Payment → Refund → Invoice → Customer → Merchant → Subscription → Dispute). |
+| **Economic Graph** | The money graph (Reserve → LP → Wallet → Treasury → FX → Settlement → Escrow → TwinToken). |
+| **Protocol Trace** | The expandable tree of every stage, decision, event, and connector call for one execution. Powers the Inspector. |
+| **Runtime Memory** | The structured store of learned operational facts (corridor congestion, LP reliability, …). Consulted, not obeyed. |
+| **Twin** | The autonomous 24/7 sandbox world (SimCity model). A runtime client, not a parallel universe. |
+| **Environment** | `sandbox` or `live`. Same runtime, same code; only data, connectors, credentials, and clock differ. |
+| **Connector** | A uniform driver implementing authorize / capture / refund / webhook / health / capabilities. MTN, Stripe, banks, Stellar — all the same shape. |
+| **Runtime Clock** | The virtual clock. Everything reads `clock.now()`, never `Date.now()`. Live = 1× real time; sandbox = 10×/100×/1000×. |
+
+---
+
+## Implementation Order (revised)
+
+Per the final review, the implementation order prioritizes **one perfect
+vertical slice** over partial migration of everything.
+
+| Milestone | Goal | Exit criteria |
+|---|---|---|
+| **M-RT-1** Runtime Skeleton | Runtime container, Intent Engine, Runtime Clock, Pipeline scaffold, Event/Decision/Policy interfaces. **No business logic.** | Skeleton compiles, imports, dispatches a no-op intent through all 14 stages, appends a no-op event. Existing app untouched. |
+| **M-RT-2** One Vertical Slice (Payments) | Payment Intent → pipeline → Settlement → Reserve → Liquidity Market → Ledger → Events → Projections → Inspector. End-to-end. | A real payment in the UI is inspectable: original intent, every policy, why the LP was chosen, reserve allocation, settlement path, every event, every projection, replayable in sandbox. |
+| **M-RT-3** Simulator Integration | Simulator's payment generation replaced with Payment Intents through the runtime. | A twin payment trace is structurally identical to a live payment trace. Architecture proven. |
+| **M-RT-4+** Capability Migration | Migrate one capability at a time: refunds → payouts → invoices → subscriptions → wallets → treasury → LPs. | Each capability runs on the same execution model. No new architecture invented. |
+
+**The measure of success:** after a few milestones, you can point to a
+payment in the UI and inspect the original intent, every policy evaluated,
+why a particular LP was chosen, how reserves were allocated, the settlement
+path, every emitted event, every projection update, and replay the entire
+execution deterministically in the sandbox.
 
 ---
 
