@@ -31,6 +31,7 @@ import { RecommendationLifecycleService } from './engines/recommendation-lifecyc
 import { DigitalTwinEngine } from './engines/digital-twin';
 import { ExecutionPipeline } from './engines/execution-pipeline';
 import { SimulatorEngine } from './engines/simulator';
+import { InspectorService } from './engines/inspector';
 import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
 import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
 import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine as OldOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
@@ -107,6 +108,7 @@ export type {
 export { DEFAULT_TWIN_CONFIG } from './engines/digital-twin';
 export * from './engines/execution-pipeline';
 export * from './engines/simulator';
+export * from './engines/inspector';
 export * from './engines/liquidity-market';
 export * from './engines/liquidity-intelligence';
 // v1 opportunity-discovery (legacy NoOp — replaced by v2):
@@ -197,6 +199,8 @@ export interface Runtime {
   executionPipeline: ExecutionPipeline;
   // M-RT-13: Simulator (sim = prod; same runtime, different context):
   simulator: SimulatorEngine;
+  // M-RT-14: Inspector (read-only visualization, explanation, provenance):
+  inspector: InspectorService;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -306,6 +310,18 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     realCompiler,
     executionPipeline,
   });
+  // M-RT-14: Inspector (read-only visualization, explanation, provenance).
+  const inspector = new InspectorService({
+    eventStore,
+    clock,
+    capabilityGraph,
+    reserveLedger,
+    reserveMarket,
+    liquidityMarketplace,
+    routeCompiler,
+    opportunityDiscovery: opportunityDiscoveryV2,
+    recLifecycle,
+  });
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
   const reserveDiscovery = new NoOpReserveDiscoveryEngine();
@@ -358,6 +374,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     digitalTwin,
     executionPipeline,
     simulator,
+    inspector,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),
