@@ -893,7 +893,7 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | **Reserve Market** | ✅ | ✅ | n/a | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | **Liquidity Marketplace** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | **Route Graph + Routing** | ✅ | ✅ | n/a | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Financial Compiler (M-RT-7/8) | ✅ | ✅ | n/a | n/a | n/a | ✅ | ✅ | ⬜ |
+| **Financial Compiler** | ✅ | ✅ | n/a | n/a | ✅ | ✅ | ✅ | ⬜ |
 | Runtime Pipeline | ✅ | ⏳ | ✅ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Settlement Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
 | Reserve Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -909,13 +909,14 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | Digital Twin | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Economic Health Dashboard | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 
-**Current state (post M-RT-7):** Six primitives are feature-complete. The
-**Financial Compiler** (M-RT-7) is now live — it's the first component that
-reasons across ALL domains simultaneously. It's pure (no side effects),
-deterministic (same inputs → same plan), and reads-only (mutates no projections).
-Every pass leaves an explicit artifact for the Inspector. Placeholder passes
-(policy/compliance/fraud) record "not yet implemented" — M-RT-8 will replace
-them with real logic. The compiler is the natural integration point: every
-later milestone adds passes without changing the public contract.
+**Current state (post M-RT-8):** Seven primitives are feature-complete. The
+**Financial Compiler** (M-RT-8) is now a **composable pass pipeline** — all 9
+passes are real (resolve_identities, policy, compliance, fraud, reserve_allocation,
+reserve_aware_routing, liquidity_optimization, fx_optimization, settlement_planning).
+Every pass is pure, enriching, and inspectable. The public contract is unchanged
+from M-RT-7 (TypedIntent → ExecutionPlan) — only the internal reasoning became
+richer. Cost decomposition is additive (9 components preserved individually).
+The compiler is the foundation for M-RT-12 (payments vertical slice) and every
+later optimization feature.
 
-*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-7 done, M-RT-8 next.*
+*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-8 done, M-RT-9 next.*

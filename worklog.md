@@ -2839,3 +2839,59 @@ Stage Summary:
 - Maturity matrix: 6 primitives feature-complete (Capability Graph + Reserve Ledger + Reserve Market + Liquidity Marketplace + Route Graph + Routing + Financial Compiler). Financial Compiler: Contracts ✅ + Logic ✅ + Replay ✅ + API ✅ (Events/Projection/Invariants n/a for a pure compiler; Prod ⬜).
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - NEXT: M-RT-8 Full Compiler (all 8 passes: resolve → policy → compliance → fraud → reserve_allocation → reserve_aware_routing → liquidity → fx → settlement. Cost decomposition exposed. ExecutionPlan carries ReserveAwareRoutingPassResult).
+
+---
+Task ID: M-RT-8 (Full Financial Compiler — composable pass pipeline, all 9 passes real)
+Agent: main (Z.ai Code)
+Task: Deepen the Financial Compiler by replacing placeholder passes with real ones and adding the remaining passes. The public contract stays stable (TypedIntent → ExecutionPlan). Make the compiler a composable pass pipeline where every pass conforms to the same interface: ExecutionPlan → Pass.execute() → Updated ExecutionPlan + CompilationPassResult. Each pass is pure, enriching, inspectable, and additive (cost components preserved individually, not collapsed).
+
+Work Log:
+- Created src/runtime/compiler/passes.ts:
+  · CompilerPass interface — the uniform pass interface: execute(plan, ctx, intent) → PassResult { plan, result, continue, rejectionReason? }. Every pass conforms to this. The compiler is a pipeline of these.
+  · PassResult — the enriched plan + the CompilationPassResult artifact + whether to continue.
+  · 9 real pass implementations:
+    1. ResolveIdentitiesPass — validates intent has resolved subject + desired.
+    2. PolicyPass — basic policy check: amount > 0 and < 1B. Denies invalid amounts.
+    3. CompliancePass — basic compliance: sandbox always passes; live requires orgId.
+    4. FraudPass — basic risk scoring: riskScore = min(1, amount/500k). Flags if > 0.8.
+    5. ReserveAllocationPass — reads Reserve Market to find a matching reserve for the destination asset; checks available >= amount. Enriches plan with reserveAllocations.
+    6. ReserveAwareRoutingPass — calls RouteScoringEngine.rank() to find the best route; builds CostDecomposition (7 additive components: execution + capital + reserve + liquidity + risk + settlementDelay + FX); enriches plan with lpAllocations + settlementLegs + estimatedCostBps + estimatedRisk + rationale + alternativesConsidered. Stores routing result on plan for Inspector.
+    7. LiquidityOptimizationPass — verifies the winning LP has a valid offer in the marketplace (calls liquidityMarketplace.quote()).
+    8. FxOptimizationPass — adds an FX hop if crossing currencies (flat 5bps in M-RT-8).
+    9. SettlementPlanningPass — finalizes execution timing, capital allocation, alternatives from routing.
+  · FULL_PASS_PIPELINE — the canonical pass pipeline (all 9 passes in execution order).
+
+- Refactored src/runtime/compiler/real-compiler.ts:
+  · FinancialCompiler.compile() now uses the pass pipeline pattern: creates an empty ExecutionPlan, iterates through FULL_PASS_PIPELINE calling pass.execute() on each, collects CompilationPassResults, stops on rejection (continue=false). Pure, deterministic, no side effects.
+  · Removed the old M-RT-7 minimal compile method body + all old private pass methods (replaced by the passes.ts implementations).
+  · Updated the doc comment: M-RT-8 deepens the implementation; the public contract stays stable from M-RT-7.
+
+- Updated src/runtime/compiler/index.ts — exports CompilerPass, PassResult, FULL_PASS_PIPELINE, and all 9 pass classes.
+- Updated INTERFACE-CONTRACT-CATALOG.md Appendix C — Financial Compiler row: Contracts ✅ + Logic ✅ + Events n/a + Projection n/a + Invariants ✅ (policy/compliance/fraud checks) + Replay ✅ + API ✅ + Prod ⬜. Seven primitives now feature-complete.
+
+Verification (M-RT-8 exit criteria — all pass):
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors.
+- End-to-end test (full 9-pass pipeline):
+  1. Compile result: success=true ✓
+  2. All 9 passes executed with real logic (no placeholders):
+     resolve_identities (resolved), policy (allow), compliance (compliant), fraud (clear),
+     reserve_allocation (reserve res-twinghs), reserve_aware_routing (route via 2),
+     liquidity_optimization (offer from 2), fx_optimization (FX KES→TwinGHS at 5bps),
+     settlement_planning (settlement plan finalized) ✓
+  3. ExecutionPlan enriched by all passes: lpAllocations=[{lpId:2, 80bps}], settlementLegs=1,
+     reserveAllocations=[{reserve:res-twinghs, shadow:3bps}], fxHops=[{5bps}],
+     estimatedCostBps=190, estimatedRisk=0.2, alternativesConsidered=1 ✓
+  4. Determinism: same inputs → same plan (PASS) ✓
+  5. Purity: event store unchanged (4 events — compiler added 0) ✓
+  6. Policy rejection: negative amount → success=false, error="Policy denied: amount -100 out of range" ✓
+  7. No reserve: TwinUSD → success=false, error="No reserve available for TwinUSD" ✓
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- M-RT-8 (Full Financial Compiler) COMPLETE. The compiler is now a composable pass pipeline with all 9 passes real. Every pass is pure, enriching, inspectable, and additive. The public contract is unchanged from M-RT-7.
+- The pass pipeline pattern makes it straightforward to: replay individual passes, benchmark pass performance, replace implementations, and insert new optimization passes later without changing the compiler's public contract.
+- Cost decomposition is additive: 7 components (execution + capital + reserve + liquidity + risk + settlementDelay + FX) preserved individually in the Decision, not collapsed into a single opaque score.
+- Maturity matrix: 7 primitives feature-complete. Financial Compiler: Contracts ✅ + Logic ✅ + Invariants ✅ + Replay ✅ + API ✅ (Prod ⬜).
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- NEXT: M-RT-9 Opportunity Discovery (12+ opportunity kinds + Capability/Corridor/Reserve Discovery → protocol-object Recommendations with 9-stage lifecycle).

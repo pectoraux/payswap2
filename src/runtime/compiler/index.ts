@@ -18,3 +18,16 @@ export type {
 export { COMPILATION_PASS_ORDER, NoOpFinancialCompiler } from './types';
 export { FinancialCompiler as RealFinancialCompiler } from './real-compiler';
 export type { CompileResult, RealCompilerContext } from './real-compiler';
+export type { CompilerPass, PassResult } from './passes';
+export { FULL_PASS_PIPELINE } from './passes';
+export {
+  ResolveIdentitiesPass,
+  PolicyPass,
+  CompliancePass,
+  FraudPass,
+  ReserveAllocationPass,
+  ReserveAwareRoutingPass,
+  LiquidityOptimizationPass,
+  FxOptimizationPass,
+  SettlementPlanningPass,
+} from './passes';
