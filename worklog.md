@@ -2654,3 +2654,69 @@ Stage Summary:
 - Maturity matrix: 3 primitives feature-complete (Capability Graph + Reserve Ledger + Reserve Market); all applicable columns ✅, only Prod ⏳.
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - NEXT: M-RT-5 Liquidity Marketplace (LP offers + strategies + pricing curves + matching).
+
+---
+Task ID: M-RT-5 (Liquidity Marketplace — market intent only; deterministic matching; event-derived order book)
+Agent: main (Z.ai Code)
+Task: Implement M-RT-5 Liquidity Marketplace. SCOPE: market intent only — which offers exist, which are compatible, which satisfy constraints, which would clear. Does NOT execute allocations, modify reserves, perform routing, or invoke the compiler. DEPENDENCY DIRECTION: reads Capability Graph + Reserve Market (for economics) but does NOT calculate reserve economics and does NOT write to lower layers. The compiler is the first component that reasons across all domains. PROJECTION: order book rebuilt entirely from offer events. DETERMINISM: identical inputs → identical outputs. INVARIANTS: no negative liquidity, expired offers ignored, deterministic ordering (fee, latency, risk).
+
+Work Log:
+- Created src/runtime/engines/liquidity-marketplace/types.ts:
+  · LiquidityOffer (id, lpId, capabilityId, from, to, rail, maxAmount, minAmount, pricingCurve, latencyMs, riskScore, expiresAt, publishedAt, active) — references a capability from the Capability Graph.
+  · PricingCurveTier (utilizationRange [low,high], feeBps) — utilization-tiered pricing.
+  · QuoteRequest (from, to, amount, rail?, now) + Quote (offerId, lpId, feeBps, feeAmount, latencyMs, riskScore, status: valid|expired|insufficient_capacity|below_minimum|rail_mismatch).
+  · ClearingRequest + ClearingResult (request, quotes[], winner, rejected[], canClear, generatedAt) — deterministic ranking.
+  · OrderBook (offers[], forRoute, forLP) — the projection interface.
+  · MarketplaceEventType (offer.published, offer.withdrawn, offer.expired) + MarketplaceUncommittedEvent.
+  · INVARIANTS as pure functions: validateOffer(offer) → violations[] (maxAmount>0, minAmount≥0, minAmount≤maxAmount, pricingCurve≥1 tier, riskScore∈[0,1], latencyMs≥0, all feeBps≥0); isExpired(offer, now); canServeAmount(offer, amount); quoteFee(offer, utilization) → feeBps (picks the pricing-curve tier matching utilization).
+
+- Created src/runtime/engines/liquidity-marketplace/projection.ts:
+  · OrderBookProjection — rebuilds the order book from offer events. Same projection discipline as Capability Graph and Reserve Ledger. rebuild(events, now) applies offer.published (add), offer.withdrawn/offer.expired (remove), filters expired offers, returns an OrderBook with forRoute/forLP queries. Pure, deterministic.
+
+- Created src/runtime/engines/liquidity-marketplace/service.ts:
+  · LiquidityMarketplaceService — the ONLY writer for offers. Constructor takes EventStore + RuntimeClock.
+  · publish(offer, env, actor, corr) → LiquidityOffer — enforces invariants before appending; emits offer.published.
+  · withdraw(offerId, env, actor, corr) — emits offer.withdrawn.
+  · getOrderBook(env) → OrderBook — reads all offer events from the Event Store + rebuilds via projection.
+  · quote(request, env) → Quote[] — evaluates each matching offer: checks expiry, rail, amount, min; computes fee from pricing curve. Pure, deterministic.
+  · clear(request, env) → ClearingResult — calls quote(), filters valid, sorts by (feeBps, latencyMs, riskScore) — DETERMINISTIC ORDERING; returns winner + rejected + canClear.
+  · evaluateOffer(offer, request) private — pure evaluation producing a Quote with status. quoteFee uses utilization=0 (M-RT-5; the compiler in M-RT-7/8 will pass the LP's actual utilization).
+  · OfferInvariantViolation error.
+  · Does NOT call reserveLedger, reserveMarket, capabilityGraph, compiler, or pipeline. Market intent only.
+
+- Created src/runtime/engines/liquidity-marketplace/index.ts — barrel.
+
+- Created API routes:
+  · src/app/api/runtime/marketplace/offers/route.ts — GET (list order book) + POST (publish an offer).
+  · src/app/api/runtime/marketplace/offers/[id]/route.ts — DELETE (withdraw an offer).
+  · src/app/api/runtime/marketplace/quote/route.ts — GET (quotes for from→to+amount). Read-only.
+  · src/app/api/runtime/marketplace/clear/route.ts — GET (clearing result — which offers WOULD clear). Read-only. Note: "Nothing is executed."
+
+- Updated src/runtime/index.ts — imported LiquidityMarketplaceService; added `liquidityMarketplace` to the Runtime container; createRuntime() instantiates it; re-exported from barrel.
+
+- Updated INTERFACE-CONTRACT-CATALOG.md Appendix C — Liquidity Marketplace row: Contracts ✅ + Logic ✅ + Events ✅ + Projection ✅ + Invariants ✅ + Replay ✅ + API ✅ + Prod ⏳. Four primitives now feature-complete.
+
+Verification (M-RT-5 exit criteria — all pass):
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors.
+- End-to-end test:
+  1. Published 2 offers (Acacia 110bps, Baobab 80bps) for KES→TwinGHS ✓
+  2. Order book rebuilt from events: 2 active offers ✓
+  3. Quote: both offers valid ✓
+  4. Clear: winner = Baobab (80bps < 110bps) — deterministic ordering ✓
+  5. Clear 999999 (exceeds maxAmount): canClear=false, both rejected (insufficient_capacity) ✓
+  6. Clear 50 (below Baobab min=100): winner = Acacia (min=1) — Baobab excluded ✓
+  7. Withdraw Baobab → order book = 1 offer ✓
+  8. After withdrawal, winner = Acacia ✓
+  9. Determinism: same inputs → same outputs (PASS) ✓
+  10. Marketplace does NOT call reserveLedger, reserveMarket, compiler, or pipeline ✓
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- M-RT-5 (Liquidity Marketplace) COMPLETE. Market intent only — which offers exist, which are compatible, which would clear. Deterministic matching (fee, latency, risk). Event-derived order book. No execution, no reserve mutation, no routing, no compiler invocation.
+- Dependency direction maintained: reads lower layers (Capability Graph, Reserve Market) without reaching back to mutate them. The compiler (M-RT-7) will be the first component that reasons across all domains.
+- The four-stage pattern is now consistent across four primitives:
+  1. Source of truth (events) → 2. Projection (order book) → 3. Pure analysis (matching/clearing) → 4. Consumers (compiler)
+- Maturity matrix: 4 primitives feature-complete (Capability Graph + Reserve Ledger + Reserve Market + Liquidity Marketplace); all applicable columns ✅, only Prod ⏳.
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- NEXT: M-RT-6 Route Graph + Reserve-Aware Routing (routes compiled FROM the Capability Graph; routing scored on 9+ dimensions including reserve shadow price from the Reserve Market).

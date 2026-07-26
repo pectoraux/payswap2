@@ -891,7 +891,7 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | **Capability Graph** | ✅ | ✅ | ✅ | ✅ | n/a | ✅ | ✅ | ⏳ |
 | **Reserve Ledger** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | **Reserve Market** | ✅ | ✅ | n/a | ✅ | ✅ | ✅ | ✅ | ⏳ |
-| Liquidity Marketplace (M-RT-5) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **Liquidity Marketplace** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⏳ |
 | Route Graph (M-RT-6) | ✅ | ⬜ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ |
 | Financial Compiler (M-RT-7/8) | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
 | Runtime Pipeline | ✅ | ⏳ | ✅ | n/a | n/a | n/a | ⬜ | ⬜ |
@@ -909,12 +909,13 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | Digital Twin | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Economic Health Dashboard | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 
-**Current state (post M-RT-4):** Three primitives are feature-complete (all
+**Current state (post M-RT-5):** Four primitives are feature-complete (all
 applicable columns ✅, only Prod ⏳ remains): **Capability Graph**, **Reserve
-Ledger**, and **Reserve Market**. The four-stage pattern is now established:
-(1) source of truth → (2) projection → (3) pure analysis → (4) consumers.
-The Reserve Market is a pure read model (no persistent state; deterministic;
-economic invariants enforced) — the same discipline every later analysis engine
-will reuse.
+Ledger**, **Reserve Market**, and **Liquidity Marketplace**. The four-stage
+pattern is consistent across all four: (1) source of truth → (2) projection →
+(3) pure analysis → (4) consumers. The Liquidity Marketplace reads lower-layer
+outputs (Capability Graph, Reserve Market) without reaching back to mutate them
+— the compiler (M-RT-7) will be the first component that reasons across all
+domains simultaneously.
 
-*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 + M-RT-3 + M-RT-4 done, M-RT-5 next.*
+*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-5 done, M-RT-6 next.*

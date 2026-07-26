@@ -24,6 +24,7 @@ import { ProjectionRunner } from './read-models';
 import { InMemoryReserveMarket, type ReserveMarket } from './engines/reserve-market';
 import { ReserveLedgerService } from './engines/reserve-ledger';
 import { ReserveMarketEngine } from './engines/reserve-market-v2';
+import { LiquidityMarketplaceService } from './engines/liquidity-marketplace';
 import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
 import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
 import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine } from './engines/opportunity-discovery';
@@ -70,6 +71,7 @@ export * from './read-models';
 export * from './engines/reserve-market';
 export * from './engines/reserve-ledger';
 export * from './engines/reserve-market-v2';
+export * from './engines/liquidity-marketplace';
 export * from './engines/liquidity-market';
 export * from './engines/liquidity-intelligence';
 export * from './engines/opportunity-discovery';
@@ -141,6 +143,8 @@ export interface Runtime {
   reserveLedger: ReserveLedgerService;
   // M-RT-4: Reserve Market (pure read model — no persistent state; derived from ledger):
   reserveMarket: ReserveMarketEngine;
+  // M-RT-5: Liquidity Marketplace (offer events → order book projection; deterministic matching):
+  liquidityMarketplace: LiquidityMarketplaceService;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -199,6 +203,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const reserveLedger = new ReserveLedgerService(eventStore, clock);
   // M-RT-4: Reserve Market (pure read model — no persistent state; derived from ledger).
   const reserveMarket = new ReserveMarketEngine(reserveLedger, clock);
+  // M-RT-5: Liquidity Marketplace (offer events → order book projection; deterministic matching).
+  const liquidityMarketplace = new LiquidityMarketplaceService(eventStore, clock);
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
   const reserveDiscovery = new NoOpReserveDiscoveryEngine();
@@ -242,6 +248,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     capabilityProjection,
     reserveLedger,
     reserveMarket,
+    liquidityMarketplace,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),
