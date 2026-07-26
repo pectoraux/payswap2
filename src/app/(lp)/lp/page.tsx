@@ -39,6 +39,7 @@ import {
   TrendingUp,
   Wallet,
 } from 'lucide-react';
+import { LpAiRecommendations } from '@/components/lp/ai-recommendations';
 
 export const dynamic = 'force-dynamic';
 
@@ -192,6 +193,8 @@ export default async function LpOverviewPage() {
               tone="cyan"
             />
           </div>
+
+          <LpAiRecommendations />
 
           <div className="grid gap-6 lg:grid-cols-3">
             <Card className="lg:col-span-2">

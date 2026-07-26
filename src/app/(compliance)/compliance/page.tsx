@@ -34,6 +34,7 @@ import {
   Scale,
   Flame,
 } from 'lucide-react';
+import { ComplianceAiPrioritization } from '@/components/compliance/ai-prioritization';
 
 export const dynamic = 'force-dynamic';
 
@@ -146,6 +147,8 @@ export default async function ComplianceOverviewPage() {
           tone="cyan"
         />
       </div>
+
+      <ComplianceAiPrioritization />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">

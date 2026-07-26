@@ -42,6 +42,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
 } from 'lucide-react';
+import { TreasuryAiRiskAssessment } from '@/components/treasury/ai-risk-assessment';
 
 export const dynamic = 'force-dynamic';
 
@@ -343,6 +344,8 @@ export default async function TreasuryOverviewPage() {
           tone={openAlerts + failedPayouts + failedWebhooks > 0 ? 'rose' : 'amber'}
         />
       </div>
+
+      <TreasuryAiRiskAssessment />
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Multi-currency Reserves Table */}

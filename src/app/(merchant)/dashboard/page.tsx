@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { TrendingUp, CreditCard, Users, ArrowDownToLine, ExternalLink } from 'lucide-react';
 import { OnboardingChecklist } from '@/components/merchant/onboarding-checklist';
 import { HealthScore } from '@/components/merchant/health-score';
+import { AiInsights } from '@/components/merchant/ai-insights';
 
 export const dynamic = 'force-dynamic';
 
@@ -146,6 +147,8 @@ export default async function MerchantDashboard() {
       </div>
 
       <HealthScore />
+
+      <AiInsights />
 
       <Card>
         <CardHeader><CardTitle className="text-base">Recent Payments</CardTitle><CardDescription>Your latest transactions</CardDescription></CardHeader>
