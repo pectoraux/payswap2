@@ -22,14 +22,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Separator } from '@/components/ui/separator';
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb';
+import { PageBreadcrumbs } from '@/components/breadcrumbs';
 import {
   ArrowLeft,
   Users,
@@ -273,25 +266,13 @@ export default async function CustomerDetailPage({ params }: PageProps) {
   return (
     <div className="space-y-6">
       {/* ───────── Breadcrumbs ───────── */}
-      <Breadcrumb>
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink asChild>
-              <Link href="/dashboard">Dashboard</Link>
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbLink asChild>
-              <Link href="/dashboard/customers">Customers</Link>
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbPage>{customer.name}</BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
+      <PageBreadcrumbs
+        items={[
+          { label: 'Dashboard', href: '/dashboard' },
+          { label: 'Customers', href: '/dashboard/customers' },
+          { label: customer.name },
+        ]}
+      />
 
       <div className="flex items-center gap-2">
         <Button asChild variant="ghost" size="sm" className="gap-1.5">

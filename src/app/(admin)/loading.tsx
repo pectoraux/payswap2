@@ -1,18 +1,5 @@
-import { Skeleton } from '@/components/ui/skeleton';
+import { PageSkeleton } from '@/components/page-skeleton';
 
 export default function Loading() {
-  return (
-    <div className="space-y-6 p-4 lg:p-6">
-      <div className="space-y-2">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-4 w-64" />
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-28" />
-        ))}
-      </div>
-      <Skeleton className="h-96" />
-    </div>
-  );
+  return <PageSkeleton kpiCount={4} tableRows={6} />;
 }

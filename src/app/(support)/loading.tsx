@@ -1,5 +1,5 @@
-import { LoadingScreen } from '@/components/role-ui';
+import { PageSkeleton } from '@/components/page-skeleton';
 
 export default function Loading() {
-  return <LoadingScreen kpiCount={4} />;
+  return <PageSkeleton kpiCount={4} />;
 }

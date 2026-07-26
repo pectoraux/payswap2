@@ -40,6 +40,7 @@ import {
   Activity,
   AlertTriangle,
   Terminal,
+  Building2,
 } from 'lucide-react';
 
 /**
@@ -147,6 +148,7 @@ export const merchantNav: NavGroup[] = [
     label: 'Settings',
     items: [
       { label: 'General', href: '/dashboard/settings', icon: <Settings className="h-4 w-4" /> },
+      { label: 'Organization', href: '/dashboard/settings/organization', icon: <Building2 className="h-4 w-4" /> },
       { label: 'API Keys', href: '/dashboard/settings/api-keys', icon: <KeyRound className="h-4 w-4" /> },
       { label: 'Webhooks', href: '/dashboard/settings/webhooks', icon: <Webhook className="h-4 w-4" /> },
       { label: 'Team', href: '/dashboard/settings/team', icon: <UserCog className="h-4 w-4" /> },

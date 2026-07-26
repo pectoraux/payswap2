@@ -13,14 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/status-badge';
 import { Separator } from '@/components/ui/separator';
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb';
+import { PageBreadcrumbs } from '@/components/breadcrumbs';
 import {
   ArrowLeft,
   ArrowDownToLine,
@@ -157,27 +150,13 @@ export default async function PayoutDetailPage({ params }: PageProps) {
   return (
     <div className="space-y-6">
       {/* ───────── Breadcrumbs ───────── */}
-      <Breadcrumb>
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink asChild>
-              <Link href="/dashboard">Dashboard</Link>
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbLink asChild>
-              <Link href="/dashboard/payouts">Payouts</Link>
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbPage className="font-mono text-xs">
-              {payout.id.slice(0, 12)}
-            </BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
+      <PageBreadcrumbs
+        items={[
+          { label: 'Dashboard', href: '/dashboard' },
+          { label: 'Payouts', href: '/dashboard/payouts' },
+          { label: payout.id.slice(0, 12) },
+        ]}
+      />
 
       <div className="flex items-center gap-2">
         <Button asChild variant="ghost" size="sm" className="gap-1.5">

@@ -4,8 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
 import { useEffect, useState } from 'react';
-import { Bell, ChevronDown, Command as CommandIcon, LogOut, Menu, Search, Settings, X } from 'lucide-react';
-import { toast } from 'sonner';
+import { ChevronDown, Command as CommandIcon, LogOut, Menu, Search, Settings, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
@@ -20,6 +19,8 @@ import { RoleSwitcher } from '@/components/role-switcher';
 import { EnvSwitcher } from '@/components/env-switcher';
 import { OrgSwitcher, type OrgOption } from '@/components/org-switcher';
 import { CommandPalette } from '@/components/command-palette';
+import { NotificationCenter } from '@/components/notification-center';
+import { KeyboardShortcutsHelp, useKeyboardShortcutsHelp } from '@/components/keyboard-shortcuts';
 import type { NavGroup } from '@/lib/nav-config';
 import { cn } from '@/lib/utils';
 
@@ -60,6 +61,7 @@ export function UnifiedShell({
   const { data: session } = useSession();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const { open: shortcutsOpen, setOpen: setShortcutsOpen } = useKeyboardShortcutsHelp();
 
   // Global Cmd+K / Ctrl+K shortcut → open the command palette. Lives in the
   // shell so the listener is attached once on every authenticated page.
@@ -73,6 +75,26 @@ export function UnifiedShell({
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
+
+  // Global "?" shortcut → open the keyboard shortcuts help dialog. We skip it
+  // when focus is in a text field so users can still type a literal "?".
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isEditable =
+        target &&
+        (target.isContentEditable ||
+          ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+      if (isEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === '?') {
+        e.preventDefault();
+        setShortcutsOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [setShortcutsOpen]);
 
   const rootPath = basePath ?? navGroups[0]?.items[0]?.href ?? '/';
   const resolvedSettingsHref = settingsHref ?? rootPath;
@@ -255,16 +277,7 @@ export function UnifiedShell({
           >
             <Search className="h-4 w-4" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="relative h-8 w-8"
-            onClick={() => toast.info('No new notifications')}
-            aria-label="Notifications"
-          >
-            <Bell className="h-4 w-4" />
-            <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-500" />
-          </Button>
+          <NotificationCenter />
         </header>
         <main className="flex-1 p-4 lg:p-6">{children}</main>
       </div>
@@ -276,6 +289,9 @@ export function UnifiedShell({
         navGroups={navGroups}
         currentRole={currentRole}
       />
+
+      {/* Global keyboard shortcuts help (?) */}
+      <KeyboardShortcutsHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
   );
 }

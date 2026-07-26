@@ -24,6 +24,7 @@ import {
   PageHeader,
   fmtDate,
 } from '@/components/role-ui';
+import { PageBreadcrumbs } from '@/components/breadcrumbs';
 import {
   ArrowLeft,
   History,
@@ -133,6 +134,15 @@ export default async function IncidentDetailPage({
 
   return (
     <div className="space-y-6">
+      {/* ───────── Breadcrumbs ───────── */}
+      <PageBreadcrumbs
+        items={[
+          { label: 'Operations', href: '/ops' },
+          { label: 'Incidents', href: '/ops/incidents' },
+          { label: incident.id.slice(0, 12) },
+        ]}
+      />
+
       <div className="flex items-center gap-2 text-xs">
         <Link
           href="/ops/incidents"
