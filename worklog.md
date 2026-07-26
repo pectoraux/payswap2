@@ -3003,3 +3003,56 @@ Stage Summary:
 - Maturity matrix: 9 primitives feature-complete. Recommendation Lifecycle: Contracts ✅ + Logic ✅ + Events ✅ + Projection ✅ + Invariants ✅ + Replay ✅ + API ✅ (Prod ⬜).
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - NEXT: M-RT-11 Digital Twin (simulation + validation of recommendations; counterfactual: Current Network vs Alternative Network).
+
+---
+Task ID: M-RT-11 (Digital Twin — pure simulation layer; counterfactual, prediction, comparison, confidence, explanation)
+Agent: main (Z.ai Code)
+Task: Implement M-RT-11 Digital Twin as a STRICTLY simulation layer. No persistent state, no event emission, no projection mutation. Pure function: (snapshot, recommendation, config) → SimulationResult. Five responsibilities: (1) counterfactual simulation, (2) prediction, (3) comparison, (4) confidence estimation, (5) explanation. Deterministic. The Recommendation Lifecycle owns state transitions — the Twin only simulates.
+
+Work Log:
+- Created src/runtime/engines/digital-twin/types.ts:
+  · NetworkSnapshot (13 metrics: capabilityCount, routeCount, uniqueAssets, offerCount, totalOfferCapacity, medianFeeBps, reserveCount, totalReserveAvailable, totalReserveLocked, averageUtilization, singleProviderRoutes, criticalReserves, estimatedThroughputPerHour).
+  · PredictedMetric (metric, currentValue, predictedValue, delta, deltaPercent, rationale) — each metric change has an explicit WHY.
+  · NetworkComparison (metrics[], improvements[], regressions[], netAssessment: positive|neutral|negative).
+  · SimulationAssumption (assumption, impact).
+  · SimulationResult (recommendationId, kind, title, baseline, simulated, comparison, confidence, assumptions[], explanation, generatedAt, success, error?).
+  · TwinConfig (assumedVolumePerRoute, competitionFeeReductionPercent, replenishmentUtilizationImprovement, baseConfidence). DEFAULT_TWIN_CONFIG provided.
+  · SimulatableRecommendation (id, kind, title, description, confidence, expectedValue[], graphDiff) — the input from M-RT-9.
+
+- Created src/runtime/engines/digital-twin/engine.ts:
+  · DigitalTwinEngine — PURE FUNCTION. Constructor takes DigitalTwinInputs (all lower-layer services, read-only) + TwinConfig.
+  · simulate(recommendation, environment) → SimulationResult:
+    1. captureSnapshot(environment) — reads all projections (capabilities, routes, reserves, market snapshots, offers) and computes the 13 baseline metrics. Read-only.
+    2. predictSimulated(baseline, recommendation) — applies the recommendation's effect based on its kind (8 kind-specific transformations: missing_bridge adds a route, expensive_corridor drops fees, overutilized_reserve replenishes, idle_liquidity adds offers, single_provider_dependency adds competition, excessive_fee_path caps fees, etc.).
+    3. compare(baseline, simulated, recommendation) — computes deltas for all 13 metrics; classifies each as improvement or regression (lower-is-better for fees/utilization/critical/single-provider; higher-is-better for capacity/throughput/routes); produces improvements[] + regressions[] + netAssessment.
+    4. estimateConfidence(recommendation, baseline, simulated) — starts from baseConfidence; +0.10 if rec.confidence > 0.8; -0.10 if < 0.5; -0.20 if no offers; -0.10 if no reserves; -0.05 if > 5 metrics change. Returns confidence + assumptions[].
+    5. explain(recommendation, comparison, confidence) — human-readable summary.
+  · No persistent state, no events, no mutations, no randomness. Deterministic.
+
+- Created src/runtime/engines/digital-twin/index.ts — barrel.
+- Created src/app/api/runtime/twin/simulate/route.ts — POST (simulate a recommendation; read-only).
+- Updated src/runtime/index.ts — imported DigitalTwinEngine; added `digitalTwin` to the Runtime container; createRuntime() instantiates it with all lower-layer inputs. Explicit re-exports to avoid NetworkSnapshot collision with counterfactual types.
+- Updated INTERFACE-CONTRACT-CATALOG.md Appendix C — Digital Twin row: Contracts ✅ + Logic ✅ + Events n/a + Projection n/a + Invariants n/a + Replay ✅ + API ✅ + Prod ⬜. Ten primitives now feature-complete.
+
+Verification (M-RT-11 exit criteria — all pass):
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors in src/runtime/ (44 pre-existing errors in kernel/protocol code, none in runtime).
+- End-to-end test (overutilized_reserve recommendation on a 95%-utilized reserve):
+  1. Simulation result: success=true, confidence=0.80 ✓
+  2. Baseline: averageUtilization=0.95, criticalReserves=1, totalReserveAvailable=10000 ✓
+  3. Simulated: averageUtilization=0.65 (-31.6%), criticalReserves=0 (-100%), totalReserveAvailable=13000 (+30%) ✓
+  4. Comparison: netAssessment=positive, improvements=3, regressions=0 ✓
+  5. Metrics with rationale: 3 metrics each have explicit "WHY" ✓
+  6. Assumptions: 2 (high recommendation confidence + base from config) ✓
+  7. Explanation: full human-readable summary ✓
+  8. Determinism: same inputs → same result (PASS) ✓
+  9. Purity: event store unchanged (0 events added) ✓
+  10. Different recommendation (missing_bridge): also produces positive assessment with 3 improvements ✓
+- Agent Browser: dev server had a transient restart (environment memory issue, not code); server confirmed healthy with 200 responses.
+
+Stage Summary:
+- M-RT-11 (Digital Twin) COMPLETE. Pure simulation layer — no state, no events, no mutations. Captures a network snapshot, applies a recommendation's effect, predicts the simulated network, compares current vs simulated (explicit deltas + rationale), estimates confidence with assumptions, and explains why the prediction changed.
+- The closed-loop optimization cycle is now fully connected: Discovery (M-RT-9) finds → Lifecycle (M-RT-10) manages → Twin (M-RT-11) validates → (future: Execution M-RT-12 implements → Measurement learns). The Twin is the gate that filters weak recommendations before they surface.
+- Maturity matrix: 10 primitives feature-complete. Digital Twin: Contracts ✅ + Logic ✅ + Replay ✅ + API ✅ (Events/Projection/Invariants n/a for a pure simulation; Prod ⬜).
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc (runtime): clean. Dev server: healthy (transient restart during testing).
+- NEXT: M-RT-12 Payments Vertical Slice (Intent → Compiler → Pipeline → Settlement → Ledger → Events → Projections → Inspector — end-to-end on the fully-modeled economic runtime).

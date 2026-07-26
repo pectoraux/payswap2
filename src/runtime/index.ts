@@ -28,6 +28,7 @@ import { LiquidityMarketplaceService } from './engines/liquidity-marketplace';
 import { RouteCompiler, RouteScoringEngine } from './engines/routing';
 import { OpportunityDiscoveryEngine } from './engines/opportunity-discovery-v2';
 import { RecommendationLifecycleService } from './engines/recommendation-lifecycle-v2';
+import { DigitalTwinEngine } from './engines/digital-twin';
 import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
 import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
 import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine as OldOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
@@ -89,6 +90,19 @@ export type {
 export { computeTotalScore, DEFAULT_SCORING_WEIGHTS, validateRoute } from './engines/routing';
 export * from './engines/opportunity-discovery-v2';
 export * from './engines/recommendation-lifecycle-v2';
+// M-RT-11 Digital Twin: explicit re-exports to avoid collision with counterfactual types.
+export { DigitalTwinEngine } from './engines/digital-twin';
+export type { DigitalTwinInputs } from './engines/digital-twin';
+export type {
+  NetworkSnapshot as TwinNetworkSnapshot,
+  PredictedMetric,
+  NetworkComparison,
+  SimulationAssumption,
+  SimulationResult,
+  TwinConfig,
+  SimulatableRecommendation,
+} from './engines/digital-twin';
+export { DEFAULT_TWIN_CONFIG } from './engines/digital-twin';
 export * from './engines/liquidity-market';
 export * from './engines/liquidity-intelligence';
 // v1 opportunity-discovery (legacy NoOp — replaced by v2):
@@ -173,6 +187,8 @@ export interface Runtime {
   opportunityDiscoveryV2: OpportunityDiscoveryEngine;
   // M-RT-10: Recommendation Lifecycle (event-driven state management; the only writer):
   recLifecycle: RecommendationLifecycleService;
+  // M-RT-11: Digital Twin (pure simulation — no state, no events, no mutations):
+  digitalTwin: DigitalTwinEngine;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -255,6 +271,15 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   });
   // M-RT-10: Recommendation Lifecycle (event-driven state management; the only writer).
   const recLifecycle = new RecommendationLifecycleService(eventStore, clock);
+  // M-RT-11: Digital Twin (pure simulation — no state, no events, no mutations).
+  const digitalTwin = new DigitalTwinEngine({
+    capabilityGraph,
+    reserveLedger,
+    reserveMarket,
+    liquidityMarketplace,
+    routeCompiler,
+    clock,
+  });
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
   const reserveDiscovery = new NoOpReserveDiscoveryEngine();
@@ -304,6 +329,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     realCompiler,
     opportunityDiscoveryV2,
     recLifecycle,
+    digitalTwin,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

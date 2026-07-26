@@ -896,6 +896,7 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | **Financial Compiler** | ✅ | ✅ | n/a | n/a | ✅ | ✅ | ✅ | ⬜ |
 | **Opportunity Discovery** | ✅ | ✅ | n/a | n/a | n/a | ✅ | ✅ | ⬜ |
 | **Recommendation Lifecycle** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| **Digital Twin** | ✅ | ✅ | n/a | n/a | n/a | ✅ | ✅ | ⬜ |
 | Runtime Pipeline | ✅ | ⏳ | ✅ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Settlement Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
 | Reserve Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -911,15 +912,15 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | Digital Twin | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Economic Health Dashboard | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 
-**Current state (post M-RT-10):** Nine primitives are feature-complete. The
-**Recommendation Lifecycle** (M-RT-10) is now live — event-driven lifecycle
-management where recommendations are immutable protocol objects whose state
-evolves through domain events (Detected → Scored → Simulated → Recommended →
-Accepted → Implemented → Observed → Measured → Learned). Invalid transitions
-are rejected; the state is rebuilt entirely from events by replay; the service
-never performs the implementation itself. The closed-loop optimization cycle
-is now structurally complete: Discovery (M-RT-9) finds → Lifecycle (M-RT-10)
-manages → (future: Digital Twin validates → Execution implements → Measurement
-learns).
+**Current state (post M-RT-11):** Ten primitives are feature-complete. The
+**Digital Twin** (M-RT-11) is now live — a pure simulation layer with no
+persistent state, no event emission, and no projection mutation. It captures
+a network snapshot, applies a recommendation's effect, predicts the simulated
+network, compares current vs simulated (explicit deltas + rationale), estimates
+confidence with assumptions, and explains why the prediction changed. The
+closed-loop optimization cycle is now fully connected: Discovery finds →
+Lifecycle manages → Twin validates → (future: Execution implements → Measurement
+learns). The Twin is the gate that filters weak recommendations before they
+surface.
 
-*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-10 done, M-RT-11 next.*
+*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-11 done, M-RT-12 next.*
