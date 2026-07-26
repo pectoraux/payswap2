@@ -3,6 +3,7 @@ export type {
   RecommendationKind,
   RecommendationStatus,
   RecommendationImpact,
+  ImpactMeasurement,
   Recommendation,
   OpportunityDiscoveryEngine,
 } from './types';

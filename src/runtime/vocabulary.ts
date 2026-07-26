@@ -45,6 +45,11 @@ export const RUNTIME_VOCABULARY: readonly VocabTerm[] = [
   { term: 'Liquidity Strategy', meaning: 'A programmable strategy an LP publishes alongside liquidity ("Maximize yield", "Only operate when reserve utilization < 60%"). Strategies are evaluated during market clearing.' },
   { term: 'Recommendation', meaning: 'A first-class runtime object advising an actor (merchant/LP/treasury/ops/compliance/developer) to act. Versioned, explainable, actionable.' },
   { term: 'Liquidity Memory', meaning: 'Runtime Memory facts specific to liquidity: LP congestion windows, reserve depletion cycles, connector recovery times, corridor concentration, FX spread patterns, missed opportunities.' },
+  // Amendment 2 terms:
+  { term: 'Economic Intelligence Runtime', meaning: 'The renamed Economic Runtime. Its responsibility is no longer merely routing money — it optimizes the entire financial network: which LPs should exist, which reserves should grow, which corridors are under-served, which bridges are missing.' },
+  { term: 'Economic Health', meaning: 'A first-class Runtime surface (the operating console of the financial network). Shows network efficiency, unused liquidity, idle reserves, utilization, concentration, capital velocity, route efficiency, missed revenue, lost volume, optimization backlog, recommendation impact. Not analytics — the operating console.' },
+  { term: 'Multi-hop Liquidity Composition', meaning: 'A payment route may compose across multiple LPs and reserve pools (Buyer→LP A→LP B→LP C→Merchant). The architecture supports it; implementation deferred to M-RT-14.' },
+  { term: 'Missing Bridge', meaning: 'An Opportunity Discovery kind: a liquidity link between two nodes (e.g. Twin GHS→Twin XOF) whose absence forces extra settlement hops. Building it eliminates hops and unlocks composite routes.' },
 ] as const;
 
 export const VOCABULARY_TERMS = RUNTIME_VOCABULARY.map((t) => t.term);

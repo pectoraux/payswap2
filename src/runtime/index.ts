@@ -27,6 +27,9 @@ import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } fro
 import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine } from './engines/opportunity-discovery';
 import { InMemoryRecommendationStore, type RecommendationStore } from './recommendations';
 import { InMemoryLiquidityGraph, type LiquidityGraphQuery } from './graphs/liquidity-graph';
+// Amendment 2 engines:
+import { NoOpEconomicHealthDashboard, type EconomicHealthDashboard } from './engines/economic-health';
+import { NoOpMultiHopRouter, type MultiHopRouter } from './graphs/multi-hop';
 
 // Re-export the public surface.
 export * from './types';
@@ -47,6 +50,9 @@ export * from './engines/liquidity-intelligence';
 export * from './engines/opportunity-discovery';
 export * from './recommendations';
 export * from './graphs/liquidity-graph';
+// Amendment 2 public surface:
+export * from './engines/economic-health';
+export * from './graphs/multi-hop';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -68,6 +74,9 @@ export interface Runtime {
   opportunityDiscovery: OpportunityDiscoveryEngine;
   recommendationStore: RecommendationStore;
   liquidityGraph: LiquidityGraphQuery;
+  // Amendment 2 engines (interface-only in M-RT-1; wired in later milestones):
+  economicHealth: EconomicHealthDashboard;
+  multiHopRouter: MultiHopRouter;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -106,6 +115,9 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const opportunityDiscovery = new NoOpOpportunityDiscoveryEngine();
   const recommendationStore = new InMemoryRecommendationStore();
   const liquidityGraph = new InMemoryLiquidityGraph();
+  // Amendment 2 engines — interface-only (NoOp) implementations for M-RT-1.
+  const economicHealth = new NoOpEconomicHealthDashboard();
+  const multiHopRouter = new NoOpMultiHopRouter();
 
   const runtime: Runtime = {
     clock,
@@ -120,6 +132,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     opportunityDiscovery,
     recommendationStore,
     liquidityGraph,
+    economicHealth,
+    multiHopRouter,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

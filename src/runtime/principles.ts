@@ -79,6 +79,12 @@ export const ARCHITECTURAL_PRINCIPLES: readonly Principle[] = [
     statement:
       'The Runtime continuously optimizes the global financial network while executing. Execution and optimization are equally important; the Runtime improves the network it runs on. (Amendment 1)',
   },
+  {
+    number: 12,
+    name: 'Economic Operating System',
+    statement:
+      'Liquidity is not just execution capacity — it is an evolving market the Runtime continuously improves. The Runtime has two simultaneous responsibilities: (1) execute today\'s payment optimally, and (2) improve tomorrow\'s liquidity network. It discovers new economic opportunities and helps every participant (LPs, treasury, merchants) become more profitable. (Amendment 2)',
+  },
 ] as const;
 
 export const PRINCIPLE_NAMES = ARCHITECTURAL_PRINCIPLES.map((p) => p.name);
