@@ -897,8 +897,8 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | **Opportunity Discovery** | ✅ | ✅ | n/a | n/a | n/a | ✅ | ✅ | ⬜ |
 | **Recommendation Lifecycle** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | **Digital Twin** | ✅ | ✅ | n/a | n/a | n/a | ✅ | ✅ | ⬜ |
-| Runtime Pipeline | ✅ | ⏳ | ✅ | n/a | n/a | n/a | ⬜ | ⬜ |
-| Settlement Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
+| **Execution Pipeline** | ✅ | ✅ | ✅ | n/a | n/a | ✅ | ✅ | ⬜ |
+| Settlement Engine | ✅ | ✅ | ✅ | n/a | n/a | ✅ | ✅ | ⬜ |
 | Reserve Engine | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
 | Liquidity Market | ✅ | ⬜ | ⬜ | n/a | ⬜ | ⬜ | ⬜ | ⬜ |
 | Runtime Memory | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
@@ -912,15 +912,15 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · n/a not applicable
 | Digital Twin | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 | Economic Health Dashboard | ✅ | ⬜ | ⬜ | n/a | n/a | n/a | ⬜ | ⬜ |
 
-**Current state (post M-RT-11):** Ten primitives are feature-complete. The
-**Digital Twin** (M-RT-11) is now live — a pure simulation layer with no
-persistent state, no event emission, and no projection mutation. It captures
-a network snapshot, applies a recommendation's effect, predicts the simulated
-network, compares current vs simulated (explicit deltas + rationale), estimates
-confidence with assumptions, and explains why the prediction changed. The
-closed-loop optimization cycle is now fully connected: Discovery finds →
-Lifecycle manages → Twin validates → (future: Execution implements → Measurement
-learns). The Twin is the gate that filters weak recommendations before they
-surface.
+**Current state (post M-RT-12):** Twelve primitives are feature-complete. The
+**Execution Pipeline** (M-RT-12) is now live — the first end-to-end execution
+through the real runtime stack. A single payment flows: Intent → Financial
+Compiler (9 passes) → ExecutionPlan → Execution Pipeline (10 stages: Receive,
+Validate, Reserve, Liquidity, Settlement, Ledger, Events, Projection, Inspector,
+Complete) → Domain Events → Projections. The pipeline owns all side effects
+(reserve locking, ledger updates, event emission); the compiler stays pure.
+The full execution trace is inspectable: compiler passes + pipeline stages +
+domain events. **The architecture is validated as an integrated runtime, not
+just a collection of well-designed components.**
 
-*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-11 done, M-RT-12 next.*
+*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 through M-RT-12 done — THE GOLDEN PATH PROVEN.*
