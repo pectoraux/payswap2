@@ -2595,3 +2595,35 @@ Stage Summary:
 - Docs: 6 files (ARCHITECTURE, SETTLEMENT-NETWORK, OPERATIONS, SECURITY, API, BENCHMARKS)
 - Benchmarks: 16 scenarios, 12/16 hit 10k TPS, peak 844k events/sec
 - Kernel changes: 0
+
+---
+Task ID: RT-ARCH-1 (Protocol Runtime Architecture — Phase 1: Design, no code)
+Agent: main (Z.ai Code)
+Task: Respond to the architectural review directing PaySwap toward a Stripe-class command/event/projection runtime. Spend one pass as an architect designing the complete target architecture (10 layers) before any implementation. Produce the Phase 1 design document only — no code.
+
+Work Log:
+- Read existing state to ground the design: src/kernel/index.ts (26+ engines, 7 frozen primitives), src/kernel/command.ts (Command vocabulary + Commands builders), src/kernel/transition.ts (Transition with evidence/preconditions/postconditions/rollback), src/kernel/state-machine.ts (9 object kinds, full edge table, in-memory only), src/kernel/event.ts (EventEngine — in-memory sim pub/sub), src/services/event-bus.ts (in-memory, 10k rolling cap — events are side-effects not source of truth), src/services/payment-service.ts (writes status='COMPLETED' straight to Prisma, bypassing STATE_MACHINES), src/services/projections/index.ts (audit/webhook/customer-stats projections on the volatile bus), src/services/index.ts.
+- Read worklog tail (PRODUCTION-3 wave: 10 priorities, 80+ protocol files, 14 API endpoints, benchmarks 12/16 hit 10k TPS, kernel frozen confirmed).
+- Diagnosed the core problem: PRODUCTION (UI→API→Service→Prisma→in-mem bus) and SIMULATION (scenario→kernel engines→in-mem EventEngine) are two separate worlds that never meet. A simulated payment does not flow through PaymentService; a production payment does not flow through the kernel. Simulator ≠ production.
+- Designed the target pipeline: UI → API → Command Bus → Handlers → Domain Aggregates (+ state machines) → Event Store (append-only source of truth) → Projections → Read Models → UI. Both production and simulation dispatch the same commands.
+- Wrote PROTOCOL-RUNTIME-ARCHITECTURE.md (Phase 1 design, no implementation) covering:
+  · §0 The One Rule + why two parallel worlds must collapse into one pipeline.
+  · §1 Current-state assessment (KEEP: services, projections pattern, thin routes, frozen kernel primitives, protocol modules; BUILD: the 9 missing layers + inspector).
+  · §2 Target architecture diagram + the "src/runtime/" package placement above the kernel, below the API; the invariant that Prisma becomes write-only-by-projections / read-only-by-read-models.
+  · §3 Layer-by-layer design for all 10 layers with purpose, location, relationship to existing kernel/protocol code (reuse not rewrite), and type-contract sketches: (1) Command Bus w/ middleware pipeline, (2) Event Store w/ OCC + snapshots + reconciliation, (3) Read Models catalog (9 views), (4) Protocol State Machine (payment 10-state lifecycle), (5) Resource Graph (object graph vs kernel's liquidity graph), (6) Workflow Engine w/ compensation, (7) Connector Runtime (uniform driver contract wrapping v2 adapters), (8) Treasury Optimizer (wraps kernel OptimizationEngine + treasury-ai), (9) Liquidity Engine (LP strategies + continuous rebalance + explain), (10) Protocol Inspector (Stripe inspector × Chrome DevTools, expandable trace tree).
+  · §4 End-to-end execution flow of a single payment traced through all 10 layers, including simulator parity.
+  · §5 Economic-integrity invariants: trial balance + twin supply reconciliation enforced at every Event Store commit (the kernel Constitution made production-enforceable).
+  · §6 Sandbox/live isolation hardened at stream-prefix level.
+  · §7 Migration strategy: strangler-fig, 6 phases (A foundation → F simulator unification), never breaks the app.
+  · §8 Implementation roadmap: 12 milestones (M-RT-1..12), each improves protocol architecture per the governing rule.
+  · §9 Production quality gates: architecture / functional / integration / simulator / UX / performance / documentation.
+  · §10 What does NOT change (frozen kernel, product surface, differentiators).
+  · §11 Target scorecard (Stripe parity ~60% → ~90%+).
+
+Stage Summary:
+- Deliverable: /home/z/my-project/PROTOCOL-RUNTIME-ARCHITECTURE.md (Phase 1 architecture design, no code).
+- Key decision: build "src/runtime/" (Protocol Runtime) ABOVE the frozen kernel and BELOW the API. Reuse kernel types/pure-functions (Command, Transition, STATE_MACHINES, OptimizationEngine, treasury-ai, lp-lifecycle) without modifying any kernel file. Existing services become back-compat shims that dispatch commands; existing Prisma tables become projection-maintained read-model backing.
+- Core architectural correction: Event Store becomes source of truth (replacing in-memory bus); payment lifecycle enforced through STATE_MACHINES (replacing direct status writes); simulator dispatches the same commands as REST (replacing the parallel-worlds split).
+- Kernel changes: 0 (constraint honored — design only, no files modified in src/kernel).
+- Implementation code changes: 0 (Phase 1 is design only, as requested).
+- Next: Phase 2 implementation begins with Milestone M-RT-1 (Runtime Foundation: Command Bus + Event Store + projection runner + service back-compat shim).
