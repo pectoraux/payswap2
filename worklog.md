@@ -2477,3 +2477,45 @@ Stage Summary:
 - Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
 - Runtime coverage: Capability Graph 0% → 100%. Overall ~32%.
 - NEXT: M-RT-3 (Reserve Market + Liquidity Market + Reserve Engine) — parallelizable with M-RT-2; then M-RT-4 (Minimal Financial Compiler, pulled earlier per roadmap adjustment).
+
+---
+Task ID: M-RT-2-REFACTOR (Capability Graph as compiled projection + roadmap split + maturity matrix)
+Agent: main (Z.ai Code)
+Task: Refactor M-RT-2 Capability Graph per review feedback: (1) graph is a COMPILED PROJECTION, never an authoritative store — derived by CapabilityCompiler from LP profiles + connectors + compliance; (2) intent-based events (lp.capability_enabled/disabled/limit_changed, connector_attached/detached, reserve_access_granted/revoked) not CRUD events; (3) enriched LPCapability type (ownerId/ownerType, inputAsset/outputAsset, settlementNetwork/method, max/min, complianceRegion, fxMode, reserveRequired, collateralRequired, riskScore, costCurve, priority, availability); (4) capabilities not LP-only (LP/Treasury/ReservePool/Bank/StablecoinVault/CBDCGateway/FXProvider/Connector/LiquidityPool); (5) seed replaced by CapabilityCompiler.compile(); (6) API: GET /capabilities, GET /capabilities/query, POST /compiler/rebuild-capabilities (no arbitrary POST to graph). Also split roadmap M-RT-3/4/5 (Reserve Ledger / Reserve Market / Liquidity Marketplace) and adopt maturity matrix.
+
+Work Log:
+CAPABILITY GRAPH REFACTOR (src/runtime/graphs/capability/):
+- Rewrote types.ts: enriched LPCapability (ownerId/ownerType replacing lpId; from/to as input/output assets; settlementNetwork/settlementMethod/latencyMs; maxAmount/minAmount; complianceRegion; fxMode; reserveRequired/collateralRequired; riskScore; costCurve: CostCurveTier[]; priority; availability; compiledAt). Added CapabilityOwnerType (9 owner kinds: lp/treasury/reserve_pool/bank/stablecoin_vault/cbdc_gateway/fx_provider/connector/liquidity_pool). Added FXMode (none/direct/bridged/hopped) + CostCurveTier. CapabilityGraph interface now has forOwner/canMove/all/replaceAll (no publish/withdraw — graph is compiled, not mutated). InMemoryCapabilityGraph.replaceAll() replaces the entire graph on rebuild. Re-exported Rail type.
+- Created sources.ts: source-of-truth inputs — LPProfile (id/name/country/currency/localCurrency/tradingCapacity/settlementSpeedMs/rail/complianceRegions/riskProfile/availability/online/connectorIds/reserveAccess/fxModes/costCurve); ConnectorEntry (id/name/type/countries/currencies/settlementNetwork/settlementMethod/latencyMs/maxAmount/minAmount/online); ComplianceRule (id/blocks predicate/reason); TreasuryPermission (ownerId/mayRequireReserve/mayRequireCollateral). These are the AUTHORITATIVE data stores; the graph is derived from them.
+- Created compiler.ts: CapabilityCompiler — the ONLY producer of the graph. compile(input, compiledAt) derives capabilities from LP profiles + connectors + compliance rules + treasury permissions. Convention: LP in country X offering Y gets local→Twin<Y> (mint-side) + Twin<Y>→Y (redeem-side). Compliance rules filter out blocked capabilities. Treasury capabilities supported (ownerType='treasury', priority=50 fallback vs LP priority=100). rebuild(graph, input, compiledAt) replaces the entire graph. resolveNetwork() resolves settlement network from connected connectors.
+- Created projection.ts: CapabilityGraphProjection — subscribes to intent-based Domain Events (lp.capability_enabled/disabled/limit_changed, lp.connector_attached/detached, lp.reserve_access_granted/revoked, treasury.permission_changed) and triggers a compiler rebuild. CAPABILITY_TRIGGER_EVENTS constant. handle(eventType) rebuilds on trigger; rebuildNow() forces a rebuild. NOT CRUD events — intent-based business events about the LP/Connector/Reserve; the graph is a derived consequence.
+- Rewrote seed.ts: lpProfileFromKernel() converts kernel LiquidityProvider → LPProfile (source-of-truth input). compilerInputFromKernel() builds a CapabilityCompilerInput from kernel LPs. localCurrencyFor() helper. Transitional adapter — eventually the compiler reads directly from the LP Profile store.
+- Updated index.ts barrel: exports CapabilityCompiler, CapabilityGraphProjection, CAPABILITY_TRIGGER_EVENTS, LPProfile, ConnectorEntry, ComplianceRule, TreasuryPermission, compilerInputFromKernel, lpProfileFromKernel.
+- Deleted service.ts (obsolete — replaced by compiler + projection).
+- Updated route/types.ts: RouteHop now uses ownerId/ownerType (not lpId) to match the generalized capability owner model.
+- Updated knowledge-graph/types.ts: NoOp capability() projection now returns a no-op shell matching the new CapabilityGraph interface (forOwner/canMove/all/replaceAll).
+- Updated src/runtime/index.ts: replaced capabilityGraphService with capabilityCompiler + capabilityProjection on the Runtime container; createRuntime() instantiates both (compiler is real; projection's getInput is a transitional empty-input closure, seeded via API).
+
+API REFACTOR (src/app/api/runtime/capabilities/route.ts):
+- GET /api/runtime/capabilities — list (optionally filtered by ownerId/from→to). /capabilities/query → structured query with compiledAt. Response includes note: "This is a compiled projection. To change capabilities, update LP profiles / connectors / compliance rules and rebuild."
+- POST /api/runtime/capabilities — rebuild the graph from source-of-truth inputs (admin only). Accepts { seedFromKernel: true } or { input: {...} }. Calls capabilityCompiler.rebuild(). This is "POST /compiler/rebuild-capabilities". NO arbitrary POST of capabilities to the graph — you can only rebuild from source inputs.
+- Removed DELETE (no direct capability withdrawal — change the source inputs + rebuild).
+
+ROADMAP RESTRUCTURE (PROTOCOL-RUNTIME-ARCHITECTURE.md §22):
+- Split M-RT-3/4/5 per review: M-RT-3 Reserve Ledger (accounting only: Available/Locked/Pending/Consumed/Released, no market, no shadow price); M-RT-4 Reserve Market (shadow price + reserve cost + utilization + scarcity + forecast on top of the ledger); M-RT-5 Liquidity Marketplace (LP offers + strategies + pricing curves + matching). M-RT-6 Route Graph + Reserve-Aware Routing. M-RT-7 Minimal Financial Compiler (pulled earlier). M-RT-8 Full Compiler. M-RT-9 Opportunity Discovery. Renumbered subsequent milestones (M-RT-10 LP Growth through M-RT-22 Economic Integrity Hardening). 22 milestones total.
+
+MATURITY MATRIX (INTERFACE-CONTRACT-CATALOG.md Appendix C):
+- Replaced the single-percentage burndown with a 6-column maturity matrix: Contracts / Logic / Events / API / Tests / Prod per primitive. Legend: ✅ done · ⏳ in progress · ⬜ not started. Capability Graph is the first primitive with Contracts ✅ + Logic ✅ + Events ✅ + API ✅ (Tests + Prod still ⬜). The matrix makes the gap to production explicit.
+
+Verification (M-RT-2 refactored exit criteria):
+- bun run lint → 0 errors, 0 warnings.
+- bunx tsc --noEmit → 0 errors (fixed: deleted obsolete service.ts; added Rail re-export; updated RouteHop to ownerId/ownerType; updated knowledge-graph NoOp to new CapabilityGraph interface).
+- End-to-end test: graph empty until compiled (0 capabilities); CapabilityCompiler.rebuild() from kernel LP data produces 6 enriched capabilities (ownerId/ownerType, settlementNetwork/method, max/min, complianceRegion, fxMode, reserveRequired, riskScore, 4-tier costCurve, priority, availability); canMove('KES','TwinGHS') returns [1,2,3]; forOwner('1') returns [KES→TwinGHS, TwinGHS→GHS]; rebuild is deterministic (idempotent); removing Baobab from source inputs + recompiling updates the graph (canMove drops owner "2"). The graph NEVER owns truth — it's always rebuildable from source inputs.
+- Agent Browser: homepage loads 200, no errors; existing app unaffected.
+
+Stage Summary:
+- M-RT-2 refactored: Capability Graph is now a COMPILED PROJECTION, never an authoritative store. The CapabilityCompiler is the ONLY producer; the graph rebuilds from source-of-truth inputs (LP profiles + connectors + compliance). Intent-based events (lp.capability_enabled, etc.) trigger rebuilds — no CRUD events. Capabilities are enriched (15 fields the compiler reasons over) and not LP-only (9 owner types). The API allows GET + rebuild only — no arbitrary POST to the graph.
+- Roadmap split per review: M-RT-3 Reserve Ledger → M-RT-4 Reserve Market → M-RT-5 Liquidity Marketplace → M-RT-6 Route Graph + Routing → M-RT-7 Minimal Compiler → M-RT-8 Full Compiler. 22 milestones total.
+- Maturity matrix adopted: 6 columns (Contracts/Logic/Events/API/Tests/Prod) per primitive. Capability Graph: ✅✅✅✅⬜⏳.
+- Kernel changes: 0. Existing app changes: 0 (pure addition). Lint: clean. tsc: clean. Dev server: healthy.
+- NEXT: M-RT-3 Reserve Ledger (accounting only: Available/Locked/Pending/Consumed/Released; twin-token backing invariant per mint).

@@ -11,9 +11,10 @@
 
 import type { LPCapability } from '../capability/types';
 
-/** One hop in a route (references a capability). */
+/** One hop in a route (references a capability + its owner). */
 export interface RouteHop {
-  lpId: string;
+  ownerId: string;
+  ownerType: string;   // 'lp' | 'treasury' | ...
   capabilityId: string;
 }
 
@@ -52,12 +53,12 @@ export class InMemoryRouteGraph implements RouteGraph {
     // M-RT-1: generate direct (1-hop) routes only.
     for (const cap of capabilities) {
       if (!cap.active) continue;
-      const key = `${cap.lpId}:${cap.from}->${cap.to}`;
+      const key = `${cap.ownerId}:${cap.from}->${cap.to}`;
       this.routesByKey.set(key, {
         id: `route_${key}`,
         from: cap.from,
         to: cap.to,
-        hops: [{ lpId: cap.lpId, capabilityId: cap.id }],
+        hops: [{ ownerId: cap.ownerId, ownerType: cap.ownerType, capabilityId: cap.id }],
         isDirect: true,
         generatedFrom: [cap.id],
         active: true,

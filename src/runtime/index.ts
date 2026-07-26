@@ -31,7 +31,14 @@ import { InMemoryLiquidityGraph, type LiquidityGraphQuery } from './graphs/liqui
 import { NoOpEconomicHealthDashboard, type EconomicHealthDashboard } from './engines/economic-health';
 import { NoOpMultiHopRouter, type MultiHopRouter } from './graphs/multi-hop';
 // Final Amendment engines + graphs:
-import { InMemoryCapabilityGraph, type CapabilityGraph, CapabilityGraphService } from './graphs/capability';
+import {
+  InMemoryCapabilityGraph,
+  type CapabilityGraph,
+  CapabilityCompiler,
+  CapabilityGraphProjection,
+  type CapabilityCompilerInput,
+  compilerInputFromKernel,
+} from './graphs/capability';
 import { InMemoryRouteGraph, type RouteGraph } from './graphs/route';
 import { NoOpCapabilityDiscoveryEngine, type CapabilityDiscoveryEngine } from './engines/capability-discovery';
 import { NoOpCorridorDiscoveryEngine, type CorridorDiscoveryEngine } from './engines/corridor-discovery';
@@ -123,8 +130,9 @@ export interface Runtime {
   // v1.4 True Final Freeze — Financial Compiler + Knowledge Graph (interface-only in M-RT-1):
   compiler: FinancialCompiler;
   knowledgeGraph: FinancialKnowledgeGraph;
-  // M-RT-2: real Capability Graph service (event-emitting):
-  capabilityGraphService: CapabilityGraphService;
+  // M-RT-2: Capability Graph as a compiled projection (compiler + projection):
+  capabilityCompiler: CapabilityCompiler;
+  capabilityProjection: CapabilityGraphProjection;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -168,8 +176,16 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const multiHopRouter = new NoOpMultiHopRouter();
   // Final Amendment engines + graphs — interface-only (NoOp/In-memory) for M-RT-1.
   const capabilityGraph = new InMemoryCapabilityGraph();
-  // M-RT-2: real Capability Graph service (event-emitting wrapper).
-  const capabilityGraphService = new CapabilityGraphService(eventStore, clock);
+  // M-RT-2: Capability Graph as a compiled projection (compiler + projection).
+  const capabilityCompiler = new CapabilityCompiler();
+  const capabilityProjection = new CapabilityGraphProjection(
+    capabilityGraph,
+    capabilityCompiler,
+    clock,
+    // getInput: returns the current source-of-truth inputs.
+    // M-RT-2 transitional: reads from kernel LP data. M-RT-3+ reads from LP Profile store.
+    () => compilerInputFromKernel([]),  // empty by default; seed via API
+  );
   const routeGraph = new InMemoryRouteGraph();
   const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
   const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
@@ -210,7 +226,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     recommendationLifecycle,
     compiler,
     knowledgeGraph,
-    capabilityGraphService,
+    capabilityCompiler,
+    capabilityProjection,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),

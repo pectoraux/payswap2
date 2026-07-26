@@ -868,47 +868,47 @@ agree on N consecutive payments do you switch over.
 
 ---
 
-## Appendix C — Runtime Coverage (architectural burndown)
+## Appendix C — Runtime Coverage (maturity matrix)
 
-Generated after every milestone. Measures **primitive completion**, not
-milestones — a better progress metric because it reflects the actual architecture.
+Generated after every milestone. Tracks **per-primitive maturity** across six
+dimensions — a much clearer picture than a single percentage. A primitive is
+"production-ready" only when all six columns are ✅.
 
-```
-Primitive                    Status
-─────────────────────────────────────
-Runtime Clock                ████████████ 100%  (M-RT-1 ✅)
-Event Store                  ████████████ 100%  (M-RT-1 ✅, in-memory)
-Intent Engine                ████████████ 100%  (M-RT-1 ✅, NoOp hooks)
-Policy Engine                ████████████ 100%  (M-RT-1 ✅, default ALLOW)
-Decision Engine              ████████████ 100%  (M-RT-1 ✅, type)
-Projection Engine            ████████████ 100%  (M-RT-1 ✅, runner)
-Protocol Inspector           ████░░░░░░░░  33%  (types only; UI M-RT-14)
-Capability Graph             ░░░░░░░░░░░░   0%  (M-RT-2 ← next)
-Reserve Market               ░░░░░░░░░░░░   0%  (M-RT-3)
-Liquidity Strategy Mktplace  ░░░░░░░░░░░░   0%  (M-RT-3)
-Runtime Memory               ████░░░░░░░░  33%  (types; 3-tier M-RT-11)
-Route Graph                  ░░░░░░░░░░░░   0%  (M-RT-5)
-Liquidity Graph              ░░░░░░░░░░░░   0%  (M-RT-3+)
-Resource Graph               ░░░░░░░░░░░░   0%  (M-RT-14)
-Economic Graph               ░░░░░░░░░░░░   0%  (M-RT-14)
-Financial Knowledge Graph    ████░░░░░░░░  33%  (NoOp; real M-RT-14)
-Financial Compiler           ████░░░░░░░░  33%  (NoOp; minimal M-RT-4, full M-RT-5)
-Runtime Pipeline             ██████░░░░░░  50%  (scaffold; real M-RT-12)
-Settlement Engine            ░░░░░░░░░░░░   0%  (M-RT-12)
-Reserve Engine               ░░░░░░░░░░░░   0%  (M-RT-3)
-Liquidity Market             ░░░░░░░░░░░░   0%  (M-RT-3)
-Treasury Intelligence        ░░░░░░░░░░░░   0%  (M-RT-8)
-Economic Score               ░░░░░░░░░░░░   0%  (M-RT-9)
-Economic Intelligence        ████░░░░░░░░  33%  (types; real M-RT-6)
-Opportunity Discovery        ████░░░░░░░░  33%  (NoOp; real M-RT-6)
-LP Growth                    ████░░░░░░░░  33%  (NoOp; real M-RT-7)
-Treasury Growth              ████░░░░░░░░  33%  (NoOp; real M-RT-8)
-Counterfactual Engine        ████░░░░░░░░  33%  (NoOp; real M-RT-10)
-Recommendation Lifecycle     ██████░░░░░░  50%  (in-memory; real M-RT-6)
-Digital Twin                 ░░░░░░░░░░░░   0%  (M-RT-10)
-Economic Health Dashboard    ████░░░░░░░░  33%  (NoOp; real M-RT-9)
-─────────────────────────────────────
-Overall: ~30% (M-RT-1 complete; 18 primitives have interfaces, ~5 fully implemented)
-```
+Legend: ✅ done · ⏳ in progress · ⬜ not started
 
-*End of Interface Contract Catalog. Architecture is complete. Implementation begins at M-RT-2.*
+| Primitive | Contracts | Logic | Events | API | Tests | Prod |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| Runtime Clock | ✅ | ✅ | n/a | n/a | ⬜ | ⏳ |
+| Event Store | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| Intent Engine | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| Policy Engine | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| Decision Engine | ✅ | ✅ | n/a | n/a | ⬜ | ⬜ |
+| Projection Engine | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| Protocol Inspector | ✅ | ⏳ | ⏳ | ⬜ | ⬜ | ⬜ |
+| **Capability Graph** | ✅ | ✅ | ✅ | ✅ | ⬜ | ⏳ |
+| Reserve Ledger (M-RT-3) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Reserve Market (M-RT-4) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Liquidity Marketplace (M-RT-5) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Route Graph (M-RT-6) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Financial Compiler (M-RT-7/8) | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Runtime Pipeline | ✅ | ⏳ | ✅ | ⬜ | ⬜ | ⬜ |
+| Settlement Engine | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Reserve Engine | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Liquidity Market | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Runtime Memory | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Financial Knowledge Graph | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Economic Intelligence | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Opportunity Discovery | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| LP Growth | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Treasury Growth | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Counterfactual Engine | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Recommendation Lifecycle | ✅ | ⏳ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Digital Twin | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Economic Health Dashboard | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+
+**Current state (post M-RT-2):** Capability Graph is the first primitive with
+Contracts ✅ + Logic ✅ + Events ✅ + API ✅. The maturity matrix makes the
+gap to production explicit: Tests + Prod columns are the next work for every
+primitive.
+
+*End of Interface Contract Catalog. Architecture is complete. Implementation: M-RT-2 done, M-RT-3 next.*

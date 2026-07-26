@@ -1,23 +1,27 @@
 /**
- * /api/runtime/capabilities — the Capability Graph API. (M-RT-2.)
+ * /api/runtime/capabilities — the Capability Graph API. (M-RT-2, refactored.)
  *
- * GET    — list capabilities (optionally filtered by lpId or from→to)
- * POST   — publish a capability (admin only)
- * DELETE — withdraw a capability (admin only)
+ * THE DISCIPLINE: the Capability Graph is a compiled projection. You CANNOT
+ * POST a capability to it — capabilities are derived by the CapabilityCompiler
+ * from source-of-truth inputs (LP profiles, connectors, compliance). The API
+ * only allows:
+ *   GET  /capabilities              — list (optionally filtered)
+ *   GET  /capabilities/query        — structured query (from→to, owner, rail)
+ *   POST /compiler/rebuild-capabilities — trigger a compiler rebuild
  *
- * This is the first runtime API surface. It exercises the real
- * CapabilityGraphService (event-emitting), proving the M-RT-2 exit criteria.
+ * To change capabilities, change the source-of-truth inputs (LP profiles,
+ * connectors, compliance rules) — the graph recompiles.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { runtime as payswapRuntime, seedCapabilitiesFromKernel, type Environment } from '@/runtime';
+import { runtime as payswapRuntime, compilerInputFromKernel } from '@/runtime';
 import { defaultScenario } from '@/kernel';
 
 export const dynamic = 'force-dynamic';
 
-/** GET /api/runtime/capabilities — list capabilities. */
+/** GET /api/runtime/capabilities — list capabilities (compiled projection). */
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -25,26 +29,42 @@ export async function GET(req: NextRequest) {
   }
 
   const url = new URL(req.url);
-  const lpId = url.searchParams.get('lpId');
+  const ownerId = url.searchParams.get('ownerId');
   const from = url.searchParams.get('from');
   const to = url.searchParams.get('to');
 
+  // /capabilities/query → structured query
+  const isQuery = url.searchParams.get('query') === 'true';
+
   let capabilities;
-  if (lpId) {
-    capabilities = payswapRuntime.capabilityGraphService.forLP(lpId);
+  if (ownerId) {
+    capabilities = payswapRuntime.capabilityGraph.forOwner(ownerId);
   } else if (from && to) {
-    capabilities = payswapRuntime.capabilityGraphService.canMove(from, to);
+    capabilities = payswapRuntime.capabilityGraph.canMove(from, to);
   } else {
-    capabilities = payswapRuntime.capabilityGraphService.all();
+    capabilities = payswapRuntime.capabilityGraph.all();
+  }
+
+  if (isQuery) {
+    return NextResponse.json({
+      query: { ownerId, from, to },
+      results: capabilities,
+      count: capabilities.length,
+      compiledAt: capabilities[0]?.compiledAt ?? null,
+    });
   }
 
   return NextResponse.json({
     capabilities,
     count: capabilities.length,
+    note: 'This is a compiled projection. To change capabilities, update LP profiles / connectors / compliance rules and rebuild.',
   });
 }
 
-/** POST /api/runtime/capabilities — publish a capability (admin only). */
+/**
+ * POST /api/runtime/capabilities — rebuild the graph from source-of-truth inputs.
+ * (Admin only. This is "POST /compiler/rebuild-capabilities".)
+ */
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -55,90 +75,38 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden — admin only' }, { status: 403 });
   }
 
-  const body = await req.json();
-  const { lpId, from, to, rail, maxAmount, latencyMs, environment } = body as {
-    lpId: string;
-    from: string;
-    to: string;
-    rail: 'mobile_money' | 'bank' | 'card' | 'stablecoin' | 'blockchain';
-    maxAmount: number;
-    latencyMs: number;
-    environment?: Environment;
-  };
-
-  if (!lpId || !from || !to || !rail || !maxAmount) {
-    return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+  // M-RT-2 transitional: read the body for source-of-truth inputs, or seed from kernel.
+  let body: { seedFromKernel?: boolean; input?: import('@/runtime').CapabilityCompilerInput } = {};
+  try {
+    body = await req.json();
+  } catch {
+    body = {};
   }
 
-  const correlationId = `cap_${Date.now().toString(36)}`;
-  const capability = await payswapRuntime.capabilityGraphService.publish(
-    { lpId, from, to, rail, maxAmount, latencyMs: latencyMs ?? 5000 },
-    environment ?? 'sandbox',
-    (session.user as { id: string }).id,
-    correlationId,
+  let input: import('@/runtime').CapabilityCompilerInput;
+  if (body.seedFromKernel) {
+    const scenario = defaultScenario();
+    input = compilerInputFromKernel(scenario.liquidityProviders);
+  } else if (body.input) {
+    input = body.input;
+  } else {
+    return NextResponse.json({
+      error: 'Provide { seedFromKernel: true } or { input: {...} }',
+    }, { status: 400 });
+  }
+
+  // Rebuild via the compiler.
+  const compiledAt = payswapRuntime.clock.now();
+  const capabilities = payswapRuntime.capabilityCompiler.rebuild(
+    payswapRuntime.capabilityGraph,
+    input,
+    compiledAt,
   );
-
-  return NextResponse.json({ capability, correlationId }, { status: 201 });
-}
-
-/** DELETE /api/runtime/capabilities?id=... — withdraw a capability (admin only). */
-export async function DELETE(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  const role = (session.user as { role?: string }).role;
-  if (role !== 'ADMIN') {
-    return NextResponse.json({ error: 'Forbidden — admin only' }, { status: 403 });
-  }
-
-  const url = new URL(req.url);
-  const capabilityId = url.searchParams.get('id');
-  if (!capabilityId) {
-    return NextResponse.json({ error: 'Missing id' }, { status: 400 });
-  }
-
-  const correlationId = `cap_del_${Date.now().toString(36)}`;
-  await payswapRuntime.capabilityGraphService.withdraw(
-    capabilityId,
-    'sandbox',
-    (session.user as { id: string }).id,
-    correlationId,
-  );
-
-  return NextResponse.json({ withdrawn: capabilityId });
-}
-
-/** PUT /api/runtime/capabilities — seed from kernel LP data (admin only). */
-export async function PUT() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  const role = (session.user as { role?: string }).role;
-  if (role !== 'ADMIN') {
-    return NextResponse.json({ error: 'Forbidden — admin only' }, { status: 403 });
-  }
-
-  // Seed from the kernel's default scenario LPs.
-  const scenario = defaultScenario();
-  const { capabilities } = seedCapabilitiesFromKernel(scenario.liquidityProviders, 'sandbox');
-
-  const correlationId = `cap_seed_${Date.now().toString(36)}`;
-  const published: import('@/runtime').LPCapability[] = [];
-  for (const cap of capabilities) {
-    const result = await payswapRuntime.capabilityGraphService.publish(
-      cap,
-      'sandbox',
-      (session.user as { id: string }).id,
-      correlationId,
-    );
-    published.push(result);
-  }
 
   return NextResponse.json({
-    seeded: published.length,
-    capabilities: published,
-    correlationId,
+    rebuilt: true,
+    compiledAt,
+    capabilityCount: capabilities.length,
+    note: 'Capability Graph rebuilt from source-of-truth inputs. The graph is a compiled projection.',
   });
 }

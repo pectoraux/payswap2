@@ -1,61 +1,19 @@
 /**
- * Capability Graph seed — populates initial capabilities from the existing
- * kernel LiquidityProvider data. (M-RT-2.)
+ * Capability Graph seed — bridges the existing kernel LiquidityProvider data
+ * to the new CapabilityCompiler inputs. (M-RT-2 transitional.)
  *
- * Derives a sensible initial capability set from each LP's country/currency.
- * For the canonical Kenya→Ghana scenario, LPs in Kenya with GHS currency
- * get capabilities like KES→TwinGHS and TwinGHS→GHS.
+ * This is a transitional adapter: it converts kernel LiquidityProvider objects
+ * into LPProfile source-of-truth inputs, then the CapabilityCompiler derives
+ * capabilities from them. Eventually seedCapabilitiesFromKernel() disappears
+ * and the compiler reads directly from the LP Profile store.
  */
 
 import type { LiquidityProvider } from '../../../kernel/types';
-import type { PublishableCapability } from './service';
-import type { Rail } from '../../engines/liquidity-market/types';
-import type { Environment } from '../../types';
-
-/**
- * Derive initial capabilities for an LP based on its country + currency.
- *
- * Convention: an LP in country X offering currency Y can move:
- *   <local currency of X> → Twin<Y>   (mint-side)
- *   Twin<Y> → <Y>                       (redeem-side)
- *
- * For the canonical Kenya LPs offering GHS, this produces:
- *   KES → TwinGHS   (Acacia, Baobab, Cooperative)
- *   TwinGHS → GHS   (Acacia, Baobab, Cooperative)
- */
-export function deriveCapabilitiesFromLP(lp: LiquidityProvider): PublishableCapability[] {
-  const caps: PublishableCapability[] = [];
-  const localCurrency = localCurrencyFor(lp.country);
-  const twinCurrency = `Twin${lp.currency}`;
-  const rail: Rail = lp.sourceKind === 'cooperative_pool' ? 'bank' : 'mobile_money';
-
-  // local → Twin<currency>  (the LP takes local funds and issues a twin token)
-  if (localCurrency && localCurrency !== lp.currency) {
-    caps.push({
-      lpId: lp.id,
-      from: localCurrency,
-      to: twinCurrency,
-      rail,
-      maxAmount: lp.tradingCapacity,
-      latencyMs: lp.settlementSpeedMs,
-    });
-  }
-
-  // Twin<currency> → currency  (the LP redeems the twin token for fiat)
-  caps.push({
-    lpId: lp.id,
-    from: twinCurrency,
-    to: lp.currency,
-    rail,
-    maxAmount: lp.tradingCapacity,
-    latencyMs: lp.settlementSpeedMs,
-  });
-
-  return caps;
-}
+import type { LPProfile, ConnectorEntry } from './sources';
+import type { CapabilityCompilerInput } from './compiler';
 
 /** Map a country code to its local currency code. */
-function localCurrencyFor(country: string): string | null {
+export function localCurrencyFor(country: string): string | null {
   const map: Record<string, string> = {
     Kenya: 'KES',
     Ghana: 'GHS',
@@ -71,18 +29,47 @@ function localCurrencyFor(country: string): string | null {
   return map[country] ?? null;
 }
 
+/** Convert a kernel LiquidityProvider into an LPProfile (source-of-truth input). */
+export function lpProfileFromKernel(lp: LiquidityProvider): LPProfile {
+  const localCurrency = localCurrencyFor(lp.country) ?? lp.currency;
+  return {
+    id: lp.id,
+    name: lp.name,
+    country: lp.country,
+    currency: lp.currency,
+    localCurrency,
+    tradingCapacity: lp.tradingCapacity,
+    settlementSpeedMs: lp.settlementSpeedMs,
+    rail: lp.sourceKind === 'cooperative_pool' ? 'bank' : 'mobile_money',
+    complianceRegions: [lp.country],
+    riskProfile: lp.riskProfile,
+    availability: lp.availability,
+    online: lp.online,
+    connectorIds: [],
+    reserveAccess: [],
+    fxModes: ['direct'],
+    costCurve: [
+      { utilizationRange: [0, 0.4], feeBps: Math.round(lp.tradingFees * 100) },
+      { utilizationRange: [0.4, 0.7], feeBps: Math.round(lp.tradingFees * 130) },
+      { utilizationRange: [0.7, 0.95], feeBps: Math.round(lp.tradingFees * 200) },
+      { utilizationRange: [0.95, 1.01], feeBps: Math.round(lp.tradingFees * 400) },
+    ],
+  };
+}
+
 /**
- * Seed the Capability Graph from kernel LP data.
- * Returns the capabilities that would be published (the caller publishes them).
+ * Build a CapabilityCompilerInput from kernel LP data.
+ * (Transitional — eventually the compiler reads directly from the LP Profile store.)
  */
-export function seedCapabilitiesFromKernel(
-  lps: LiquidityProvider[],
-  environment: Environment,
-): { capabilities: PublishableCapability[]; environment: Environment } {
-  const capabilities: PublishableCapability[] = [];
-  for (const lp of lps) {
-    if (!lp.online) continue;
-    capabilities.push(...deriveCapabilitiesFromLP(lp));
-  }
-  return { capabilities, environment };
+export function compilerInputFromKernel(lps: LiquidityProvider[]): CapabilityCompilerInput {
+  return {
+    lpProfiles: lps.map(lpProfileFromKernel),
+    connectors: [] as ConnectorEntry[],
+    complianceRules: [],
+    treasuryPermissions: lps.map((lp) => ({
+      ownerId: lp.id,
+      mayRequireReserve: true,
+      mayRequireCollateral: false,
+    })),
+  };
 }

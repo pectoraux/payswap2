@@ -96,14 +96,14 @@ export interface FinancialKnowledgeGraph {
  */
 export class NoOpFinancialKnowledgeGraph implements FinancialKnowledgeGraph {
   capability(): CapabilityGraph {
-    // Returns a no-op CapabilityGraph shell; real projection wired later.
-    return new (class implements CapabilityGraph {
-      publish(): void {}
-      withdraw(): void {}
-      forLP(): import('../capability/types').LPCapability[] { return []; }
-      canMove(): import('../capability/types').LPCapability[] { return []; }
-      all(): import('../capability/types').LPCapability[] { return []; }
-    })();
+    // No-op CapabilityGraph shell (compiled projection; real one wired in M-RT-2).
+    const noop: CapabilityGraph = {
+      forOwner(): import('../capability/types').LPCapability[] { return []; },
+      canMove(): import('../capability/types').LPCapability[] { return []; },
+      all(): import('../capability/types').LPCapability[] { return []; },
+      replaceAll(): void {},
+    };
+    return noop;
   }
 
   route(): RouteGraph {
