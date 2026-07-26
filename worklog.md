@@ -2023,3 +2023,40 @@ Stage Summary:
 - Kernel changes: 0. Implementation code changes: 0 (Phase 1 = design only).
 - Lint: clean. Dev server: healthy.
 - Next: Phase 2 implementation begins with M-RT-1 (Runtime Core + 14-stage pipeline scaffold + Event Store + Domain/Runtime event split + immediate projection runner + App Service back-compat shim).
+
+---
+Task ID: RT-ARCH-3 (PaySwap Runtime — Phase 1 v3: Final design, no code)
+Agent: main (Z.ai Code)
+Task: Final architecture revision per the third review. Additions: rename to "PaySwap Runtime" (runtime as product, everything else as interface); add Intent Engine separating Intent from Command (8 intent types: Payment/Refund/Transfer/Settlement/Mint/Reserve/Liquidity/Treasury); AI agents + Extensions + Simulator all emit Intents; split Runtime into four (Execution/Economic/Operational/Simulation) sharing Event Store + Read Models + Decision + Policy; Runtime Clock replacing Date.now() (sandbox runs 10×/100×/1000×); Scenarios as first-class versioned objects; Behaviors (not probabilities) for Merchant/Customer/LP actors; Autonomous 24/7 Digital Twin (SimCity model) with rewind/fast-forward; Explainability everywhere (every node answers Why/Why-not/Alternative/Evidence/Confidence/Policy/Cost/Risk); Runtime Memory (learned operational knowledge); change philosophy sentence to "Every financial intent becomes an explainable execution."
+
+Work Log:
+- Re-read v2 and the third review's additions. Mapped each addition to a concrete section.
+- Rewrote PROTOCOL-RUNTIME-ARCHITECTURE.md as v3 (supersedes v2 in place — one source of truth). Added "Changes from v2" table mapping all 12 additions.
+- §0 Philosophy: the one sentence — "Every financial intent becomes an explainable execution." — with its 5 implications (intent-first, universal, explainable, executable, reproducible).
+- §1 The Product: renamed to PaySwap Runtime; full diagram showing 4 runtimes + shared core; "Interfaces emit Intents, Runtime executes them, Interfaces read Read Models" invariant.
+- §2 Four runtimes: Execution (payments/refunds/settlements/routing), Economic (LP market/reserves/treasury/capital/yield), Operational (notifications/webhooks/analytics/audit/search/incidents), Simulation (sandbox/twin/forecasting/time-machine/what-if). All share Event Store + Read Models + Decision + Policy + Clock + Memory + graphs + Inspector.
+- §3 Intent Engine (the biggest addition): separates Intent from Command. Flow: MerchantIntent → normalize → resolve → validate → augment → TypedIntent → pipeline. 8 intent types. Contract with TypedIntent interface (id/kind/actor/environment/subject/desired/constraints/evidence/correlationId/causationId/source/failureInjection/createdAt). Why it's huge: AI/Extensions/Simulator all become intent emitters; replay = re-ingest the TypedIntent.
+- §4 Interfaces emit Intents: Dashboard/Admin/Twin/SDK/CLI/Mobile/API via Gateway; Extensions/AI via SDK. Same Intent Engine, same validation, no bypass.
+- §5 Execution pipeline revised: now 14 stages with stages 0-3 = Intent Engine (ingest/normalize/resolve/validate-augment) and stages 4-14 = execution. Every stage emits Domain Events + TraceNode + Decision.
+- §6-9 Engine homes: Execution Runtime (Settlement, Risk/Fraud); Economic Runtime (Treasury Allocator, Reserve, Liquidity Market); Operational Runtime (Notification/Webhook/Analytics/Audit/Search/Incident); Simulation Runtime (Clock/Scenarios/Behaviors/Autonomous Twin/Time Machine/Forecasting).
+- §9 Simulation Runtime internals: Scenarios as first-class versioned objects (actors/rules/timelines/weather/economy/traffic/connectorFailures/policyOverrides/behaviors); Behaviors catalog (Merchant: MorningRush/LunchRush/Weekend/Holiday/Promotion/Stockout; Customer: Impulse/SalaryDay/Vacation/Fraud/Dormant/Loyal; LP: Aggressive/Conservative/LiquidityCrisis/Expansion/Maintenance) — behaviors are (actor,clock,world)→Intent[] functions; Autonomous 24/7 Digital Twin (SimCity model — merchants grow, customers churn, LPs earn, connectors fail, treasury reallocates, seasonality rotates, memory learns); Time Machine (rewind = seekTo + rebuild); Forecasting (1000× for a virtual week).
+- §10 Cross-cutting engines in shared core: Decision, Policy, Scheduling.
+- §11 Runtime Clock: now()/speed()/pause()/resume()/seekTo()/branch(). Live=1× real time; sandbox=10×/100×/1000× virtual. Unlocks fast sandbox, free Time Machine, deterministic replay, virtual scheduled jobs.
+- §12 Runtime Memory: RuntimeFact store (corridor_pattern/lp_reliability/connector_health/seasonal_demand/fraud_pattern/customer_behavior). Examples: corridor KE-GH congested Fridays 16-20h → Settlement Engine avoids; LP Acacia 12% faster → Market boosts score. Facts consulted not obeyed; recorded as Evidence; decay over time. Twin is primary producer; live validates.
+- §13 Explainability everywhere: every TraceNode answers 8 questions (Why/Why-not/Alternative/Evidence/Confidence/Policy/Cost/Risk). Decision type becomes universal explainability record. Inspector renders uniformly.
+- §14-17 carried + refined from v2: Events (Domain vs Runtime), Event Store (audit/replay not read path), Two Graphs (Resource + Economic), API Gateway.
+- §18 End-to-end payment traced through all 14 stages including Intent Engine stages 0-3, Runtime Memory consultation, and simulator parity.
+- §19-20 Economic integrity + sandbox/live isolation (clock differs, execution path identical).
+- §21 Migration extended to 7 phases (A core → B projections → C engines → D read models + gateway → E two graphs + inspector → F simulation runtime → G runtime memory + integrity). Added Phase F (Simulation Runtime) and Phase G (Memory + Integrity) for the v3 additions.
+- §22 Roadmap revised to 13 milestones (M-RT-1..13): M-RT-1 now includes Intent Engine + Runtime Clock; M-RT-3 includes universal explainability; M-RT-10 = full Simulation Runtime (clock/scenarios/behaviors/autonomous twin/time machine/forecasting); M-RT-11 = Runtime Memory.
+- §23 Quality gates: added lint rule forbidding Date.now() in src/runtime/**; added autonomous-twin-runs-24/7 gate; added sandbox-1000×-sustains-1000-payments/sec perf gate; added Intent-catalog + Behavior-catalog + Scenario-format documentation gates.
+- §24 What doesn't change (frozen kernel, product surface, differentiators realized, Stripe as benchmark not limit).
+- §25 Scorecard: Architecture 6→10, Simulator integrity 6→10, Programmable-network capability partial→full.
+- §26 "Stop Redesigning. Begin Implementing." — architecture complete; next gains from execution.
+
+Stage Summary:
+- Deliverable: /home/z/my-project/PROTOCOL-RUNTIME-ARCHITECTURE.md (v3 FINAL, 983 lines, supersedes v2 in place).
+- Final design additions: Intent Engine (universal entry, 8 intent types, separates Intent from Command); four runtimes (Execution/Economic/Operational/Simulation) sharing one core; Runtime Clock (virtual time, 10×/100×/1000× sandbox); Scenarios as first-class versioned objects; Behaviors (not probabilities) for all actor types; Autonomous 24/7 Digital Twin (SimCity model); Runtime Memory (learned operational knowledge); Explainability everywhere (8 fields per node); rename to PaySwap Runtime; philosophy = "Every financial intent becomes an explainable execution."
+- Kernel changes: 0. Implementation code changes: 0 (Phase 1 = design only).
+- Lint: clean. Dev server: healthy.
+- User confirmed: stop redesigning, begin implementation. Phase 2 starts with M-RT-1 (Runtime Core + Intent Engine + 14-stage pipeline scaffold + Event Store + Domain/Runtime event split + immediate projection runner + Runtime Clock at 1×).

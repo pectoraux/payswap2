@@ -1,557 +1,635 @@
-# PaySwap Protocol Runtime — Architecture (Phase 1, v2: Revised)
+# PaySwap Runtime — Architecture (Phase 1, v3: Final)
 
-> **Status:** Architecture design. No implementation in this phase.
-> **Supersedes:** the earlier draft (v1) of this document. v1 mirrored Stripe's
-> internal command-handler-aggregate shape; v2 reframes around PaySwap's actual
-> objective.
-> **Governing rule:** No business logic in pages or API routes. The Runtime is
-> the product; every client — including the simulator — uses it. Every financial
-> operation follows one identical execution pipeline. Every workflow must be
-> **inspectable, replayable, explainable, and simulatable.**
-> **Kernel constraint:** The frozen kernel (`src/kernel/*`) is never modified.
-> Everything below is built **above** the kernel primitives.
+> **Status:** Final architecture design. No implementation in this phase.
+> **Supersedes:** v1 (Stripe-mirror) and v2 (programmable-network reframe).
+> v3 completes the design with the Intent Engine, the four-runtimes split,
+> the Runtime Clock, first-class Scenarios & Behaviors, the autonomous
+> Digital Twin, Runtime Memory, and universal explainability.
+> **Philosophy (one sentence):** *Every financial intent becomes an
+> explainable execution.*
+> **Governing rule:** No business logic in pages or API routes. The Runtime
+> is the product; every client — including the simulator and AI agents —
+> emits Intents. Every execution is inspectable, replayable, explainable,
+> and simulatable.
+> **Kernel constraint:** The frozen kernel (`src/kernel/*`) is never
+> modified. Everything below is built **above** the kernel primitives.
 
 ---
 
-## Changes from v1 (the 15 corrections)
+## Changes from v2 (the final additions)
 
-| # | v1 | v2 |
+| # | v2 | v3 |
 |---|---|---|
-| Objective | "Build a better Stripe" | **"Build the execution runtime of a programmable financial network"** |
-| Orchestration | Replace services with Command handlers everywhere | **Keep Application Services** as the orchestration layer |
-| Event Store | The database; reads replay | **Audit / replay / sim / debug / inspect source only** — pages never replay |
-| Events | One bucket | **Domain Events vs Runtime Events** (business state vs operational) |
-| Settlement | A step inside payment | **Dedicated Settlement Engine — the product**; everything flows through it |
-| Treasury | Reserves + dashboard | **Capital Allocator** (idle capital, corridor/LP demand, FX, float, yield, risk) |
-| LP | Selection algorithm | **Liquidity Market** — LPs publish strategies; market clears; winner executes |
-| Reserves | Part of Treasury | **Separate Reserve Engine** (lock/release/collateral/mint-burn/backing/proofs) |
-| Explainability | Scattered | **Decision Engine** — every important decision is a recorded, explainable artifact |
-| Graphs | One Resource Graph | **Two graphs**: Resource (business) + Economic (money) |
-| Policy | Implicit | **Policy Engine** — can-settle/can-mint/can-refund/can-release/can-retry |
-| Time | Everything immediate | **Scheduling Engine** — delayed settlement, retries, reconciliation, rebalances |
-| API edge | Each route owns cross-cutting | **API Gateway** — auth/rate-limit/idempotency/versioning in one place |
-| Simulator | Calls services directly | **Runtime client** via SDK → REST/gRPC — indistinguishable from a merchant |
-| Spine | Layer list | **The execution pipeline is first-class** — one 14-stage path for every operation |
+| Name | "Protocol Runtime" | **"PaySwap Runtime"** — the product; everything else is an interface |
+| Philosophy | "Every operation follows the execution pipeline" | **"Every financial intent becomes an explainable execution"** |
+| Entry | Pipeline starts at Intent (a typed request) | **Intent Engine** separates Intent from Command: MerchantIntent → normalize → resolve → validate → typed Intent → pipeline |
+| Intent scope | Payment only | **8 intent types**: Payment, Refund, Transfer, Settlement, Mint, Reserve, Liquidity, Treasury — universal abstraction |
+| Clients | Call services | **Emit Intents** (Dashboard, Admin, Twin, SDK, CLI, Extensions, AI Agents, Mobile) |
+| Runtime shape | One runtime | **Four runtimes**: Execution, Economic, Operational, Simulation — sharing Event Store + Read Models + Decision + Policy |
+| Time | `Date.now()` everywhere | **Runtime Clock** — virtual time; sandbox runs 10×/100×/1000×; Time Machine/forecast/replay free |
+| Scenarios | Buttons (Holiday/Outage/Growth) | **First-class versioned objects** (actors, rules, timelines, weather, economy, traffic, connector failures) |
+| Actor modeling | Random probabilities | **Behaviors** (Merchant: Morning Rush/Lunch/Weekend/Holiday/Promotion/Stockout; Customer: Impulse/Salary/Vacation/Fraud/Dormant/Loyal; LP: Aggressive/Conservative/Crisis/Expansion/Maintenance) — behaviors produce intents |
+| Digital Twin | Run-once simulation | **Autonomous 24/7 world** (SimCity model) — merchants grow, customers churn, LPs earn, connectors fail, treasury reallocates; rewind/fast-forward |
+| Explainability | Decision Engine only | **Everywhere** — every node answers Why/Why-not/Alternative/Evidence/Confidence/Policy/Cost/Risk |
+| Memory | Analytics only | **Runtime Memory** — learned operational knowledge (corridor congestion patterns, LP reliability, seasonal demand) |
 
 ---
 
-## 0. The Objective and the One Rule
+## 0. The Philosophy
 
-> **Objective:** Build the execution runtime of a programmable financial
-> network.
+> **Every financial intent becomes an explainable execution.**
 
-This is not a slogan. It changes implementation decisions:
+This single sentence is the philosophy of the whole system. It implies five
+non-negotiable properties:
 
-- The **Runtime is the product**. Merchant Dashboard, Admin, Simulator,
-  Developer SDK, CLI, Mobile, Extensions, and the public API are all
-  **clients** of one runtime. They differ by surface, not by execution path.
-- **Settlement is the product**, not a side effect of payment. PaySwap's
-  differentiator is *programmable settlement*, so settlement gets a dedicated
-  engine that every money movement flows through.
-- **Programmable liquidity is real.** LPs are a market with strategies and
-  clearing, not a lookup table.
-- **Stripe is the benchmark for experience, not the limit for capability.**
-  We keep Stripe's discipline (uniform pipeline, immediate projections,
-  explainable traces) and add what Stripe doesn't have: a treasury allocator,
-  a liquidity market, a reserve engine, a digital twin, transparent routing.
-
-**The One Rule (unchanged, sharpened):**
-
-> No business logic in pages or API routes. Every financial operation flows
-> through one execution pipeline. Application Services orchestrate; Domain
-> Services and Engines decide; the Protocol Runtime executes and records. Every
-> workflow is inspectable, replayable, explainable, and simulatable.
+1. **Intent-first.** Nothing mutates state without first being expressed as a
+   typed Intent. The runtime never accepts "do X" — it accepts "I intend X,
+   for these reasons, under these constraints."
+2. **Universal.** The same Intent abstraction covers payments, refunds,
+   transfers, settlements, mints, reserve moves, liquidity actions, and
+   treasury operations. One shape in; one shape out.
+3. **Explainable.** Every stage of execution answers
+   *Why? Why not? Alternative? Evidence? Confidence? Policy? Cost? Risk?* —
+   not just the "important" decisions. Explainability is the default, not an
+   add-on.
+4. **Executable.** An Intent is not a wish; it drives the 14-stage pipeline
+   to completion (or declared failure with compensation).
+5. **Reproducible.** Because an Intent is typed and recorded, replaying it
+   reproduces the execution. The simulator emits the same Intents as
+   production. The Time Machine rewinds and fast-forwards them.
 
 ---
 
-## 1. The Execution Pipeline — the Spine
+## 1. The Product: PaySwap Runtime
 
-Every financial operation — **payment, payout, refund, subscription charge,
-invoice settlement, wallet transfer, treasury operation** — follows the
-identical 14-stage pipeline. This consistency is what makes the system
-cohesive and what makes the simulator indistinguishable from production.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  1.  INTENT              — what the client wants (a typed request)│
-│  2.  VALIDATION          — schema + business invariants           │
-│  3.  POLICY EVALUATION   — can this actor do this, here, now?     │
-│  4.  RISK & FRAUD        — scoring, screening, holds              │
-│  5.  TREASURY & RESERVE  — allocate capital, lock reserves        │
-│      ALLOCATION                                                   │
-│  6.  LIQUIDITY MARKET    — LP strategies → score → clear → winner │
-│      (LP SELECTION)                                               │
-│  7.  SETTLEMENT PLANNING — connector + rail + FX + hops + timing  │
-│  8.  EXECUTION           — drive connectors / chain / banks       │
-│  9.  LEDGER POSTING      — double-entry, immutable                │
-│  10. EVENT EMISSION      — Domain Events appended to the store    │
-│  11. PROJECTION UPDATES  — read models updated immediately        │
-│  12. NOTIFICATIONS &     — webhooks queued, emails/SMS sent       │
-│      WEBHOOKS                                                     │
-│  13. ANALYTICS           — metrics, LTV, corridor stats           │
-│  14. PROTOCOL INSPECTION — trace node written for every stage     │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Properties of the pipeline:**
-- **Uniform.** The same 14 stages run for a $5 M-Pesa payment and a $500k
-  treasury rebalance. Stage 7 (Settlement Planning) is where the
-  differentiation lives; the surrounding stages are identical.
-- **Stage-local decisions.** Each stage owns one decision, recorded as a
-  **Decision** artifact (Layer: Decision Engine). The trace shows every
-  decision's score, confidence, alternatives, and tradeoffs.
-- **Resumable.** Because every stage emits Domain Events and a trace node,
-  a paused operation resumes from the last committed stage. The Scheduling
-  Engine (Layer: Scheduling) can defer a stage ("settle in 4 hours").
-- **Replayable.** Replaying an operation's Domain Events reproduces the exact
-  stage sequence and decisions. The simulator re-runs the same pipeline with
-  injected failures.
-- **Inspectable.** Stage 14 writes one trace node per stage per operation;
-  the Protocol Inspector renders the full tree.
-
-**Where the pipeline lives:** `src/runtime/pipeline/`. It is the single
-orchestrator. Application Services construct an Intent and hand it to the
-pipeline; they do not implement stages themselves.
-
----
-
-## 2. Current-State Assessment (carry forward)
-
-### Keep
-- **Application Services** (`src/services/*`) — they stay as the orchestration
-  seam. `PaymentService.create()` remains the public entry; internally it
-  builds an Intent and drives the pipeline rather than writing Prisma.
-- **Projection pattern** (`src/services/projections/*`) — the side-effect
-  pattern is correct; it is promoted into the Runtime with a Domain/Runtime
-  event split and immediate projection.
-- **Thin API routes** — they thin further to "validate → call App Service →
-  return" behind a shared API Gateway.
-- **Frozen kernel primitives** — `Command`, `Transition`, `Entity`,
-  `Capability`, `Evidence`, `Proposal`, plus the pure-function engines
-  (`OptimizationEngine`, `treasury-ai`, `lp-lifecycle`, `STATE_MACHINES`,
-  `Constitution`, `financial-graph`). The Runtime calls these as pure
-  functions; it never edits them.
-- **Protocol domain modules** — `protocol/{ledger,settlement,liquidity-network,
-  treasury-v2,connectors-v2,resilience,security,ops,economics}`. Formalized
-  behind engine/driver contracts.
-
-### Build (the v2 layers)
-- The **execution pipeline** as a first-class orchestrator.
-- Dedicated engines: **Settlement, Treasury Allocator, Reserve, Liquidity
-  Market, Decision, Policy, Scheduling, Risk/Fraud**.
-- **Two graphs** (Resource + Economic).
-- **Event Store** as audit/replay/sim/debug/inspect source (not the read path).
-- **Immediate projections** → read models (pages never replay).
-- **Domain vs Runtime event** separation.
-- **API Gateway** consolidating cross-cutting edge concerns.
-- **Simulator as Runtime client** via SDK → REST.
-
----
-
-## 3. The Product Reframe — Runtime is the Product
+The Runtime **is** the product. Everything else is an interface to it.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  CLIENTS (all are peers; all use the same surfaces)              │
-│  Merchant Dashboard · Admin · Simulator · Developer SDK · CLI ·  │
-│  Mobile Apps · Extensions · Public API                           │
+│  INTERFACES (all are peers; all emit Intents)                    │
+│  Merchant Dashboard · Admin Console · Digital Twin ·             │
+│  Developer SDK · CLI · Extensions · AI Agents · Mobile Apps ·    │
+│  Public API                                                      │
 └───────────────────────────┬──────────────────────────────────────┘
-                            │  SDK / REST / gRPC
+                            │  Intent
                             ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  API GATEWAY                                                      │
-│  Authentication · Rate limiting · Idempotency · Versioning ·      │
-│  Request logging · Quotas                                         │
-└───────────────────────────┬──────────────────────────────────────┘
-                            │
-                            ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  APPLICATION SERVICES  (orchestration — the public API of runtime)│
-│  PaymentService · PayoutService · RefundService ·                 │
-│  InvoiceService · SubscriptionService · WalletService ·           │
-│  TreasuryService                                                  │
-│  Each: build Intent → drive Pipeline → return Read Model handle   │
-└───────────────────────────┬──────────────────────────────────────┘
-                            │
-                            ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  PROTOCOL RUNTIME — the execution pipeline (§1)                   │
-│  14 stages, each delegating to Domain Services / Engines          │
-└───────────────────────────┬──────────────────────────────────────┘
-                            │
-            ┌───────────────┼───────────────┐
-            ▼               ▼               ▼
-┌──────────────────┐ ┌──────────────┐ ┌──────────────────┐
-│ DOMAIN SERVICES  │ │   ENGINES    │ │   RESOURCE &     │
-│ Validation       │ │ Settlement   │ │   ECONOMIC GRAPH │
-│ Policy           │ │ Treasury     │ │   (two graphs)   │
-│ Risk & Fraud     │ │ Allocator    │ └──────────────────┘
-│ Ledger           │ │ Reserve      │
-│ Connector Drivers│ │ Liquidity    │
-│                  │ │ Market       │
-│                  │ │ Decision     │
-│                  │ │ Scheduling   │
-└────────┬─────────┘ └──────┬───────┘
-         │                  │
-         ▼                  ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  EVENT STORE  (append-only; audit / replay / sim / debug / inspect)│
-│  Domain Events (business state) · Runtime Events (operational)    │
-└───────────────────────────┬──────────────────────────────────────┘
-                            │  project immediately (same transaction)
-                            ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  PROJECTIONS → READ MODELS                                        │
-│  PaymentView · CustomerView · LedgerView · TreasuryView ·         │
-│  ActivityView · WebhookQueue · AnalyticsView ·                    │
-│  ResourceGraphView · EconomicGraphView · StateTimelineView ·      │
-│  DecisionLogView                                                  │
-└───────────────────────────┬──────────────────────────────────────┘
-                            │  clients READ ONLY from read models
-                            ▼
-                       [CLIENTS]
+│  PAYSWAP RUNTIME                                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────┐│
+│  │ Execution    │  │ Economic     │  │ Operational  │  │Simulat-││
+│  │ Runtime      │  │ Runtime      │  │ Runtime      │  │ion     ││
+│  │              │  │              │  │              │  │Runtime ││
+│  │ payments     │  │ LP market    │  │ notifications│  │ sandbox││
+│  │ refunds      │  │ reserves     │  │ webhooks     │  │ twin   ││
+│  │ settlements  │  │ treasury     │  │ analytics    │  │ forecst││
+│  │ routing      │  │ capital      │  │ audit        │  │ time-m ││
+│  │              │  │ yield        │  │ search       │  │ what-if││
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └───┬────┘│
+│         └────────────────┬┴────────────────┬┴──────────────┘     │
+│                          ▼                 ▼                     │
+│        ┌─────────────────────────────────────────┐               │
+│        │  SHARED CORE                             │               │
+│        │  Intent Engine · Decision Engine ·       │               │
+│        │  Policy Engine · Scheduling Engine ·     │               │
+│        │  Runtime Clock · Runtime Memory ·        │               │
+│        │  Event Store · Read Models ·             │               │
+│        │  Resource Graph + Economic Graph ·       │               │
+│        │  Protocol Inspector                      │               │
+│        └─────────────────────────────────────────┘               │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-**The invariant:** Clients write Intents (via App Services) and read Read
-Models. They never touch the Event Store directly, never replay events, and
-never call Engines directly. The pipeline is the only write path; read models
-are the only read path.
+**The invariant:** Interfaces emit Intents. The Runtime executes them.
+Interfaces read Read Models. There is no other path.
 
 ---
 
-## 4. Application Services — Kept as Orchestration
+## 2. The Four Runtimes
 
-Application Services stay. They are **not** replaced by per-command handlers.
-A service method is the canonical public entry for a business operation; it
-builds an Intent and drives the pipeline.
+The Runtime is split into four concerns. Each is independently evolvable.
+All four share one core (Event Store, Read Models, Decision Engine, Policy
+Engine, Runtime Clock, Runtime Memory, graphs, Inspector).
+
+| Runtime | Owns | Does not own |
+|---|---|---|
+| **Execution** | payments, refunds, settlements, routing, fulfillment | capital allocation, LP selection logic, notifications |
+| **Economic** | LP market, reserves, treasury, capital, yield, FX | payment lifecycle, webhooks |
+| **Operational** | notifications, webhooks, analytics, audit, search, incident response | money movement |
+| **Simulation** | sandbox, digital twin, forecasting, time machine, what-if, scenarios, behaviors | live money movement |
+
+**Why split.** Concerns that change for different reasons (a new webhook
+delivery retry policy vs. a new LP pricing model vs. a new simulator
+behavior) live in different runtimes. The shared core prevents
+incoherence: the Decision Engine, Policy Engine, and Event Store are
+literally the same code across all four.
+
+**Cross-runtime calls.** The Execution Runtime's payment pipeline calls the
+Economic Runtime's Treasury Allocator at stage 5 and Liquidity Market at
+stage 6. These are in-process calls today (same Next.js process); the seam
+allows them to become separate services later without changing call sites.
+
+---
+
+## 3. The Intent Engine — the Universal Entry
+
+This is the biggest addition in v3. **Intent is separated from Command.**
+
+A Command says *do X*. An Intent says *I want outcome Y, here is my
+understanding of the situation, please figure out how*. The runtime
+normalizes, resolves, and validates the Intent before any pipeline stage
+runs.
+
+### 3.1 The Intent flow
+
+```
+Merchant says:  "Charge Alice $120"
+        │
+        ▼  (raw merchant request)
+  MerchantIntent
+        │
+        ▼  Intent Engine:
+        │   1. Normalize    — canonicalize amounts, currencies, casing
+        │   2. Resolve      — "Alice" → customer record; "$" → USD; merchant → org
+        │   3. Validate     — schema + business invariants + environment
+        │   4. Augment      — attach evidence, context, actor scope, correlation
+        ▼
+  Typed Intent  (PaymentIntent)
+        │
+        ▼  Execution Pipeline (14 stages)
+        ▼
+  Explainable Execution  (read model + trace + decisions)
+```
+
+### 3.2 The eight intent types
+
+Every financial operation is one of:
+
+| Intent type | Example | Runtime |
+|---|---|---|
+| `PaymentIntent` | "Charge Alice $120" | Execution |
+| `RefundIntent` | "Refund payment p_abc, $30" | Execution |
+| `TransferIntent` | "Move 5k from wallet A to wallet B" | Execution |
+| `SettlementIntent` | "Settle corridor KE→GH for 25k GHS" | Execution |
+| `MintIntent` | "Mint 10k TWINGHS backed by fiat reserve" | Economic |
+| `ReserveIntent` | "Lock 8k GHS reserve for payment p_abc" | Economic |
+| `LiquidityIntent` | "LP Acacia offers 50k GHS at 110bps" | Economic |
+| `TreasuryIntent` | "Rebalance: shift 20k from GH reserve to KE" | Economic |
+
+### 3.3 Contract
 
 ```ts
-class PaymentService {
-  async create(params: CreatePaymentParams): Promise<PaymentResult> {
-    // 1. Build a typed Intent
-    const intent = PaymentIntent.from(params);
+interface IntentEngine {
+  // Entry: a raw merchant/client request becomes a typed Intent.
+  ingest(raw: MerchantIntent, ctx: RequestContext): Promise<TypedIntent>;
 
-    // 2. Hand to the pipeline; the pipeline runs the 14 stages
-    const handle = await pipeline.execute({
-      intent,
-      actor: params.actor,
-      environment: params.environment,
-      source: params.source ?? 'rest',
-    });
+  // Resolve references ("Alice" → customerId), validate, augment.
+  normalize(raw: MerchantIntent): NormalizedIntent;
+  resolve(n: NormalizedIntent, ctx: RequestContext): Promise<ResolvedIntent>;
+  validate(r: ResolvedIntent): ValidationResult;
+  augment(r: ResolvedIntent, ctx: RequestContext): TypedIntent;
+}
 
-    // 3. Return a handle to the read model (NOT a replay)
-    return paymentView.get(handle.aggregateId);
-  }
+// A TypedIntent is what the pipeline accepts. It is serializable,
+// replayable, and inspectable.
+interface TypedIntent {
+  id: string;
+  kind: IntentKind;                 // 'payment'|'refund'|'transfer'|...
+  actor: { id: string; role: string; orgId?: string };
+  environment: 'sandbox' | 'live';
+  subject: ResolvedSubject;         // the resolved customer/payment/wallet/...
+  desired: DesiredOutcome;          // amount, currency, corridor, method, ...
+  constraints: IntentConstraints;   // max cost bps, max risk, deadline, ...
+  evidence: EvidenceCitation[];     // kernel evidence primitive
+  correlationId: string;
+  causationId?: string;             // intent that caused this one
+  source: 'dashboard'|'admin'|'twin'|'sdk'|'cli'|'extension'|'ai-agent'|'mobile'|'api';
+  failureInjection?: FailureInjection;   // simulator only
+  createdAt: number;                // Runtime Clock time (§11)
 }
 ```
 
-**Why keep services instead of pure command handlers:**
-- A service method is a higher-level, business-named operation
-  (`createPayment`, `refund`, `rebalance`). Hundreds of fine-grained command
-  handlers become a maintenance burden PaySwap doesn't need.
-- Services are the natural seam for the SDK/REST surface a merchant calls.
-- The pipeline (not the service) enforces uniformity. The service is thin:
-  build intent → execute → return read model.
+### 3.4 Why this is huge
 
-**Back-compat:** existing service method signatures stay. Internally they
-switch from "write Prisma + emit to in-memory bus" to "build intent → drive
-pipeline." Existing callers (API routes, world simulator during migration)
-keep working.
+- **AI agents never manipulate the runtime directly.** They produce Intents.
+  `AI → Intent → Runtime`. The runtime validates and refuses anything the
+  actor isn't allowed to do. No AI ever calls a service method.
+- **Extensions never call services.** They emit Intents.
+  `Extension → Intent → Runtime`. Same path, same validation, same
+  explainability. An extension can't bypass policy.
+- **The simulator emits Intents.** `Twin → Intent → Runtime`. The twin is
+  just another client. A simulated payment is structurally identical to a
+  real one because it IS a real one, in the sandbox environment.
+- **Replay is trivial.** To replay an execution, re-ingest the original
+  TypedIntent. To branch ("what if we had chosen the other LP?"), mutate
+  the Intent's constraints and re-ingest.
 
 ---
 
-## 5. The Protocol Runtime — Engines
+## 4. Interfaces Emit Intents
 
-Each engine owns one stage (or a tightly-coupled cluster of stages) of the
-pipeline. Engines are **decision services**: they read the current world
-state, consult the kernel's pure functions, and return a **Decision** (§5.7)
-that the pipeline records and acts on. Engines never write Prisma directly;
-they return decisions that become Domain Events, which projections turn into
-read-model writes.
+All clients are peers. None call services directly; none manipulate the
+runtime. They all emit Intents through one of two surfaces:
 
-### 5.1 Settlement Engine — the product
+- **REST/gRPC** (Dashboard, Admin, Mobile, Public API, Simulator, CLI)
+- **In-process SDK** (Extensions, AI Agents — same contract, no network hop)
 
-**Why it's the biggest addition.** v1 treated settlement as a step inside
-payment. For PaySwap, **settlement is the product.** Every money movement —
-payments, payouts, refunds, wallet transfers, treasury rebalances — flows
-through one Settlement Engine.
-
-**Stages it owns:** 7 (Settlement Planning) and 8 (Execution), in concert
-with the Liquidity Market (stage 6) and Reserve Engine (stage 5).
-
-**Internal flow:**
 ```
-connector selection → LP selection (from Market) → reserve reservation →
+Merchant Dashboard ─┐
+Admin Console ──────┤
+Digital Twin ───────┤
+Developer SDK ──────┼──► API Gateway ──► Intent Engine ──► Pipeline
+CLI ────────────────┤
+Mobile Apps ────────┤
+Public API ─────────┘
+Extensions ─────────┐
+AI Agents ──────────┴──► SDK ──► Intent Engine ──► Pipeline
+```
+
+**The API Gateway** (§17) still owns authentication, rate limiting,
+idempotency, versioning, correlation. Behind it, every route does one
+thing: translate the HTTP request into a `MerchantIntent` and hand it to
+the Intent Engine.
+
+**Extensions and AI Agents** use the SDK, which calls the same Intent
+Engine in-process. The SDK enforces the same validation; an extension
+cannot bypass policy any more than a REST caller can.
+
+---
+
+## 5. The Execution Pipeline (revised)
+
+The 14-stage pipeline now **starts with the Intent Engine** (stages 0–3),
+then runs the execution stages (4–14). Every stage emits Domain Events and
+a TraceNode; every decision-producing stage records a Decision.
+
+```
+ ┌ Intent Engine ──────────────────────────────────────────┐
+ │  0.  INGEST       — raw request → MerchantIntent        │
+ │  1.  NORMALIZE    — canonicalize amounts/currencies     │
+ │  2.  RESOLVE      — resolve references to concrete IDs  │
+ │  3.  VALIDATE &   — schema + invariants + policy gate;  │
+ │      AUGMENT        attach evidence + correlation       │
+ └─────────────────────────────────────────────────────────┘
+ ┌ Execution ──────────────────────────────────────────────┐
+ │  4.  POLICY        — can this actor do this, here, now? │
+ │  5.  RISK & FRAUD  — scoring, screening, holds          │
+ │  6.  TREASURY &    — allocate capital, lock reserves    │
+ │      RESERVE                                             │
+ │  7.  LIQUIDITY     — LP market: quote → clear → winner  │
+ │      MARKET                                              │
+ │  8.  SETTLEMENT    — connector + rail + FX + hops       │
+ │      PLANNING                                            │
+ │  9.  EXECUTION     — drive connectors / chain / banks   │
+ │  10. LEDGER        — double-entry, immutable            │
+ │  11. EVENT         — Domain Events appended to store    │
+ │      EMISSION                                            │
+ │  12. PROJECTION    — read models updated immediately    │
+ │  13. NOTIFICATIONS — webhooks queued, emails/SMS sent   │
+ │      & WEBHOOKS                                          │
+ │  14. ANALYTICS +   — metrics, LTV; trace node per stage │
+ │      INSPECTION                                          │
+ └─────────────────────────────────────────────────────────┘
+```
+
+**Properties (carried from v2, sharpened):**
+- **Uniform.** Every intent kind runs the same stages. Stage 8 (Settlement
+  Planning) is where differentiation lives.
+- **Resumable.** Every stage commits Domain Events; a paused intent resumes
+  from the last committed stage. The Scheduling Engine (§10) can defer a
+  stage ("settle in 4 hours").
+- **Replayable.** Re-ingest the TypedIntent → reproduce the execution.
+- **Explainable.** Every stage records a Decision (§13) answering
+  Why/Why-not/Alternative/Evidence/Confidence/Policy/Cost/Risk.
+- **Inspectable.** Stage 14 writes one TraceNode per stage per intent; the
+  Protocol Inspector renders the full tree.
+
+---
+
+## 6. Execution Runtime — Engines
+
+Owns the money-movement lifecycle. Engines here are decision services that
+read world state, call kernel pure functions, and return Decisions the
+pipeline records and acts on. They never write Prisma directly.
+
+### 6.1 Settlement Engine — the product
+Owns stages 8–9. Every payment, payout, refund, wallet transfer, and
+treasury movement flows through it.
+```
+connector selection → LP allocation (from Market) → reserve reservation →
 FX → liquidity routing → execution → confirmation → reconciliation
 ```
+Reuses `protocol/settlement/*` + kernel `PlanExecutor`.
 
-**Contract:**
-```ts
-interface SettlementEngine {
-  plan(req: SettlementPlanRequest): Promise<SettlementPlan>;
-  execute(plan: SettlementPlan): Promise<SettlementResult>;
-  reconcile(settlementId: string): Promise<ReconciliationResult>;
-}
-
-interface SettlementPlan {
-  legs: SettlementLeg[];          // ordered money movements
-  connectorChoices: { legId: string; driverId: string }[];
-  lpAllocations: { legId: string; lpId: string; amount: number }[];
-  fxHops: FXHop[];
-  timing: 'immediate' | 'scheduled' | 'deferred';
-  collateral: CollateralPlan;
-  rationale: Decision;            // why this plan (see Decision Engine)
-}
-```
-
-**Reuses:** `protocol/settlement/*` (escrow, net-settlement, auctions,
-disputes, collateral/capacity vaults, manual-settlement) and the kernel's
-`PlanExecutor` (the unified sim/production executor). The Settlement Engine
-wraps these behind one contract and drives them through the pipeline.
-
-### 5.2 Treasury — Capital Allocator
-
-**Reframe:** Treasury stops being "reserves + dashboard" and becomes an
-**optimization engine** that continuously allocates capital.
-
-**Inputs it optimizes across:**
-```
-idle capital · corridor demand · LP demand · expected traffic ·
-FX exposure · float · yield · risk
-```
-
-**Contract:**
-```ts
-interface TreasuryAllocator {
-  // At stage 5 of the pipeline: how do we fund this operation?
-  allocate(req: AllocationRequest): Promise<AllocationDecision>;
-
-  // Continuous: rebalance idle capital across corridors/LPs/yield.
-  rebalance(): Promise<RebalanceDecision[]>;
-
-  // Forward: expected demand → pre-position capital.
-  forecast(): Promise<ForecastPlan>;
-}
-
-interface AllocationDecision {
-  reserveDraws: ReserveDraw[];     // which reserves, how much
-  stablecoinSwaps: Swap[];
-  lpPreFunding?: LPFunding;
-  yieldPlacement?: YieldPlacement; // park idle capital earning yield
-  rationale: Decision;
-}
-```
-
-**Reuses:** `kernel/optimization-engine.ts` (5 candidates, 8-objective
-scoring), `kernel/treasury-ai.ts` (continuous recommendations),
-`protocol/treasury-v2/*` (yield, efficiency, limits, backing). The Allocator
-calls these as pure functions; the pipeline applies the resulting decision.
-
-### 5.3 Reserve Engine — separated from Treasury
-
-**Why separate.** v1 had reserves inside Treasury. Reserves have their own
-accounting (twin-token backing) and their own lifecycle (lock/release). A
-dedicated engine keeps twin accounting clean and lets Treasury focus on
-allocation.
-
-**Owns:** reserve locking, release, collateral management, mint/burn
-authorization, backing verification, exposure tracking, fiat proofs,
-liquidity snapshots.
-
-**Contract:**
-```ts
-interface ReserveEngine {
-  lock(req: LockRequest): Promise<LockResult>;       // stage 5
-  release(lockId: string): Promise<ReleaseResult>;
-  mint(req: MintRequest): Promise<MintResult>;       // twin token
-  burn(req: BurnRequest): Promise<BurnResult>;
-  verifyBacking(): Promise<BackingProof>;            // twin supply == reserves
-  snapshot(): Promise<ReserveSnapshot>;
-}
-```
-
-**Reuses:** `kernel/reserve.ts`, `kernel/twin-token.ts`,
-`protocol/twin-token/engine.ts`, `protocol/economics/fiat-proof.ts`. The
-Constitution invariant "twin token backed" (kernel) is enforced here as a
-hard check on every mint.
-
-### 5.4 Liquidity Engine — a Market
-
-**The largest architectural opportunity.** LPs stop being rows with balances;
-they become **market participants** that publish strategies. The runtime
-scores, the market clears, the winner executes.
-
-**LP strategy (what an LP publishes):**
-```ts
-interface LPStrategy {
-  pricingCurve: PricingCurve;        // fee as function of utilization/amount
-  riskAppetite: 'low'|'medium'|'high';
-  corridorPreferences: CorridorPref[]; // willing corridors with capacity
-  supportedRails: Rail[];             // mobile_money, bank, stablecoin, ...
-  reserveRequirements: Record<string, number>; // min collateral per corridor
-  latencyTarget: number;              // ms
-  utilizationTarget: number;          // 0..1 desired
-  yieldTarget: number;                // APR
-}
-```
-
-**Market flow (stage 6):**
-```
-operation intent → eligible LPs (by corridor + rail + capacity)
-  → each LP's pricingCurve quotes a fee
-  → runtime scores each quote (cost, speed, risk, reliability, reputation)
-  → market clears: winner(s) selected, possibly split across multiple LPs
-  → winning LPs execute (stage 8)
-  → decision recorded (why this LP, what was rejected, tradeoffs)
-```
-
-**Contract:**
-```ts
-interface LiquidityMarket {
-  // LP lifecycle
-  publishStrategy(lpId: string, strategy: LPStrategy): void;
-  updateStrategy(lpId: string, patch: Partial<LPStrategy>): void;
-  pause(lpId: string): void;
-
-  // Market operations (stage 6)
-  quote(req: QuoteRequest): Promise<LPQuote[]>;
-  clear(quotes: LPQuote[], req: ClearRequest): Promise<ClearingResult>;
-  // ClearingResult: winning LPs + allocations + rejected quotes + reasons
-
-  // Continuous
-  rebalance(): Promise<RebalanceDecision[]>;   // shift LP capital per strategy
-  explainSelection(operationId: string): LPSelectionExplanation;
-}
-```
-
-**Reuses:** `protocol/liquidity-network/*` (scoring, routing, capacity,
-pricing, health, forecast), `kernel/lp-lifecycle.ts` (stake/withdraw/slash
-state machine). The Market adds the **strategy publication + clearing**
-layer on top.
-
-### 5.5 Decision Engine — every decision is an artifact
-
-Every important decision in the pipeline produces a **Decision** — a
-first-class, recorded, explainable artifact. This is what makes PaySwap
-"explainable protocol execution" real.
-
-**Where decisions are produced:** LP selection, routing, treasury allocation,
-reserve movement, compliance screening, fraud scoring, settlement plan
-choice, FX path choice, retry/timeout choices.
-
-**Contract:**
-```ts
-interface Decision {
-  id: string;
-  kind: DecisionKind;   // 'lp_select'|'route'|'treasury_alloc'|'reserve_move'
-                        // |'compliance'|'fraud'|'settlement_plan'|'fx'|'retry'
-  subject: string;      // what was decided about (e.g. operation id)
-  choice: string;       // what was chosen
-  score: number;        // 0..1 confidence
-  confidence: number;   // 0..1
-  alternatives: { option: string; score: number; rejectedBecause: string }[];
-  tradeoffs: { dimension: string; delta: number }[];
-  constraints: { name: string; value: string }[];
-  evidence: EvidenceCitation[];   // kernel evidence primitive
-  reasoning: string;              // human-readable
-  ts: number;
-}
-```
-
-Decisions are stored in a `DecisionLogView` read model and rendered in the
-Protocol Inspector as expandable nodes. The kernel's `reasoning-engine.ts`
-and `confidence-engine.ts` provide the scoring backbone.
-
-### 5.6 Policy Engine — explicit, evaluable
-
-Stripe has lots of hidden policy. PaySwap exposes it. At stage 3, every
-operation is evaluated against an explicit policy set.
-
-**Questions the Policy Engine answers:**
-```
-Can this actor settle this amount in this corridor?
-Can this merchant mint twin tokens?
-Can this refund exceed the original payment?
-Can this reserve be released before settlement confirms?
-Can this LP be changed mid-operation?
-Can this failed step be retried? How many times?
-```
-
-**Contract:**
-```ts
-interface PolicyEngine {
-  evaluate(req: PolicyRequest): Promise<PolicyDecision>;
-  // PolicyDecision: ALLOW | DENY | REQUIRE_APPROVAL + reason + ruleId
-}
-
-interface PolicyRule {
-  id: string;
-  name: string;
-  when: PolicyCondition;     // e.g. amount > 50000 && corridor == 'NGN-GHS'
-  then: PolicyAction;        // ALLOW | DENY | REQUIRE_APPROVAL
-  scope: 'sandbox' | 'live' | 'both';
-}
-```
-
-Policy rules are data (stored, versioned, auditable), not hardcoded branches.
-Enterprise customers can later bring their own policy sets. Reuses
-`kernel/policy.ts` + `kernel/permission.ts` + `kernel/capabilities.ts`.
-
-### 5.7 Scheduling Engine — not everything is immediate
-
-**Owns:** deferred and recurring operations.
-
-**Examples:**
-```
-settle in 4 hours · retry failed webhook tomorrow · daily reconciliation ·
-reserve rebalance every 5 min · FX hedge at market open ·
-LP withdrawal after settlement window · end-of-day trial balance
-```
-
-**Contract:**
-```ts
-interface SchedulingEngine {
-  schedule(job: ScheduledJob): Promise<ScheduleHandle>;
-  cancel(handle: ScheduleHandle): Promise<void>;
-  due(now: number): Promise<ScheduledJob[]>;
-}
-
-interface ScheduledJob {
-  id: string;
-  kind: 'one_shot' | 'cron' | 'fixed_rate';
-  at?: number;              // epoch ms (one_shot)
-  cron?: string;            // (cron)
-  intervalMs?: number;      // (fixed_rate)
-  tz?: string;              // e.g. 'Africa/Accra'
-  command: RuntimeCommand;  // what to dispatch when due
-  retryPolicy?: RetryPolicy;
-}
-```
-
-When a job is due, the Scheduling Engine dispatches its command through the
-normal pipeline — scheduled work is just deferred pipeline work. Reuses the
-kernel's `WorkflowEngine` templates for multi-step scheduled workflows.
-
-### 5.8 Risk & Fraud Engine
-
-**Owns stage 4.** Scoring, screening, holds. Reuses `kernel/risk.ts` +
-`kernel/fraud.ts` + `protocol/security/*`. Output is a Decision
-(block / allow / hold-for-review) recorded in the trace.
+### 6.2 Risk & Fraud Engine
+Owns stage 5. Scoring, screening, holds. Reuses `kernel/risk.ts` +
+`kernel/fraud.ts` + `protocol/security/*`. Output: a Decision
+(block/allow/hold-for-review).
 
 ---
 
-## 6. Events — Domain vs Runtime
+## 7. Economic Runtime — Engines
 
-v1 put everything in one event bucket. v2 separates them. This makes replay
-clean: replaying Domain Events rebuilds business state; Runtime Events are
-operational telemetry that can be retained or discarded independently.
+Owns capital, liquidity, and reserves. Called by the Execution pipeline at
+stages 6–7.
 
-### 6.1 Domain Events (business state)
-Affect business state. Appended to the Event Store. Replaying them rebuilds
-aggregates and read models.
+### 7.1 Treasury Capital Allocator
+Owns stage 6 (with Reserve). Optimizes idle capital across corridor demand,
+LP demand, expected traffic, FX exposure, float, yield, risk. Reuses
+`kernel/optimization-engine.ts` + `kernel/treasury-ai.ts` +
+`protocol/treasury-v2/*`.
+
+### 7.2 Reserve Engine (separated from Treasury)
+Owns reserve locking/release, collateral, mint/burn authorization, backing
+verification, exposure, fiat proofs, liquidity snapshots. The Constitution
+invariant "twin token backed" is enforced here per mint. Reuses
+`kernel/reserve.ts` + `kernel/twin-token.ts` + `protocol/twin-token/engine.ts`.
+
+### 7.3 Liquidity Market
+LPs publish strategies (pricing curves, risk appetite, corridor prefs,
+supported rails, reserve requirements, latency, utilization, yield targets).
+The market quotes, clears, and the winner executes. Reuses
+`protocol/liquidity-network/*` + `kernel/lp-lifecycle.ts`.
+
+---
+
+## 8. Operational Runtime
+
+Owns everything that is not money movement but must react to it.
+
+| Engine | Owns |
+|---|---|
+| **Notification Engine** | email, SMS, in-app, push — Runtime Events only |
+| **Webhook Engine** | queue, sign, deliver, retry, dead-letter — Runtime Events only |
+| **Analytics Engine** | metrics, LTV, corridor stats, aggregates |
+| **Audit Engine** | immutable audit trail (reads Domain Events) |
+| **Search Engine** | indexed search across read models (payments, customers, decisions) |
+| **Incident Engine** | ops incidents, status page, SRE console |
+
+The Operational Runtime subscribes to the Event Store. It never participates
+in the execution pipeline's write path — it only reacts. This keeps
+money-movement latency unaffected by notification/analytics load.
+
+---
+
+## 9. Simulation Runtime
+
+This is where v3's biggest new ideas live: Runtime Clock, first-class
+Scenarios, Behaviors (not probabilities), the autonomous Digital Twin, Time
+Machine, and Forecasting.
+
+### 9.1 Runtime Clock (§11)
+The Simulation Runtime runs on a virtual clock. Sandbox time can be
+sped up 10×/100×/1000×, paused, rewound. Every scheduled job, every
+behavior tick, every seasonality curve reads `clock.now()`, never
+`Date.now()`.
+
+### 9.2 Scenarios as first-class objects
+
+A Scenario is a **versioned asset** — not a button. It declares the world's
+initial conditions and the rules that govern its evolution.
+
+```ts
+interface Scenario {
+  id: string;
+  version: number;                  // immutable; bumps create new versions
+  name: string;
+  description: string;
+
+  actors: {
+    merchants: MerchantActor[];
+    customers: CustomerActor[];
+    lps: LPActor[];
+    connectors: ConnectorActor[];
+  };
+
+  rules: {
+    seasonality: SeasonalityCurve[];        // traffic multipliers over time
+    weather: WeatherModel;                  // affects mobile-money uptime
+    economy: EconomyModel;                  // FX volatility, inflation
+    traffic: TrafficModel;                  // peak hours, corridors
+    connectorFailures: FailureSchedule[];   // planned outages
+    policyOverrides: PolicyRule[];          // scenario-specific policy
+  };
+
+  timeline: {
+    start: number;                          // Runtime Clock ms
+    duration: number;                       // ms (or open-ended for 24/7)
+    milestones: Milestone[];                // "harvest peak at day 14"
+  };
+
+  behaviors: BehaviorAssignment[];          // §9.3 — actors own behaviors
+}
+```
+
+Scenarios are stored, versioned, diffable, and shareable. A regression test
+is "run scenario v3 against current code; compare to baseline."
+
+### 9.3 Behaviors (not probabilities)
+
+Actors don't carry random probabilities. They carry **behaviors** — named
+patterns that produce Intents according to context (time, season, recent
+events). Behaviors are composable: a merchant can be in `MorningRush` +
+`Promotion` simultaneously.
+
+**Merchant behaviors:**
+```
+MorningRush · LunchRush · Weekend · Holiday · Promotion · Stockout
+```
+*MorningRush* emits high-volume small-ticket PaymentIntents 7–10am.
+*Promotion* multiplies volume and lowers avg ticket. *Stockout* suppresses
+a product line.
+
+**Customer behaviors:**
+```
+Impulse · SalaryDay · Vacation · Fraud · Dormant · Loyal
+```
+*SalaryDay* emits a burst of PaymentIntents on the 25th. *Fraud* emits
+Intents that the Risk Engine should flag. *Dormant* goes quiet for weeks.
+
+**LP behaviors:**
+```
+Aggressive · Conservative · LiquidityCrisis · Expansion · Maintenance
+```
+*Aggressive* publishes low-fee strategies to win share. *LiquidityCrisis*
+withdraws capacity and raises fees. *Expansion* publishes new corridors.
+
+**How behaviors produce Intents:** each behavior is a function
+`(actor, clock, world) → Intent[]` per tick. The Simulation Runtime
+dispatches those Intents through the normal pipeline. The result is a
+world that evolves organically — not a script.
+
+### 9.4 Autonomous Digital Twin (SimCity model)
+
+The twin stops being a "run-once" simulation. It becomes a **persistent
+24/7 world** in the sandbox environment:
 
 ```
-PaymentIntentReceived · PaymentValidated · PolicyPassed · RiskCleared ·
+Sandbox World (always running)
+  ├─ Merchants grow (LTV rises, new merchants appear)
+  ├─ Customers churn / reactivate
+  ├─ LPs earn yield, adjust strategies, occasionally enter crisis
+  ├─ Connectors fail and recover on schedules + randomly
+  ├─ Treasury reallocates capital per the Capital Allocator
+  ├─ Seasonality rotates (holiday peaks, harvest, salary days)
+  └─ Runtime Memory (§12) learns patterns from the running world
+```
+
+Operators can:
+- **Observe** the live sandbox world (dashboards read sandbox read models).
+- **Rewind** to any past Runtime Clock moment (Time Machine).
+- **Fast-forward** to see what happens next (Forecasting).
+- **Branch** ("what if connector X fails tomorrow?") — forks the world.
+- **Inject** a one-off Intent as any actor.
+
+Because the twin runs on the same Runtime as production (just sandbox
+environment + virtual clock), behaviors and outcomes are directly
+comparable to live.
+
+### 9.5 Time Machine
+Every Domain Event is timestamped with Runtime Clock time. Rewinding =
+reading events up to clock time T and rebuilding read-model snapshots.
+Fast-forwarding = letting the simulation run ahead. Both are free because
+the clock is virtual and events are immutable.
+
+### 9.6 Forecasting
+Run the twin 1000× faster for a virtual week. The Capital Allocator,
+Liquidity Market, and Treasury make real decisions on synthetic data. The
+forecast is a read model the treasury team can inspect: "if traffic grows
+15%, the GH reserve will hit critical on day 4 unless we pre-position 30k."
+
+---
+
+## 10. Cross-Cutting Engines (shared core)
+
+These live in the shared core and are called by all four runtimes.
+
+### 10.1 Decision Engine
+Every important decision is a recorded artifact (carried from v2). In v3,
+**every** decision-producing stage uses it — not just "big" ones.
+
+### 10.2 Policy Engine
+Explicit, evaluable rules (carried from v2). Answers can-settle / can-mint
+/ can-refund / can-release / can-retry. Applied at pipeline stage 4 and at
+every engine that mutates economic state.
+
+### 10.3 Scheduling Engine
+Deferred/recurring jobs (carried from v2). Jobs dispatch Intents through
+the pipeline on the Runtime Clock. Powers "settle in 4 hours," daily
+reconciliation, reserve rebalances, FX hedges, and the Simulation Runtime's
+behavior ticks.
+
+---
+
+## 11. Runtime Clock
+
+This sounds tiny; it is huge. **Everything uses the Runtime Clock instead
+of `Date.now()`.**
+
+```ts
+interface RuntimeClock {
+  now(): number;                    // current virtual ms
+  speed(): number;                  // 1× (live), 10×, 100×, 1000× (sandbox)
+  pause(): void;
+  resume(): void;
+  seekTo(ts: number): void;         // Time Machine: jump to a moment
+  branch(fromTs: number): RuntimeClock;   // fork for what-if
+}
+```
+
+**Why it unlocks everything:**
+- **Sandbox runs faster than reality.** A virtual week completes in
+  minutes. Forecasting and regression testing become practical.
+- **Time Machine is free.** Rewind = `clock.seekTo(pastTs)` + rebuild from
+  events. Fast-forward = `clock.setSpeed(1000)` + let behaviors fire.
+- **Replay is deterministic.** A recorded execution's timestamps are
+  virtual; replaying at any clock speed reproduces the same decisions.
+- **Scheduled jobs are virtual.** "Settle in 4 hours" in sandbox settles in
+  4 virtual hours (seconds at 1000×).
+
+**Live environment:** the clock runs at 1×, backed by real time. Sandbox:
+the clock runs at a configurable multiplier, backed by virtual time. The
+clock is part of the shared core; every engine and every read model reads
+`clock.now()`, never `Date.now()`.
+
+---
+
+## 12. Runtime Memory
+
+The runtime **remembers** learned operational knowledge — beyond analytics,
+beyond the Decision Log. Runtime Memory is a structured fact store the
+engines consult during execution.
+
+```ts
+interface RuntimeMemory {
+  record(fact: RuntimeFact): Promise<void>;
+  recall(query: MemoryQuery): Promise<RuntimeFact[]>;
+}
+
+interface RuntimeFact {
+  id: string;
+  kind: 'corridor_pattern'|'lp_reliability'|'connector_health'
+      |'seasonal_demand'|'fraud_pattern'|'customer_behavior';
+  subject: string;            // e.g. "corridor:KE-GH"
+  claim: string;              // "usually congested Friday 16:00-20:00"
+  evidence: EvidenceCitation[];
+  confidence: number;         // 0..1
+  observedCount: number;
+  lastObserved: number;       // Runtime Clock
+  decay?: number;             // confidence half-life
+}
+```
+
+**Examples:**
+- `corridor:KE-GH` "usually congested Friday 16:00-20:00" → the Settlement
+  Engine prefers alternative corridors on Friday afternoons.
+- `lp:Acacia` "settles 12% faster than market avg" → the Liquidity Market
+  boosts Acacia's speed score.
+- `connector:MTN-KE` "health degrades after 2am UTC" → the Connector
+  Runtime raises its failure probability window.
+- `customer:Alice` "salary-day burst on 25th" → the Risk Engine adjusts
+  baseline for that day.
+
+Runtime Memory is **consulted, not obeyed.** Every engine that consults a
+fact records it as Evidence in its Decision. Facts decay; stale facts lose
+confidence. The Simulation Runtime's autonomous twin is the primary
+producer of facts (it runs 24/7 and observes everything); live execution
+validates and refines them.
+
+---
+
+## 13. Explainability Everywhere
+
+In v2, the Decision Engine made *important* decisions explainable. In v3,
+**every node in the trace** answers the same eight questions. Explainability
+is the default.
+
+For every stage, every transition, every event:
+
+```
+Why?          — what triggered this (the Intent + prior events)
+Why not?      — what alternatives were considered and rejected
+Alternative?  — the rejected options, with their scores
+Evidence?     — the kernel EvidenceCitation[] cited
+Confidence?   — 0..1, with the contributing factors
+Policy?       — which policy rule(s) allowed or constrained this
+Cost?         — bps, fees, FX, opportunity cost
+Risk?         — score + the dimensions that produced it
+```
+
+**Implementation.** The Decision type (v2) becomes the universal
+explainability record. Every TraceNode carries one. The Protocol Inspector
+renders these eight fields uniformly — click any node, see the same panel.
+The Operational Runtime's Audit Engine indexes Decisions for cross-cutting
+queries ("show me every LP selection where confidence < 0.6 this week").
+
+---
+
+## 14. Events — Domain vs Runtime (carried from v2)
+
+**Domain Events** affect business state; replayed to rebuild aggregates and
+read models.
+```
+IntentReceived · IntentValidated · PolicyPassed · RiskCleared ·
 ReserveLocked · LPSelected · SettlementPlanned · SettlementExecuted ·
 LedgerPosted · PaymentCompleted · PaymentFailed · RefundCreated ·
 SettlementCompleted · ReserveReleased · TwinTokenMinted · TwinTokenBurned ·
@@ -559,53 +637,31 @@ EscrowCreated · EscrowReleased · LPStaked · LPWithdrawn · LPSlashed ·
 TreasuryRebalanced · CorridorFrozen · CorridorReopened
 ```
 
-### 6.2 Runtime Events (operational)
-Operational side-effects. Recorded (for inspection and ops) but **not**
-replayed to rebuild business state.
-
+**Runtime Events** are operational side-effects; retained for inspection
+and ops, not replayed to rebuild business state.
 ```
 WebhookQueued · WebhookDelivered · WebhookFailed ·
 ProjectionCompleted · ProjectionRebuilt ·
 NotificationSent · EmailDelivered · SmsDelivered ·
-AnalyticsUpdated · DecisionRecorded ·
+AnalyticsUpdated · DecisionRecorded · MemoryFactRecorded ·
 ScheduledJobFired · ScheduledJobCompleted ·
 ConnectorCalled · ConnectorHealthChanged ·
-CircuitBreakerTripped · CircuitBreakerReset
+CircuitBreakerTripped · CircuitBreakerReset ·
+BehaviorTicked · ScenarioStarted · ScenarioCompleted
 ```
 
-### 6.3 Store layout
-The Event Store has two logical streams per aggregate:
-- `domain:<aggregateId>` — Domain Events, append-only, source of truth.
-- `runtime:<aggregateId>` — Runtime Events, retained for inspection/ops,
-  independently prunable.
-
-The global log preserves total order across both. Projections subscribe to
-Domain Events for read-model writes; ops dashboards subscribe to Runtime
-Events for telemetry.
+Two logical streams per aggregate: `domain:<id>` (source of truth) and
+`runtime:<id>` (operational, independently prunable). The global log
+preserves total order.
 
 ---
 
-## 7. Event Store — Audit / Replay / Sim / Debug / Inspect (NOT the read path)
+## 15. Event Store (carried from v2, refined)
 
-**The key correction from v1:** the Event Store is **not** the database. It
-is the immutable record that powers audit, replay, simulation, debugging, and
-the Inspector. Normal pages **never** replay events — they read read models,
-which projections update **immediately** on append (within the same
-transaction).
+The Event Store is **audit / replay / sim / debug / inspect source only**.
+Pages never replay — they read read models, which projections update
+**immediately** on append (same transaction).
 
-```
-Application Service
-   ↓ (append Domain Events)
-Event Store  ───────────────────►  audit log
-   ↓ (publish, same txn)            replay source
-Projections                         simulator source
-   ↓ (write)                        debugging source
-Read Models  ──────────────────►   Inspector source
-   ↓
-Pages read here (never the store)
-```
-
-**Contract:**
 ```ts
 interface EventStore {
   append(streamId: string, events: UncommittedDomainEvent[],
@@ -614,390 +670,314 @@ interface EventStore {
   readAll(fromPosition: number, limit: number): Promise<StoredEvent[]>;
   snapshot(streamId: string): Promise<Snapshot | null>;
   loadAggregate<T>(streamId: string): Promise<{state: T; version: number}>;
-  // Replay = rebuild one read model from domain events (admin/ops only)
   replayProjection(name: string, fromPosition: number): Promise<void>;
 }
 ```
 
-**Why this matters:**
-- **Reads are fast and simple** — read-model queries, no replay.
-- **The store is pure history** — append-only, OCC by stream version,
-  snapshotable for fast aggregate load.
-- **Replay is an admin/sim capability**, not a read path. Wipe a read model,
-  replay its Domain Events, it restores identically. The simulator replays
-  to reproduce a production trace.
-- **Persistence:** a single Prisma `EventRecord` table (append-only) plus
-  `EventSnapshot` for compaction. The in-memory `EventBus` is retired; an
-  in-process publisher inside the store fires projections synchronously on
-  commit.
+- Append-only, OCC by stream version, snapshotable.
+- Persistence: one Prisma `EventRecord` table + `EventSnapshot`.
+- In-process publisher fires projections synchronously on commit.
+- All timestamps are Runtime Clock time (§11).
 
 ---
 
-## 8. Two Graphs — Resource + Economic
+## 16. Two Graphs (carried from v2)
 
-v1 had one graph. v2 has two, answering different questions.
+**Resource Graph** (business): Payment → Refund → Invoice → Customer →
+Merchant → Subscription → Dispute. Built by `ResourceGraphProjection`.
 
-### 8.1 Resource Graph (business relationships)
-Answers: *"What business objects relate to this payment?"*
+**Economic Graph** (money): Reserve → LP → Wallet → Treasury → FX →
+Settlement → Escrow → TwinToken. Built by `EconomicGraphProjection`.
 
-```
-Payment → Refund → Invoice → Customer → Merchant → Subscription → Dispute
-```
-
-Nodes are domain aggregates; edges are structural/causal business links.
-Built by the `ResourceGraphProjection` from Domain Events. Powers the
-Inspector's business-object tree.
-
-### 8.2 Economic Graph (money relationships)
-Answers: *"Where did the money move, and what backed it?"*
-
-```
-Reserve → LP → Wallet → Treasury → FX → Settlement → Escrow → TwinToken
-```
-
-Nodes are economic entities (reserves, LP positions, wallets, treasury
-positions, FX hops, settlement legs, escrows, twin token supplies); edges
-carry financial weights (amount, currency, cost, risk). Built by the
-`EconomicGraphProjection` from Domain Events. Powers the Inspector's
-money-flow view and the economic-integrity reconciler.
-
-**Relationship to the kernel:** the kernel's `financial-graph.ts` is the
-**liquidity graph** the optimizer traverses at planning time (in-memory,
-simulation-flavored). The Runtime's Economic Graph is its **persistent,
-projected twin** — rebuilt from Domain Events, queryable by the Inspector
-and the reconciler. Different purpose, both exist.
-
-**Contract:**
-```ts
-interface GraphQuery {
-  // Resource graph
-  businessTree(rootId: string): { nodes: ResourceNode[]; edges: ResourceEdge[] };
-  // Economic graph
-  moneyFlow(rootId: string): { nodes: EconomicNode[]; edges: EconomicEdge[] };
-  // Cross-graph: "show me the business object and the money it moved"
-  unified(rootId: string): UnifiedGraphView;
-}
-```
+Both rebuilt from Domain Events; both queryable by the Inspector and the
+reconciler. Distinct from the kernel's liquidity graph (the optimizer's
+in-memory traversal).
 
 ---
 
-## 9. API Gateway — one place for cross-cutting edge concerns
-
-v1 left each route owning auth/rate-limit/idempotency. v2 consolidates these
-into an API Gateway so routes are pure "validate params → call service →
-return."
+## 17. API Gateway (carried from v2)
 
 ```
-External API request
-   ↓
+External request
+  ↓
 Gateway middleware (one implementation):
-   1. Authenticate (NextAuth session OR API key + secret)
-   2. Rate limit (per actor + per org, sandbox/live separate buckets)
-   3. Idempotency (key in header → cached response if seen)
-   4. Versioning (header → route to correct service version)
-   5. Request logging + tracing (correlationId assigned here)
-   6. Quota enforcement (plan-based)
-   ↓
-Route handler: validate params → call App Service → return JSON
+  1. Authenticate (NextAuth session OR API key + secret)
+  2. Rate limit (per actor + per org; sandbox/live separate buckets)
+  3. Idempotency (key in header → cached response if seen)
+  4. Versioning (header → route to correct intent schema version)
+  5. Request logging + tracing (correlationId assigned here)
+  6. Quota enforcement (plan-based)
+  ↓
+Route handler: build MerchantIntent → hand to Intent Engine → return read model
 ```
-
-**Implementation:** a single Next.js middleware + a thin wrapper the route
-handlers call. Existing routes migrate to the wrapper incrementally. The
-Gateway writes the request as the root `TraceNode` (correlationId) that the
-Inspector renders.
 
 ---
 
-## 10. Simulator — a Runtime Client
+## 18. End-to-End — One Payment Through the Runtime
 
-**The strongest guarantee:** the simulator is indistinguishable from a real
-merchant. It does not call services directly with special-cased paths; it
-goes through the same SDK → REST/gRPC → Application Service → Runtime →
-Events path.
-
-```
-Simulator
-   ↓ (SDK call, identical to a merchant integration)
-REST/gRPC API
-   ↓
-API Gateway
-   ↓
-Application Service
-   ↓
-Pipeline (14 stages)  ← identical to production
-   ↓
-Events → Projections → Read Models
-```
-
-**What differs between sandbox and live:** **only data sources and
-configuration** — not execution paths. The sandbox uses simulated connector
-drivers (MTN/Stripe stubs) and seeded reserves; live uses real connectors
-and real reserves. The pipeline, engines, event store, and projections are
-literally the same code.
-
-**Failure injection:** the simulator passes a `FailureInjection` on the
-Intent (e.g. "fail LP at stage 8, frame 3"). The pipeline applies it at the
-specified stage; the resulting Domain Events (`LPFailed`, `CompensationStarted`,
-`ReserveFallbackUsed`) are identical to what production would emit if the
-failure happened live. This is what makes a twin run a faithful reproduction.
-
-**Reuses:** the kernel's `OptimizationEngine`/`PlanExecutor`/`WorldStore` are
-invoked by the Settlement/Treasury/Reserve engines during real pipeline runs,
-so the twin's brain is the production brain — no parallel universe.
-
----
-
-## 11. End-to-End — One Payment Through the Pipeline
-
-1. **Client** (merchant dashboard) calls `POST /api/payments/create`.
+1. **Merchant Dashboard** calls `POST /api/payments/create` with
+   `{ customer: "Alice", amount: 120, currency: "USD" }`.
 2. **API Gateway** authenticates, rate-limits, assigns `correlationId`,
-   writes the root `TraceNode`.
-3. **Route** validates params, calls `paymentService.create()`.
-4. **PaymentService** builds a `PaymentIntent`, calls `pipeline.execute()`.
-5. **Pipeline stage 1 — Intent:** typed request recorded.
-6. **Stage 2 — Validation:** schema + business invariants; Domain Event
-   `PaymentValidated`.
-7. **Stage 3 — Policy:** `PolicyEngine.evaluate()` → `PolicyPassed`;
+   writes the root TraceNode.
+3. **Route** builds a `MerchantIntent` and hands it to the **Intent Engine**.
+4. **Intent Engine stage 0 — Ingest:** raw request → `MerchantIntent`.
+5. **Stage 1 — Normalize:** `$120` → `120 USD`; canonicalize casing.
+6. **Stage 2 — Resolve:** `"Alice"` → `customer_cx1`; merchant → `org_m1`.
+7. **Stage 3 — Validate & Augment:** schema ✓; attach Evidence (customer
+   history, merchant tier); `correlationId`; `source: 'dashboard'`.
+   `IntentReceived` Domain Event.
+8. **Stage 4 — Policy:** `PolicyEngine.evaluate()` → `PolicyPassed`;
    Decision recorded (ruleId, reason).
-8. **Stage 4 — Risk & Fraud:** `RiskEngine` + `FraudEngine` score; Decision
-   recorded; `RiskCleared` (or `RiskHeld`).
-9. **Stage 5 — Treasury & Reserve:** `TreasuryAllocator.allocate()` returns
-   an `AllocationDecision` (which reserves, stablecoin swaps, yield
-   placement); `ReserveEngine.lock()` locks reserves; Domain Events
-   `ReserveLocked`, `TreasuryRebalanced`.
-10. **Stage 6 — Liquidity Market:** eligible LPs (by corridor + rail +
-    capacity) quote via their `pricingCurve`; `LiquidityMarket.clear()`
-    picks winner(s), possibly split; `LPSelected` Domain Event; Decision
+9. **Stage 5 — Risk & Fraud:** `RiskEngine` + `FraudEngine` score; consult
+   Runtime Memory (Alice's salary-day pattern); Decision recorded;
+   `RiskCleared`.
+10. **Stage 6 — Treasury & Reserve:** `TreasuryAllocator.allocate()` returns
+    an `AllocationDecision`; `ReserveEngine.lock()` locks reserves;
+    `ReserveLocked`, `TreasuryRebalanced`.
+11. **Stage 7 — Liquidity Market:** eligible LPs quote via `pricingCurve`;
+    `LiquidityMarket.clear()` picks winner(s); `LPSelected`; Decision
     recorded (chosen LP, rejected quotes + reasons, tradeoffs).
-11. **Stage 7 — Settlement Planning:** `SettlementEngine.plan()` returns
+12. **Stage 8 — Settlement Planning:** `SettlementEngine.plan()` returns
     legs, connector choices, FX hops, timing, collateral; Decision recorded.
-12. **Stage 8 — Execution:** `SettlementEngine.execute()` drives connector
-    drivers (MTN authorize→capture) / chain / banks; `SettlementExecuted`.
-13. **Stage 9 — Ledger Posting:** double-entry, immutable; `LedgerPosted`.
-14. **Stage 10 — Event Emission:** all Domain Events appended to the Event
-    Store (atomic, OCC).
-15. **Stage 11 — Projection Updates:** projections fire **immediately**
-    (same transaction) → `PaymentView`, `LedgerView`, `TreasuryView`,
-    `ResourceGraphView`, `EconomicGraphView`, `DecisionLogView`,
-    `StateTimelineView` updated.
-16. **Stage 12 — Notifications & Webhooks:** Runtime Events `WebhookQueued`,
-    `NotificationSent`; webhook delivery driven by the WebhookProjection.
-17. **Stage 13 — Analytics:** `AnalyticsUpdated` Runtime Event; LTV, corridor
-    stats, metrics.
-18. **Stage 14 — Protocol Inspection:** one `TraceNode` per stage written to
-    `StateTimelineView`, correlated by `correlationId`.
-19. **PaymentService** returns `paymentView.get(id)` — a read model, never a
-    replay.
+13. **Stage 9 — Execution:** `SettlementEngine.execute()` drives connector
+    drivers; `SettlementExecuted`.
+14. **Stage 10 — Ledger:** double-entry; `LedgerPosted`.
+15. **Stage 11 — Event Emission:** all Domain Events appended to the Event
+    Store (atomic, OCC). Runtime Clock timestamps.
+16. **Stage 12 — Projection Updates:** projections fire immediately →
+    `PaymentView`, `LedgerView`, `TreasuryView`, `ResourceGraphView`,
+    `EconomicGraphView`, `DecisionLogView`, `StateTimelineView`.
+17. **Stage 13 — Notifications & Webhooks:** Runtime Events `WebhookQueued`,
+    `NotificationSent`.
+18. **Stage 14 — Analytics + Inspection:** `AnalyticsUpdated`; one
+    TraceNode per stage written to `StateTimelineView`, correlated by
+    `correlationId`. Every node carries the 8 explainability fields.
+19. **Route** returns `paymentView.get(id)` — a read model, never a replay.
 20. **Reconciliation (background):** trial balance + twin supply verified;
     result appended as a reconcile trace node.
 
-**Simulator parity:** the twin dispatches the same `PaymentIntent` via the
-SDK with `source: 'simulator'` and a `FailureInjection`. Steps 5–18 run the
-identical code; the only differences are connector drivers (stubbed) and
-reserve data (seeded). The resulting trace is structurally identical to a
-production trace.
+**Simulator parity:** the twin dispatches the same `PaymentIntent` with
+`source: 'twin'`, `environment: 'sandbox'`, and a `failureInjection`. The
+identical pipeline runs on the Runtime Clock (perhaps at 100×). The
+resulting trace is structurally identical to a production trace.
 
 ---
 
-## 12. Economic-Integrity Invariants
+## 19. Economic-Integrity Invariants (carried from v2)
 
-Two non-overridable invariants, checked continuously by a reconciler that
-reads Domain Events. A violation halts new appends for that environment and
-fires a critical alert.
+Two non-overridable invariants, checked continuously. A violation halts new
+appends for that environment and fires a critical alert.
 
-### 12.1 Trial Balance
-For every currency and environment, at every global position:
-```
-Σ(debit ledger entries) === Σ(credit ledger entries)
-```
-The `LedgerProjection` maintains running balances; the reconciler recomputes
-from the raw Domain Event log on a schedule and on every settlement event.
+### 19.1 Trial Balance
+`Σ(debit ledger entries) === Σ(credit ledger entries)` per currency, per
+environment, at every global position.
 
-### 12.2 Twin Supply Reconciliation
-At every global position:
-```
-Σ(twin tokens minted) − Σ(twin tokens burned) === outstanding twin token supply
-                                                              === backed fiat reserves
-```
-Every `TwinTokenMinted` must have a corresponding fiat-reserve credit; every
-`TwinTokenBurned` a debit. The Reserve Engine's `verifyBacking()` is the
-per-operation check; the reconciler is the continuous guarantee.
+### 19.2 Twin Supply
+`Σ(minted) − Σ(burned) === outstanding twin token supply === backed fiat
+reserves` at every global position.
 
-These are the kernel's `Constitution` (10 invariants) made
-**production-enforceable at the store level**, not just evaluated in
-simulation.
+These are the kernel's Constitution (10 invariants) made
+production-enforceable at the store level.
 
 ---
 
-## 13. Sandbox / Live Isolation
+## 20. Sandbox / Live Isolation (carried from v2, refined)
 
 - Every Intent, Domain Event, Runtime Event, and read-model row carries an
   `environment` field.
 - Event Store stream IDs are prefixed: `live:payment_abc` vs
   `sandbox:payment_abc`. The pipeline refuses cross-environment intents.
-- Connector drivers are selected per environment: sandbox uses stubs, live
-  uses real connectors. Same driver contract, different implementation.
-- Projections filter by environment; a sandbox event never updates a live
-  read model and vice versa.
-- **The execution path is identical.** Sandbox and live differ only by data
-  sources and configuration (§10).
+- **The clock differs:** live runs at 1× real time; sandbox runs at a
+  configurable multiplier on virtual time.
+- **The execution path is identical.** Sandbox and live differ only by
+  data sources, configuration, and clock speed.
 
 ---
 
-## 14. Migration Strategy — Strangler Fig
-
-A full rewrite of 77 pages and 97 routes at once is infeasible. The
-migration introduces the Runtime alongside existing services and migrates
-incrementally. At no point is the app broken.
+## 21. Migration Strategy — Strangler Fig (carried from v2, extended)
 
 ### Phase A — Runtime Core (non-disruptive)
-- Add `src/runtime/` with the pipeline scaffold, Event Store, Domain/Runtime
-  event split, and immediate projection runner. New `EventRecord` table;
-  existing tables untouched.
-- App Service methods switch internally to "build Intent → drive pipeline,"
-  but the pipeline initially calls the **existing service logic** (so
-  behavior is unchanged). Events are appended **and** published to the old
-  in-memory bus (existing projections keep firing).
-- Result: the Event Store begins filling with real Domain Events; nothing
-  breaks.
+- Add `src/runtime/` with the Intent Engine, the 14-stage pipeline scaffold,
+  the Event Store, Domain/Runtime event split, immediate projection runner,
+  and the Runtime Clock (live at 1×). New `EventRecord` table; existing
+  tables untouched.
+- App Service methods switch internally to "build MerchantIntent → hand to
+  Intent Engine → drive pipeline," but the pipeline initially calls the
+  existing service logic (behavior unchanged). Events appended **and**
+  published to the old in-memory bus.
 
 ### Phase B — Projections own the tables
-- Move projection logic into `src/runtime/projections/`, fed from the Event
-  Store. Projections now **write** existing tables from Domain Events.
-- App Services stop writing tables directly; they only append events. The
-  in-memory bus is retired.
+- Projections fed from the Event Store write existing tables. App Services
+  stop writing tables directly; they only append events. In-memory bus
+  retired.
 
 ### Phase C — Engines behind the pipeline
-- Introduce the engines one at a time behind their pipeline stages:
-  Policy → Risk/Fraud → Reserve → Settlement → Treasury Allocator →
-  Liquidity Market → Decision → Scheduling. Each stage swaps from "call old
-  service logic" to "call engine, record Decision, emit Domain Event."
-- The kernel's pure-function engines are wired in as the engines' compute
-  core.
+- Engines introduced one at a time behind their stages: Policy → Risk/Fraud
+  → Reserve → Settlement → Treasury Allocator → Liquidity Market → Decision
+  → Scheduling. Kernel pure functions wired as each engine's compute core.
 
 ### Phase D — Read Models + API Gateway
-- Introduce read-model façades; migrate pages off direct Prisma, one page
-  at a time. Introduce the API Gateway middleware; migrate routes onto it.
+- Read-model façades; pages migrated off direct Prisma, one page at a time.
+  API Gateway middleware; routes migrate onto it.
 
-### Phase E — Two Graphs + Inspector + Simulator-as-client
+### Phase E — Two Graphs + Inspector
 - `ResourceGraphProjection` + `EconomicGraphProjection` feed the Inspector.
-- Refactor the world simulator to dispatch Intents through the SDK/REST
-  surface (it becomes a client, not a special caller).
+  Inspector UI on `StateTimelineView` + both graphs + Decision log.
 
-### Phase F — Integrity hardening
-- Continuous reconciliation (trial balance + twin supply) at every commit;
-  halt-on-violation. Schedule Engine drives daily reconciliations and
+### Phase F — Simulation Runtime
+- Runtime Clock virtualization for sandbox. Scenarios as first-class
+  versioned objects. Behaviors catalog. Autonomous 24/7 twin. Time Machine
+  + Forecasting.
+
+### Phase G — Runtime Memory + Integrity Hardening
+- Runtime Memory fact store; engines consult it during execution.
+  Continuous reconciliation (trial balance + twin supply) at every commit;
+  halt-on-violation. Scheduling Engine drives daily reconciliations and
   rebalances.
 
 ---
 
-## 15. Implementation Roadmap
+## 22. Implementation Roadmap
 
-Each milestone improves the **protocol architecture**, per the governing
+Each milestone improves the **Runtime architecture**, per the governing
 rule. No milestone adds raw CRUD or business logic to pages.
 
 | Milestone | Deliverable | Exit criteria |
 |---|---|---|
-| **M-RT-1** Runtime Core + Pipeline | 14-stage pipeline scaffold, Event Store (`EventRecord`), Domain/Runtime event split, immediate projection runner. App Services drive the pipeline (initially calling existing logic). | A real payment appends Domain Events to the store; existing UI unchanged. |
-| **M-RT-2** API Gateway | Auth + rate-limit + idempotency + versioning + correlationId in one middleware. Routes thin to "validate → call service → return." | No route owns cross-cutting concerns; correlationId on every request. |
-| **M-RT-3** Policy + Decision Engines | Stage 3 policy evaluation (explicit rules); Decision artifacts recorded for every important choice. | A payment's trace shows PolicyPassed + a Decision with alternatives. |
-| **M-RT-4** Reserve Engine | Lock/release/collateral/mint-burn/backing/proofs/snapshots, separated from Treasury. Twin supply invariant checked per mint. | `ReserveEngine.verifyBacking()` passes after every mint. |
-| **M-RT-5** Settlement Engine | Every payment/payout/refund/wallet-transfer flows through one Settlement Engine (plan → execute → reconcile). | A refund's trace shows it flowing through the same engine as a payment. |
-| **M-RT-6** Treasury Capital Allocator | Stage 5 allocation + continuous rebalance + forecast. Idle capital optimized across corridors/LPs/yield. | Allocator returns a Decision with rationale + alternatives. |
-| **M-RT-7** Liquidity Market | LP strategy publication + quote + clear + execute. LPs have pricing curves/risk/rails/yield targets. | An LP sets a strategy; market clears and logs why it won/lost. |
-| **M-RT-8** Two Graphs | Resource Graph (business) + Economic Graph (money) projections and queries. | Inspector shows both trees for a payment. |
-| **M-RT-9** Scheduling Engine | Deferred/recurring jobs dispatch commands through the pipeline. | "Settle in 4 hours" fires correctly; daily reconciliation runs. |
-| **M-RT-10** Read Models migration | Pages migrated off direct Prisma onto read-model façades. Lint rule forbids `db.<DomainTable>` outside runtime. | Zero direct Prisma calls in pages. |
-| **M-RT-11** Protocol Inspector | Full Inspector UI on `StateTimelineView` + both graphs + Decision log. Expandable, replayable, simulate-with-injection. | Operator clicks a payment → sees full 14-stage tree + money flow + decisions. |
-| **M-RT-12** Simulator as Runtime Client | World simulator dispatches Intents via SDK/REST. Sandbox and live differ only by data/config. | A twin trace is structurally identical to a production trace. |
+| **M-RT-1** Runtime Core + Intent Engine | Intent Engine (ingest/normalize/resolve/validate/augment); 14-stage pipeline scaffold; Event Store (`EventRecord`); Domain/Runtime event split; immediate projection runner; Runtime Clock (live 1×). App Services build MerchantIntents. | A real payment: raw request → typed PaymentIntent → pipeline → Domain Events in store. UI unchanged. |
+| **M-RT-2** API Gateway | Auth + rate-limit + idempotency + versioning + correlationId in one middleware. Routes thin to "build intent → return read model." | No route owns cross-cutting concerns; correlationId on every request. |
+| **M-RT-3** Policy + Decision + Explainability | Stage 4 policy; Decision artifacts for every stage; 8-field explainability panel in Inspector. | Any trace node answers Why/Why-not/Alternative/Evidence/Confidence/Policy/Cost/Risk. |
+| **M-RT-4** Reserve Engine | Lock/release/collateral/mint-burn/backing/proofs/snapshots, separated from Treasury. Twin supply invariant per mint. | `ReserveEngine.verifyBacking()` passes after every mint. |
+| **M-RT-5** Settlement Engine | Every payment/payout/refund/transfer flows through one Settlement Engine (plan → execute → reconcile). | A refund's trace shows it flowing through the same engine as a payment. |
+| **M-RT-6** Treasury Capital Allocator | Stage 6 allocation + continuous rebalance + forecast. Idle capital optimized. | Allocator returns a Decision with rationale + alternatives. |
+| **M-RT-7** Liquidity Market | LP strategy publication + quote + clear + execute. Pricing curves/risk/rails/yield. | An LP sets a strategy; market clears and logs why it won/lost. |
+| **M-RT-8** Two Graphs + Inspector | Resource Graph + Economic Graph projections and queries; full Inspector UI. | Inspector shows both trees + Decision log for any operation. |
+| **M-RT-9** Scheduling Engine | Deferred/recurring jobs dispatch Intents through the pipeline. | "Settle in 4 hours" fires correctly; daily reconciliation runs. |
+| **M-RT-10** Simulation Runtime + Runtime Clock | Virtual clock (10×/100×/1000×); Scenarios as first-class versioned objects; Behaviors catalog; autonomous 24/7 twin; Time Machine; Forecasting. | Twin runs 24/7 in sandbox; rewind/fast-forward works; a twin trace equals a production trace in shape. |
+| **M-RT-11** Runtime Memory | Fact store; engines consult facts during execution; twin produces facts, live validates. | A corridor-congestion fact changes the Settlement Engine's routing. |
+| **M-RT-12** Read Models migration | Pages migrated off direct Prisma onto read-model façades. Lint rule forbids `db.<DomainTable>` outside runtime. | Zero direct Prisma calls in pages. |
 | **M-RT-13** Economic Integrity Hardening | Continuous reconciliation (trial balance + twin supply) at every commit; halt-on-violation; alert. | Injected imbalance halts the environment + alerts. |
 
 ---
 
-## 16. Production Quality Gates
+## 23. Production Quality Gates
 
-### 16.1 Architecture
+### 23.1 Architecture
 - No business logic in `src/app/**` pages or routes (lint rule + review).
 - No `db.<DomainTable>` access outside `src/runtime/projections/` and
   `src/runtime/read-models/` (lint rule).
+- No `Date.now()` in `src/runtime/**` — use `clock.now()` (lint rule).
 - Kernel untouched: `git diff --name-only HEAD -- src/kernel/` returns 0.
-- Every operation flows through the 14-stage pipeline; no shortcut paths.
+- Every state change starts as a TypedIntent; no shortcut paths.
+- Every client (REST, SDK, twin, extension, AI) enters through the Intent
+  Engine.
 
-### 16.2 Functional
-- Every stage emits ≥1 Domain Event + ≥1 TraceNode.
-- Every important decision is a recorded Decision with alternatives + tradeoffs.
+### 23.2 Functional
+- Every pipeline stage emits ≥1 Domain Event + ≥1 TraceNode + ≥1 Decision.
+- Every TraceNode carries the 8 explainability fields.
 - Every engine has a declared contract; no engine writes Prisma directly.
-- Sandbox and live share the identical pipeline; only data/config differs.
+- Sandbox and live share the identical pipeline; only data/config/clock
+  speed differ.
 
-### 16.3 Integration
-- The simulator dispatches the same Intents as REST (verified by trace-shape
+### 23.3 Integration
+- The simulator emits the same Intent types as REST (verified by trace-shape
   equality).
-- Webhook replay re-dispatches the original Intent and produces an identical
-  Domain Event sequence.
-- Cross-environment intents are rejected by the pipeline.
+- Webhook replay re-ingests the original TypedIntent and produces an
+  identical Domain Event sequence.
+- Cross-environment intents are rejected by the Intent Engine.
 
-### 16.4 Simulator
+### 23.4 Simulator
 - A production operation's trace and the twin's trace of the same operation
   are structurally equal (same stages, same decision kinds, same event types).
+- The autonomous twin runs 24/7 without operator intervention.
+- Time Machine rewinds and fast-forwards correctly; branching produces
+  independent worlds.
 - Injected failures produce declared compensation, not silent catches.
-- Replay from any aggregate version reproduces the same state and decisions.
 
-### 16.5 UX
-- The Protocol Inspector renders for every operation type.
+### 23.5 UX
+- The Protocol Inspector renders for every operation type, with the 8-field
+  explainability panel on every node.
 - Read-model queries return within the existing p95 (no regression).
-- Sticky footer, responsive layout, loading skeletons preserved (M10 polish
-  carries forward).
+- Sticky footer, responsive layout, loading skeletons preserved.
 
-### 16.6 Performance
-- Pipeline dispatch p99 < 50ms (excluding connector/chain I/O).
+### 23.6 Performance
+- Intent ingestion p99 < 10ms.
+- Pipeline dispatch (stages 4–14, excluding connector/chain I/O) p99 < 50ms.
 - Event Store append p99 < 20ms.
-- Projection catch-up (rebuild) processes ≥ 10k events/sec (snapshot-assisted).
+- Projection catch-up (rebuild) ≥ 10k events/sec (snapshot-assisted).
 - Reconciliation check p99 < 100ms.
+- Sandbox at 1000× sustains ≥ 1000 virtual payments/sec.
 
-### 16.7 Documentation
+### 23.7 Documentation
 - Each engine has a README in `src/runtime/engines/<name>/README.md`.
-- The pipeline stages are documented with their inputs/outputs/decisions.
-- The event catalog (kernel `events.ts`) is extended with Runtime Domain and
-  Runtime event types and rendered in developer docs.
+- The Intent catalog (8 types) is documented with schemas + examples.
+- The Behavior catalog is documented.
+- The Scenario format is documented.
+- The event catalog (kernel `events.ts` + Runtime Domain + Runtime) is
+  rendered in developer docs.
 
 ---
 
-## 17. What Does NOT Change
+## 24. What Does NOT Change
 
 - **The frozen kernel.** Zero modifications to `src/kernel/*`. The Runtime
   imports its types and pure functions; it never edits them.
 - **The product surface.** No pages are deleted. Existing URLs keep working.
   The 9 demo accounts, 9 orgs, and all role-based access remain.
 - **The differentiators — realized, not replaced.** Programmable liquidity
-  becomes real via the Liquidity Market; treasury intelligence via the
-  Capital Allocator; the digital twin via simulator-as-client; explainable
-  protocol execution via the Decision Engine + Inspector; transparent routing
-  via the Settlement Engine's rationale; twin backing via the Reserve Engine.
+  via the Liquidity Market; treasury intelligence via the Capital Allocator;
+  the digital twin via the autonomous Simulation Runtime; explainable
+  protocol execution via the Decision Engine + universal explainability +
+  Inspector; transparent routing via the Settlement Engine's rationale; twin
+  backing via the Reserve Engine; learned operational intelligence via
+  Runtime Memory.
 - **Stripe as benchmark, not limit.** We keep Stripe's discipline (uniform
-  pipeline, immediate projections, explainable traces) and add the engines
-  Stripe doesn't have.
+  pipeline, immediate projections, explainable traces, PaymentIntent-style
+  abstraction generalized to every operation) and add the engines, the
+  autonomous twin, and the Runtime Memory that Stripe doesn't have.
 
 ---
 
-## 18. Scorecard Target
+## 25. Scorecard
 
-| Area | v1 target | v2 target |
+| Area | Before this discussion | After v3 |
 |---|---|---|
-| Product UX | 9.5/10 | 9.5/10 |
-| Architecture | 10/10 | 10/10 |
-| Financial protocol | 10/10 | 10/10 |
-| Event-driven design | 10/10 | 10/10 |
-| Simulator integrity | 10/10 | 10/10 |
-| Production readiness | 9.5/10 | 9.5/10 |
-| Stripe parity | ~90% | ~90%+ |
-| **Programmable-network capability** | partial | **full** (settlement engine, liquidity market, capital allocator, reserve engine, decision engine, two graphs) |
+| Product UX | 7/10 | 9.5/10 |
+| Architecture | 6/10 | 10/10 |
+| Financial protocol | 7/10 | 10/10 |
+| Event-driven design | 5/10 | 10/10 |
+| Simulator integrity | 6/10 | 10/10 |
+| Production readiness | 5.5/10 | 9.5/10 |
+| Stripe parity | ~45% | ~90%+ |
+| **Programmable-network capability** | partial | **full** |
 
-The v2 architecture leans into what makes PaySwap unique instead of mirroring
-Stripe's internal structure. The remaining gap to 100% is external systems
-(real Stellar mainnet, real bank APIs, real KYC, regulatory licensing) —
-explicitly out of scope for application architecture.
+The architecture no longer optimizes for Stripe parity. It optimizes for a
+**coherent, programmable financial runtime** with clear principles: intent
+first, four runtimes, a virtual clock, an autonomous twin, learned memory,
+and universal explainability. Stripe remains the benchmark for developer
+experience; PaySwap differentiates through programmable settlement, liquidity
+orchestration, transparent execution, simulation, and explainability.
+
+The remaining gap to 100% is external systems (real Stellar mainnet, real
+bank APIs, real KYC, regulatory licensing) — explicitly out of scope for
+application architecture.
 
 ---
 
-*End of Phase 1 v2 (Architecture Design). Phase 2 (Implementation) begins
-with Milestone M-RT-1: Runtime Core + Pipeline.*
+## 26. Stop Redesigning. Begin Implementing.
+
+Architecture only creates value once embodied in code. This design is
+sufficiently complete. The next gains come from executing it incrementally
+through the milestone plan while keeping the runtime coherent.
+
+**Phase 2 begins with M-RT-1: Runtime Core + Intent Engine** — the Intent
+Engine (ingest/normalize/resolve/validate/augment), the 14-stage pipeline
+scaffold, the Event Store (`EventRecord` table), the Domain/Runtime event
+split, the immediate projection runner, and the Runtime Clock (live at 1×) —
+all in a new `src/runtime/` directory, kernel untouched, app never broken.
+
+*Every financial intent becomes an explainable execution.*
+
+---
+
+*End of Phase 1 v3 (Final Architecture Design).*
