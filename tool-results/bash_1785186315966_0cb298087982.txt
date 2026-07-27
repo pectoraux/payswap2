@@ -1,0 +1,300 @@
+### How env mode is stored (localStorage + cookie)
+- **Client storage `src/components/env-switcher.tsx:11`** — `const STORAGE_KEY = 'payswap.env-mode';` (NOT 'payswap-env-mode' — that's the cookie name, line 50).
+- **Read `src/components/env-switcher.tsx:17-25`** — `readStoredMode()` reads from `window.localStorage.getItem('payswap.env-mode')`. Default: `'sandbox'` (line 21).
+- **Write `src/components/env-switcher.tsx:45-55`** — `writeStoredMode(next)` writes to localStorage AND `document.cookie = 'payswap-env-mode=${next}; path=/; max-age=2592000; samesite=lax'` (30-day cookie). Dispatches `payswap:env-mode-change` custom event.
+- **Sync hook `src/components/env-switcher.tsx:74-76`** — `useEnvMode()` uses `useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)`. Server snapshot is always `'sandbox'` (line 41-43).
+- **Server-side reader `src/lib/environment.ts:10-14`** — `getEnvironment()` reads `cookies().get('payswap-env-mode')`. Default: `'live'` if cookie absent (line 13: `envCookie?.value === 'sandbox' ? 'sandbox' : 'live'`).
+
+### Which API routes read `payswap-env-mode` cookie
+- **Direct cookie reads**: only `src/lib/environment.ts` (1 file).
+- **Indirect (via `getEnvironment()`)**: 10 API endpoints — payments/create, payouts/create, refunds/create, invoices/create, payment-links/create, webhooks/create, api-keys/create, customers/create, products/create, subscription/, customers/[id]/notes.
+- **`/admin/network` page** also calls `getEnvironment()` (line 5, 37) and uses `where: { environment: env }` filters on `db.payment.count`, `db.aMLAlert.count`, etc.
+
+### Whether RuntimeHost supports both sandbox and live
+- ✅ YES — **`src/runtime/host/runtime-host.ts:45-65`** — `RuntimeHost` constructor creates TWO completely independent `createRuntime()` instances (sandbox + live). 14 isolation checks in `verifyIsolation()` (lines 138-163): eventStore, payments, refunds, wallets, treasury, twinTokens, lpRuntime, marketplace, economicCompiler, coordinator, schema, recovery, invariants, dispatcher.
+- ✅ `getRuntime(env)`, `getActiveRuntime()`, `switchEnvironment(env)`, `execute(command)` (routes by `command.metadata.environment`), `executeNested(commands, metadata)`, `getReport()` all exist.
+- ✅ Singleton exported from `src/runtime/index.ts:736-740` as `runtimeHost` (globalThis-cached for Next.js dev mode).
+- ❌ **GAP**: Only `/api/runtime/host` (route.ts) and `runtime/platform/engine.ts:getEnvironmentState()` use `runtimeHost`. NO business endpoint routes via `runtimeHost.execute()` based on env. The default singleton `runtime` (line 730-734) is the LIVE runtime only — most endpoints use this directly.
+- ❌ **GAP**: `EnvSwitcher.toggle()` (env-switcher.tsx:91-105) writes cookie + reloads page — but does NOT call `POST /api/runtime/host` to switch `runtimeHost.activeEnvironment`. So in-memory queries (`/api/runtime/ledger`, `/api/runtime/projections/*`, `/api/runtime/simulator/compare`, etc.) always read from `runtime` (the live singleton), regardless of cookie value.
+
+### Whether page data actually differs between sandbox/live
+- ⚠️ MIXED — three independent storage layers, each with different env-awareness:
+  1. **In-memory runtime** (`runtime` singleton): NOT env-aware. Always live.
+  2. **In-memory runtimeHost** (`runtimeHost`): env-aware via `getRuntime(env)`, but only `/api/runtime/host` reads it.
+  3. **Prisma DB**: attempted env-awareness (10 create endpoints write `environment: env`) BUT:
+     - Prisma `Payment` model (schema lines 264-297) has NO `environment` column.
+     - Prisma `Payout` (lines 299-327), `Refund` (329-347), `Product` (353+), `CustomerRecord` (178-198) all have NO `environment` column.
+     - `paymentService.create()` (payment-service.ts:62,73,99) writes `environment: params.environment` to `db.customerRecord.findFirst({ where: { environment: ... }})` and `db.payment.create({ data: { environment: ... }})` — **TypeScript strict mode should reject these writes as unknown fields**.
+     - `refundReadModel.list` (read-models/v2/index.ts:140-148) accepts `env` parameter and applies in-memory filter `(r as unknown as { environment?: string }).environment === env` — but since the column doesn't exist, this filter never matches; falls through to default `?? env ?? 'live'`.
+     - `/admin/network/page.tsx:56-115` filters `where: { environment: env }` on payment/AMLAlert counts — **would error at Prisma runtime**.
+- ❌ **GAP**: Prisma schema has no `environment` column anywhere. Either (a) add it to all domain models, or (b) remove the env-param plumbing from services + read-models + admin/network page.
+- ❌ **GAP**: Default mismatch — `env-switcher.tsx:21` defaults to `'sandbox'`; `environment.ts:13` defaults to `'live'`. First-visit shows "Sandbox" badge but API treats as "Live". (Already documented in prior audit.)
+
+### GAPS
+- **`PlatformEnvironment` type in `runtime/platform/types.ts:111`** is `'live' | 'test'` — but everywhere else uses `'live' | 'sandbox'`. Inconsistent.
+- **No middleware-level env enforcement** — middleware.ts doesn't read the cookie. API endpoints manually call `getEnvironment()` (10 endpoints do, 90+ don't).
+- **No persistence of `runtimeHost.activeEnvironment`** — server restarts reset to 'sandbox' (constructor default, runtime-host.ts:47).
+- **`EnvSwitcher` doesn't call `POST /api/runtime/host`** — half-wired. Cookie toggles DB-filtering (when DB works); does NOT toggle in-memory runtime. (Already documented.)
+- **`useEnvMode()` is only consumed by `env-switcher.tsx` + `command-palette.tsx`** — no data-fetching component uses it to switch query sources. Pages rely on server-side `getEnvironment()` via cookie.
+
+## 4. Runtime Simulator — code map
+
+### Which components exist
+- **`src/components/admin/kernel-simulation-console.tsx`** (401 lines) — ❌ ORPHANED. Not imported anywhere (grep-confirmed). Calls `/api/simulate` (the older kernel endpoint). Has preset scenarios, buyer/merchant country/currency/amount/priority inputs, renders verdict + metrics + AI narrative + transaction flow + amendments + ledger entries + event stream + twin tokens + result hash.
+- **`src/components/admin/scenario-builder.tsx`** (658 lines) — ❌ ORPHANED. Not imported anywhere. Loads actors from `/api/admin/network/actors`, supports custom simulation params (successRate/refundRate/webhookFailureRate/complianceAlertRate/highValueRate/payoutFrequency), duration picker (1h/1d/1w/1m), merchant+LP multi-select, calls `/api/simulate/world/custom`.
+- **`src/components/admin/world-simulator.tsx`** (607 lines) — ❌ ORPHANED. Not imported anywhere. 5 preset scenarios (normal/holiday/outage/growth/stress), progress bar, network impact (before/after snapshot), event timeline.
+- **`src/components/admin/simulation-console.tsx`** (251 lines) — ❌ ORPHANED. Not imported anywhere. 5 quick-action buttons (payment/payout/aml/lp-default/stress) calling `/api/admin/simulate/*` endpoints.
+- **`src/components/simulator/scenario-builder.tsx`** (362 lines) — ✅ USED. Imported by `/admin/runtime/page.tsx:8` and `kernel-runtime-console.tsx:5` (which is itself orphaned). Full scenario editor: transaction (buyer/merchant country/currency/amount/priority), treasury (origin/destination reserve + stablecoin + emergency + policy), liquidity providers (add/remove with id/name/jurisdiction/currencies/speed/capacity/reputation/success/manual/online/feeBps + source kind), financial operators (add/remove with id/name/type/country/currency/balance), failures (10 failure types), AI weights (8 sliders), reserve policy (4 options). Imports types from `@/kernel`.
+- **`src/components/simulator/`** (25 files) — large library of panels used by `/admin/runtime`: execution-graph, ai-reasoning, metrics-panel, world-state, replay-stepper, treasury-amendments, constitution-panel, reasoning-panel, solver-panel, protocol-panel, state-machine-panel, financial-graph, lp-lifecycle, world-inspector, runtime-services, engines-panel, entity-registry, optimization-panel, protocol-scenarios, scenario-library, theme-toggle, execution-graph-dag, checkout-widget, format.
+- **`src/components/admin/kernel-runtime-console.tsx`** (322 lines) — ❌ ORPHANED (not imported by any page). Was likely an alternate runtime console. Uses `simulator/scenario-builder.tsx` + 19 tabs.
+- **`src/lib/world-simulator.ts`** (586 lines) — ✅ USED. `runWorldSimulation({duration, scenario, environment, customParams, actorFilter})` — generates synthetic payments/payouts/refunds/invoices/webhooks/ledger entries/audit logs/compliance alerts by calling `paymentService.create()` etc. (NOT direct Prisma). Returns SimulationResult with NetworkImpact (before/after snapshot). Comment line 14: "The simulator NEVER calls Prisma directly for domain objects."
+- **`src/runtime/engines/simulator/engine.ts`** (234 lines) — ✅ EXISTS. `SimulatorEngine.compare(intent, environment)` — runs the same intent through both production (compile + execute) and simulation (compile only, no side effects). Returns `SimulationComparison` with `TraceEquivalenceResult` (compiler passes, pipeline stages, execution plan, events, differences). Comment line 56: "we prove trace equivalence at the compiler level (which is pure) and note the pipeline-level differences as expected". GAP: simulation does NOT execute the pipeline (line 98-101 comment: "Simulation run: compile only"). So sim ≠ prod at the pipeline level — only at the compiler level.
+- **`src/runtime/engines/simulator/types.ts`** (138 lines) — `ExecutionMode = 'production' | 'simulation'`, `SideEffectPolicy = 'real' | 'simulated' | 'dry-run'`, `RuntimeContext`, `WorldStateOverrides` (reserveOverrides/lpAvailability/feeOverrides), `TraceEquivalenceResult`, `TraceDifference`, `SimulationComparison`. **`WorldStateOverrides` interface exists but is NOT used by `SimulatorEngine.compare()`** — what-if override capability is defined but not implemented.
+- **`src/kernel/simulation.ts`** (878 lines) — ✅ USED by `/api/simulate` POST. `SimulationEngine.run(scenario, opts)` — the older in-memory simulator. Full implementation: builds world from scenario, runs planner, executes plan, generates replay frames, builds world inspector, treasury AI, amendments, ledger, twin tokens, protocol state, events. Lines 125/132/154 fire extension hooks. Singleton `simulationEngine` exported at line 877.
+
+### Existing API endpoints (simulator)
+- **`/api/simulate`** (route.ts, 183 lines) — GET returns default scenario + library scenarios + engines metadata. POST runs scenario via `simulationEngine.run()`, then enhances narrative with ZAI LLM (best-effort), persists to db.simulationRun + db.ledgerEntryRecord + db.twinTokenRecord + db.planAmendmentRecord + db.auditLog (silent failure on missing models).
+- **`/api/simulate/world`** (route.ts, 45 lines) — POST. Admin-only. Calls `runWorldSimulation({duration, scenario, environment})` from `lib/world-simulator.ts`.
+- **`/api/simulate/world/custom`** (route.ts) — POST. Admin-only. Calls `runWorldSimulation` with custom params + actor filter.
+- **`/api/scenarios`** (route.ts) — GET/POST/DELETE. Manages saved scenarios via `db.savedScenarioRecord` (model missing). **Would 500.**
+- **`/api/scenarios/regress`** (route.ts) — POST. Runs all saved scenarios as regression. Depends on db.savedScenarioRecord. **Would 500.**
+- **`/api/admin/simulate/payment`** (route.ts) — POST. Creates a COMPLETED Payment for the first merchant (admin testing).
+- **`/api/admin/simulate/payout`** (route.ts) — POST. Creates a COMPLETED Payout.
+- **`/api/admin/simulate/aml`** (route.ts) — POST. Creates an OPEN AMLAlert.
+- **`/api/platform/simulator`** (route.ts, 59 lines) — GET/POST. Uses `runtime.platform.simulate()` (the newer M-PLATFORM-38 simulator). No auth.
+- **`/api/runtime/simulator/compare`** (route.ts, 56 lines) — POST. Auth-required. Calls `runtime.simulator.compare(intent, env)` (the M-RT-13 trace equivalence check).
+- **`/api/runtime/twin/simulate`** (route.ts) — POST. Uses `runtime.digitalTwin` (M-RT-11).
+- **`/api/runtime/inspector/*`** — 5 endpoints. Read-only network overview, resource graph, economic graph, capability-route graph, recommendation provenance.
+
+### Existing UI pages (simulator)
+- **`/admin/runtime`** (`src/app/(admin)/admin/runtime/page.tsx`, 278 lines) — ✅ ACTIVE. Client component. Fetches `/api/simulate` on mount. 19 tabs in result panel: Execution, AI Reasoning, Metrics, World State, Time Machine (replay), Treasury, Constitution, Fin. Graph, LP Lifecycle, Inspector, Reasoning, Solver, Protocol, State Machine, Optimization, Engines, Entities, Runtime, Protocol Scenarios. Uses `simulator/scenario-builder.tsx`. Buttons: Run Simulation (✅), Reset (✅), Save Scenario (❌ 500), Delete Scenario (❌ 500), Run Regression (❌ 500), Load Library Scenario (✅), Theme Toggle (✅).
+- **`/admin/platform`** (`src/app/(admin)/admin/platform/page.tsx`, 433 lines) — ✅ ACTIVE. 6 tabs: Dashboard, Simulator, Council, Ledger, Trust, Directorate. Simulator tab uses `/api/platform/simulator` (POST). Has a basic scenario form (from/to country, amount, currency, sender/receiver reserve, local). Renders timeline (6 steps) + execution plan summary. AI Runtime Assistant card on dashboard tab — calls `/api/runtime/trust POST action=stress_test` (NOT `/api/platform/simulator` or `runtime.platform.askAI`). **GAP: AI assistant in UI doesn't use `PlatformEngine.askAI()` — uses the trust layer's stress test instead.**
+- **`/admin/simulations`** (`src/app/(admin)/admin/simulations/page.tsx`, 240 lines) — ✅ ACTIVE (page renders) but data layer broken. Server component, calls `db.simulationRun.findMany` (model exists). Filter chips by scenario type. Renders SimulationsTable. **Would 500 due to Prisma provider mismatch.**
+
+### Whether scenario builder is complete
+- ✅ **`simulator/scenario-builder.tsx`** is comprehensive: transaction, treasury, LPs (with source kind, manual, online), financial operators, 10 failure types, 8 AI weight sliders, 4 reserve policies, priority (5 options), accordion UI.
+- ❌ **`admin/scenario-builder.tsx`** is ALSO complete (658 lines) but for a different purpose — world simulation (duration, success/refund/webhook/compliance/high-value/payout rates, merchant/LP actor multi-select). It's orphaned.
+- **GAP**: Two scenario builders exist for two different simulators (kernel transaction sim vs. world sim). Neither is wired together. The world sim UI (orphaned `admin/world-simulator.tsx`) is not accessible from any page.
+- **GAP**: `WorldStateOverrides` (reserve/lp/fee overrides) is defined in `runtime/engines/simulator/types.ts:60-67` but `SimulatorEngine.compare()` does NOT use it. No what-if scenario support.
+
+### Whether timeline renders
+- ✅ YES — three timelines:
+  1. **`/admin/runtime`** page renders `result.replay` via `ReplayStepper` (simulator/replay-stepper.tsx, 244 lines) — full time-machine with play/pause/skip-back/skip-forward/reset, per-frame ledger entries + events + twin tokens + amendments + workflows + insurance. 12 frame types with icons (debit/credit/mint/burn/ledger/events/ai/amendment/workflow/insurance/treasury/settlement).
+  2. **`/admin/platform`** page renders `simResult.timeline` as a simple list of 6 steps (page.tsx:254-265) — step number + status badge + stage name + description.
+  3. **`kernel-simulation-console.tsx`** (orphaned) renders events as a list (line 357-372).
+
+### Whether decision inspector exists
+- ⚠️ PARTIAL — no class literally named "DecisionInspector", but:
+  - **`AIReasoningView`** (`simulator/ai-reasoning.tsx`, 110 lines) renders a "Decision trace" section (line 47-53) — step-by-step decisions with rationale from `reasoning.decisions[]`.
+  - **`ReasoningPanel`** (`simulator/reasoning-panel.tsx`) renders ReasoningResultSummary[] from the kernel's ReasoningEngine (10 reasoning capabilities: optimization, explanation, anomaly, treasury, forecasting, LP, fraud, insurance, governance, extension).
+  - **`InspectorService.getExecutionTrace(paymentId, env)`** (inspector/service.ts:283) returns full execution trace: compiler passes (with alternatives + tradeoffs), pipeline stages (with eventsEmitted), plan details (lpAllocations, settlementLegs, reserveAllocations, fxHops, alternativesConsidered, executionTiming), explanation, provenance. Exposed via `/api/runtime/inspector/*` but NO UI panel renders this — `WorldInspectorPanel` (simulator/world-inspector.tsx) shows before/after reserves + per-frame deltas, NOT the execution trace.
+  - **GAP**: `InspectorService.getExecutionTrace()` is fully implemented but NOT exposed in any UI panel. The Execution tab in `/admin/runtime` uses `ExecutionGraph` (simulator/execution-graph.tsx) which renders `result.plan` (kernel plan), NOT the runtime's `ExecutionTraceView`.
+  - **GAP**: No UI for `/api/runtime/simulator/compare` (the M-RT-13 trace equivalence check). The endpoint exists and returns `SimulationComparison` with `TraceEquivalenceResult`, but no page renders it.
+
+### Whether AI assistant is integrated
+- ⚠️ PARTIAL — three separate AI surfaces:
+  1. **`PlatformEngine.askAI(query)`** (runtime/platform/engine.ts:195-262) — pattern-matches 6 question types (routing, invariants, balance, solvency, health, stress). NO LLM. Returns hardcoded responses with runtime data. Exposed via... **NOT EXPOSED via any API endpoint.** The /admin/platform page's AI assistant calls `/api/runtime/trust POST action=stress_test` instead (page.tsx:78-82). **DEAD CODE.**
+  2. **`/api/simulate` POST** (route.ts:46-57) — calls `generateLLMNarrative(result)` using ZAI SDK (z-ai-web-dev-sdk). Enhances `result.plan.reasoning.narrative` with an LLM-generated narrative. Best-effort (falls back cleanly).
+  3. **`/api/ai/insights`**, **`/api/ai/treasury`**, **`/api/ai/lp-recommendations`**, **/api/ai/compliance`** — 4 separate AI API endpoints using ZAI SDK.
+- **GAP**: `PlatformEngine.askAI()` is implemented but never called from any UI or API. The /admin/platform AI assistant ignores it.
+- **GAP**: Three different AI systems (PlatformEngine.askAI, /api/simulate LLM narrative, /api/ai/* endpoints) with no unified interface.
+
+### GAPS
+- **4 orphaned simulator components** (~1,917 lines total): `admin/kernel-simulation-console.tsx`, `admin/scenario-builder.tsx`, `admin/world-simulator.tsx`, `admin/simulation-console.tsx`, `admin/kernel-runtime-console.tsx`. Should be deleted or wired.
+- **3 parallel simulator engines**: `kernel/simulation.ts SimulationEngine` (877 lines, used by /api/simulate), `runtime/engines/simulator SimulatorEngine` (234 lines, used by /api/runtime/simulator/compare — but no UI), `runtime/platform/engine.ts PlatformEngine.simulate()` (506 lines, used by /api/platform/simulator). Three simulate functions, three API endpoints, three result shapes.
+- **`SimulatorEngine.compare()` doesn't actually execute the simulation pipeline** (engine.ts:98-101 comment) — only compiles. So the M-RT-13 "sim = prod" invariant holds at the compiler level but NOT at the pipeline level. The runtime has `RuntimeHost` with full sandbox isolation that COULD run the full pipeline in sandbox, but `SimulatorEngine` doesn't use it.
+- **`WorldStateOverrides` defined but unused** — what-if scenarios not implemented.
+- **No UI for trace equivalence** — `/api/runtime/simulator/compare` returns rich `TraceEquivalenceResult` but no page renders it.
+- **No UI for `InspectorService.getExecutionTrace()`** — fully implemented, exposed via API, but no panel consumes it.
+- **`PlatformEngine.askAI()` is dead code** — implemented but no API endpoint exposes it; the /admin/platform AI assistant uses the trust layer's stress_test instead.
+- **`/api/simulate` POST crashes when `scenario.financialOperators` is omitted** — `kernel/world-store.ts:181` does `scenario.financialOperators.map(...)` without null-check. (Already documented in prior audit.)
+- **Persist-run writes to 4 missing models** — `LedgerEntryRecord`, `TwinTokenRecord`, `PlanAmendmentRecord` (all missing from schema), `SimulationRun` (exists). Silent failure due to `.catch()`. So /admin/simulations shows 0 runs. (Already documented.)
+- **Decision inspector UI fragmentary** — decisions surface in 3 places (AIReasoningView "Decision trace", ReasoningPanel, InspectorService.getExecutionTrace) with no unified view.
+
+---
+
+**Code audit verdict:** The four subsystems exist as substantial code (extension platform ~1.5k lines, role switching ~600 lines, env switching ~200 lines, runtime simulator ~3.5k lines across kernel+runtime+components). The runtime layer (M-RT-13 SimulatorEngine, M-RT-29 RuntimeHost, M-PLATFORM-38 PlatformEngine) is architecturally complete and internally consistent. The integration layer between runtime and UI is the critical gap:
+- 4 of 4 subsystems have orphaned components (extension marketplace pages exist but Prisma models missing; 4 simulator admin components orphaned; PlatformEngine.askAI dead code; SimulatorEngine.compare has no UI).
+- The env-switcher toggles a cookie that doesn't propagate to runtimeHost.activeEnvironment.
+- The role-switcher works but isn't rendered in 2 of 9 layouts.
+- The simulator has 3 parallel engines with 3 parallel API endpoints and 3 parallel result shapes — needs consolidation.
+
+Implementation agents should target the GAPS sections above — each gap is a discrete unit of work with file paths and line numbers cited.
+
+---
+Task ID: 1-code-audit (re-verification pass)
+Agent: code-audit-agent
+Task: Re-verify prior code-level audit of extension platform, role switching, env switching, runtime simulator
+
+Work Log:
+- Re-read prior audit block (worklog.md lines ~3040-3268). Found complete audit matching the deliverable template for all 4 subsystems already present.
+- Spot-checked 10 cited facts against current source to confirm no drift since prior pass:
+  1. (admin)/layout.tsx:16 → `<AppShell role="admin">` ✅
+  2. (merchant)/layout.tsx:25 → `<AppShell role="merchant">` ✅
+  3. src/lib/auth.ts:61 → `token.roles = (user as any).roles ?? [];` ✅ (line 61, not 58-63 as previously cited — minor drift)
+  4. src/lib/auth.ts:68 → `(session.user as any).roles = token.roles;` ✅
+  5. prisma/schema.prisma → grep for `^model (Extension|ExtensionInstall|ExtensionReview|SavedScenarioRecord|LedgerEntryRecord|TwinTokenRecord|PlanAmendmentRecord|CheckpointRecord|Incident|Organization)\b` returns 0 matches ✅
+  6. src/runtime/platform/engine.ts:195 → `askAI(query: AIAssistantQuery)` exists ✅; grep for `platform.askAI` in src/app/api returns 0 hits (dead code) ✅
+  7. src/runtime/platform/types.ts:111 → `PlatformEnvironment = 'live' | 'test'` ✅ (inconsistent with rest of codebase's `'live' | 'sandbox'`)
+  8. src/components/env-switcher.tsx:91-105 → toggle() writes cookie + reloads, does NOT call POST /api/runtime/host ✅
+  9. src/app/api/runtime/host/route.ts:23-35 → POST switches runtimeHost.activeEnvironment; only caller of runtimeHost.switchEnvironment ✅
+  10. src/app/(admin)/admin/runtime/page.tsx:8 → imports ScenarioBuilder from `@/components/simulator/scenario-builder` ✅
+- Orphan check: grep for `@/components/admin/(scenario-builder|world-simulator|simulation-console|kernel-runtime-console|kernel-simulation-console)` across src/ returns 0 hits — all 5 components confirmed orphaned ✅
+- /admin/platform AI assistant: page.tsx:74-82 calls `/api/runtime/trust action=stress_test`, NOT `platform.askAI()` ✅
+
+Stage Summary:
+The prior code-level audit (worklog.md lines ~3040-3268) is COMPLETE and ACCURATE. No code drift detected. The four GAPS sections (Extension Platform, Role Switching, Environment Switching, Runtime Simulator) stand as written — each gap is a discrete unit of work with file paths and line numbers cited. Implementation agents should consume the existing GAPS sections directly. No additional audit work needed; this pass was purely a verification re-run.
+
+---
+Task ID: 2-prisma-fix
+Agent: prisma-fix-agent
+Task: Fix Prisma provider mismatch + add 11 missing models + verify login works
+
+Work Log:
+- Read worklog tail + 1-audit + 1-code-audit sections to absorb the exact bugs to fix:
+  (a) `prisma/schema.prisma` declares `provider = "postgresql"` but `.env` has SQLite URL → every `db.*` call throws → 401 on all 9 demo logins + 500 on every DB-backed page.
+  (b) 11 missing Prisma models (Extension, ExtensionInstall, ExtensionReview, SavedScenarioRecord, LedgerEntryRecord, TwinTokenRecord, PlanAmendmentRecord, CheckpointRecord, Incident, IncidentUpdate, Organization, OrganizationMember).
+- Grepped `db.<model>` for all 12 missing models across `src/` to discover the exact field names used in code (findUnique/findMany/create/update/upsert/delete calls).
+- Read every relevant API route + page + seed script for each model:
+  • /api/extensions/{create,list,[id],[id]/install,[id]/uninstall,[id]/publish,[id]/submit}/route.ts
+  • /api/scenarios/route.ts + /api/scenarios/regress/route.ts
+  • /api/simulate/route.ts (persistRun — writes ledgerEntryRecord, twinTokenRecord, planAmendmentRecord)
+  • /api/incidents/route.ts + /api/incidents/[id]/route.ts + /api/incidents/[id]/updates/route.ts
+  • /api/organization/[id]/route.ts + src/lib/org-context.ts + scripts/seed-organizations.ts
+  • src/protocol/persistence/checkpoint.ts (db.checkpointRecord.upsert)
+  • (admin)/admin/extensions/page.tsx + (merchant)/dashboard/extensions/page.tsx + (developer)/developers/extensions/page.tsx
+  • scripts/seed-extensions.ts (defines 6 published extensions + reviews + installs)
+  • scripts/seed.ts (verified demo credentials: all 9 emails share `Payswap123456`)
+
+**Edits to `prisma/schema.prisma`** (lines 1–13, 36–48, 146–160, 632–661, plus 239 new lines appended):
+- Line 2: comment "PostgreSQL-ready" → "SQLite-ready"
+- Line 11: `provider = "postgresql"` → `provider = "sqlite"`
+- User model: added 3 back-relations (`extensions Extension[]`, `extensionReviews ExtensionReview[]`, `orgMemberships OrganizationMember[]`)
+- Merchant model: added back-relation `extensionInstalls ExtensionInstall[]`
+- EventRecord.ts: changed `ts BigInt` → `ts Int` (SQLite does not support BigInt)
+- LedgerSnapshotRecord: changed `asOfTs BigInt` → `asOfTs Int`
+- Appended 12 new models (audit said "11" but counted Organization+OrganizationMember as one entry — added both as separate models):
+  1. **Extension** (24 fields + 2 relations): id, slug @unique, name, description, developerId, category, iconUrl?, version, status, permissions(JSON-string), pricing, price, config?(JSON), changelog?(JSON), installCount, rating, reviewCount, submittedAt?, reviewedAt?, reviewedBy?, reviewNotes?, publishedAt?, createdAt, updatedAt + developer User + installs ExtensionInstall[] + reviews ExtensionReview[]
+  2. **ExtensionInstall** (8 fields + 2 relations): id, extensionId, merchantId, status, config?(JSON), installedAt, createdAt, updatedAt + extension + merchant. `@@unique([extensionId, merchantId])`
+  3. **ExtensionReview** (6 fields + 2 relations): id, extensionId, userId, rating, comment, createdAt + extension + user. NO `@@unique([extensionId, userId])` because seed-extensions.ts creates multiple reviews per extension by the same developer user (initially added the unique constraint, ran the seed, got P2002 collision, removed it).
+  4. **SavedScenarioRecord** (13 fields): id, scenarioId @unique, name, description?, category?, scenario(JSON), baselineHash?, baselineCost, baselineTime, baselineRisk, baselineConf, lastRunAt?, lastRunPassed?, createdAt
+  5. **LedgerEntryRecord** (12 fields): id, runId, txId?, accountId?, accountLabel?, accountType?, currency?, debit, credit, balanceAfter, memo?, frame, createdAt
+  6. **TwinTokenRecord** (11 fields): id, runId, symbol?, amount, currency?, fromCountry?, toCountry?, status?, mintedAtFrame?, burnedAtFrame?, memo?, createdAt
+  7. **PlanAmendmentRecord** (9 fields): id, runId, failureType?, failureLabel?, reason?, recoveryStrategy?, insertedAtFrame, stepCount, createdAt
+  8. **CheckpointRecord** (8 fields): id, name @unique, lastSeq, lastTs (Int, was BigInt), lastSnapshotId?, totalCount, createdAt, updatedAt
+  9. **Incident** (12 fields + 1 relation): id, title, description?, severity, status, component?, createdBy?, assignedTo?, acknowledgedAt?, resolvedAt?, createdAt, updatedAt + updates IncidentUpdate[]
+  10. **IncidentUpdate** (6 fields + 1 relation): id, incidentId, authorId?, message, status?, createdAt + incident
+  11. **Organization** (11 fields + 1 relation): id, name, slug @unique, type, status, billingEmail?, country?, currency, plan, logoUrl?, createdAt, updatedAt + members OrganizationMember[]
+  12. **OrganizationMember** (6 fields + 2 relations): id, organizationId, userId, role, status, invitedAt, joinedAt? + organization + user. `@@unique([organizationId, userId])`
+  Schema total: 661 → 900 lines. 41 models (was 29).
+
+**Edits to remove `BigInt()` wrappers** (SQLite stores Int):
+- `src/protocol/persistence/snapshot-store.ts:38` — `asOfTs: BigInt(snap.asOfTs)` → `asOfTs: snap.asOfTs`
+- `src/protocol/persistence/event-store.ts:105` — `ts: BigInt(evt.ts)` → `ts: evt.ts`
+- `src/protocol/persistence/checkpoint.ts:91-92` — `lastTs: BigInt(Date.now())` → `lastTs: Date.now()`
+
+**Edits to remove `mode: 'insensitive'`** (Prisma rejects this argument for SQLite; SQLite is case-insensitive by default for ASCII):
+- `src/app/(compliance)/compliance/sanctions/page.tsx:35`
+- `src/app/(compliance)/compliance/page.tsx:64`
+- `src/app/(ops)/ops/incidents/[id]/page.tsx:108`
+- `src/app/api/incidents/[id]/route.ts:57`
+- `src/app/api/ai/compliance/route.ts:99`
+- `src/app/(treasury)/treasury/page.tsx:197-202` (6 occurrences)
+- `src/app/api/support/search/route.ts:55-57` (refactored `insensitive` const to drop mode)
+- `src/app/api/extensions/list/route.ts:49,58-59` (also updated TS type def for the `where` variable)
+
+**Edit to `.env`** (was 1 line, now 3):
+- Added `NEXTAUTH_SECRET=payswap-dev-secret-change-in-production` (matches the fallback already in src/lib/auth.ts:73)
+- Added `NEXTAUTH_URL=http://localhost:3000`
+- Reason: `src/middleware.ts` uses `withAuth` from `next-auth/middleware` to gate /admin/*, /dashboard/*, /treasury/*, /compliance/*, /lp/*, /support/*, /ops/*, /developers/*, /portal/*. NextAuth's middleware needs `process.env.NEXTAUTH_SECRET` to decode the JWT cookie — `authOptions.secret` set in `src/lib/auth.ts` is NOT visible to middleware. Without it, every gated page returned 307 → /api/auth/error?error=Configuration → 500. The 1-audit agent saw this error and attributed it to "Prisma can't connect" but it was a separate NextAuth config gap that was masked by the Prisma errors. Setting `NEXTAUTH_SECRET` env var resolves it.
+
+**Commands run:**
+1. `bun run db:generate` → "✔ Generated Prisma Client (v6.19.2) to ./node_modules/@prisma/client in 257ms"
+2. `bun run db:push` (with --accept-data-loss via package.json script) → "🚀 Your database is now in sync with your Prisma schema. Done in 39ms" (1 data-loss note: `LedgerSnapshotRecord.asOfTs` column altered from BigInt → Int with 1 non-null value cast).
+3. `bun run db:generate` (auto-ran after push) → regenerated client.
+4. `bun run scripts/seed-extensions.ts` → "Done! Seeded 6 published extensions." (initial run failed with P2002 on `@@unique([extensionId,userId])` for ExtensionReview — removed the constraint, re-pushed, re-ran → success).
+5. `bun run scripts/seed-organizations.ts` → "🎉 3 organizations, 3 memberships".
+6. `scripts/seed.ts` was already applied in a prior session (DB has all 9 demo users with 60-char bcrypt hashes + Accra Coffee Co. merchant + UserRole rows). Re-running it would fail because it uses `db.account.create` (not upsert) for the nested Merchant record — pre-existing non-idempotency bug, not caused by my changes. Verified existing seed data is intact.
+
+**Verification — login (all 9 demo accounts return HTTP 302):**
+```
+ekontetevi@gmail.com           login=302  Tetevi Placide Ekon / roles=['SUPER_ADMIN']
+merchant@payswap.demo          login=302  Kwame Asante / roles=['MERCHANT']
+customer@payswap.demo          login=302  Ama Serwaa / roles=['CUSTOMER']
+lp@payswap.demo                login=302  Acacia Liquidity / roles=['LP']
+treasury@payswap.demo          login=302  Treasury Operator / roles=['TREASURY']
+compliance@payswap.demo        login=302  Compliance Officer / roles=['COMPLIANCE']
+support@payswap.demo           login=302  Support Agent / roles=['SUPPORT']
+ops@payswap.demo               login=302  Operations Engineer / roles=['OPERATIONS']
+developer@payswap.demo         login=302  Developer / roles=['DEVELOPER']
+```
+Sample curl flow for merchant:
+```
+$ curl -sS -c cj.txt http://localhost:3000/api/auth/csrf
+{"csrfToken":"1f0c30a423cca6446b2d2386abdbbac08e1b4f34f9b9499e682b2773fc7614cb"}
+
+$ curl -sS -i -b cj.txt -c cj.txt -X POST http://localhost:3000/api/auth/callback/credentials \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    --data-urlencode "email=merchant@payswap.demo" \
+    --data-urlencode "password=Payswap123456" \
+    --data-urlencode "csrfToken=1f0c30a4..." \
+    --data-urlencode "callbackUrl=http://localhost:3000/dashboard"
+HTTP/1.1 302 Found
+location: http://localhost:3000/dashboard
+set-cookie: next-auth.session-token=eyJhbGc...; Path=/; HttpOnly; SameSite=Lax
+```
+
+**Verification — pages (after fixes; all return HTTP 200 with proper PaySwap HTML):**
+- Admin (10 pages): /admin, /admin/extensions, /admin/simulations, /admin/runtime, /admin/waitlist, /admin/merchants, /admin/users, /admin/network, /admin/platform, /admin/audit — all 200.
+- Merchant (13 pages): /dashboard, /dashboard/payments, /dashboard/payouts, /dashboard/customers, /dashboard/invoices, /dashboard/products, /dashboard/extensions, /dashboard/settings, /dashboard/settings/team, /dashboard/settings/api-keys, /dashboard/settings/webhooks, /dashboard/settings/organization, /dashboard/analytics — all 200.
+
+**Verification — DB-backed API endpoints (previously 500):**
+- /api/extensions/list → 200 (6 published extensions: slack-notifications, quickbooks-sync, mailchimp-integration, shopify-sync, advanced-analytics, fraud-detection-pro)
+- /api/extensions/list?q=slack → 200 (search filter works)
+- /api/extensions/list?category=marketing → 200 (category filter works)
+- /api/extensions/list?sort=rating → 200 (sort works)
+- /api/scenarios → 200 (saved scenarios list — currently 0 saved)
+- /api/scenarios/regress (POST) → 200 (regression runner)
+- /api/incidents → 200 (admin-authed; currently 0 incidents)
+
+**Verification — SQLite DB state after push:**
+- 41 tables (was 29; added 12 new tables)
+- 9 demo users with 60-char bcrypt hashes intact
+- 1 merchant row ("Accra Coffee Co. (Updated)")
+- 9 UserRole rows (1 per demo user)
+- 6 Extension rows (published, install counts 287–1748, ratings 4.3–4.7)
+- 16 ExtensionReview rows
+- 6 ExtensionInstall rows (linked to the demo merchant)
+- 3 Organization rows (Accra Coffee Co., Acacia Liquidity Provider, PaySwap Platform)
+- 3 OrganizationMember rows
+
+Stage Summary:
+- Prisma provider: changed from postgresql → sqlite (line 11)
+- Models added: 12 (Extension [24 fields], ExtensionInstall [8], ExtensionReview [6], SavedScenarioRecord [13], LedgerEntryRecord [12], TwinTokenRecord [11], PlanAmendmentRecord [9], CheckpointRecord [8], Incident [12], IncidentUpdate [6], Organization [11], OrganizationMember [6])
+- Back-relations added on existing models: User (+3), Merchant (+1)
+- BigInt → Int fixes in schema: EventRecord.ts, LedgerSnapshotRecord.asOfTs, CheckpointRecord.lastTs (new)
+- BigInt() wrapper removals in code: snapshot-store.ts:38, event-store.ts:105, checkpoint.ts:91-92
+- `mode: 'insensitive'` removals in code: 7 files (extensions/list, incidents/[id], incidents/[id]/updates, ai/compliance, support/search, treasury/page, compliance/page, compliance/sanctions/page)
+- .env additions: NEXTAUTH_SECRET + NEXTAUTH_URL (resolved NextAuth Configuration errors on /admin/* and /dashboard/* — separate root cause from Prisma, but blocked pages from rendering)
+- db:push result: success — 12 new tables created, 1 column altered (LedgerSnapshotRecord.asOfTs BigInt→Int, 1 row cast). Existing 29 tables + 9 demo users preserved.
+- Login verified: TRUE for all 9 demo accounts (HTTP 302 + valid session cookie + /api/auth/session returns user with correct roles)
+- Demo credentials that work (all share password `Payswap123456`):
+  • SUPER_ADMIN:  ekontetevi@gmail.com   → /admin
+  • MERCHANT:     merchant@payswap.demo  → /dashboard
+  • CUSTOMER:     customer@payswap.demo  → /
+  • LP:           lp@payswap.demo        → /lp
+  • TREASURY:     treasury@payswap.demo  → /treasury
+  • COMPLIANCE:   compliance@payswap.demo → /compliance
+  • SUPPORT:      support@payswap.demo   → /support
+  • OPERATIONS:   ops@payswap.demo       → /ops
+  • DEVELOPER:    developer@payswap.demo → /developers
+- Extension marketplace now seeded with 6 published extensions (QuickBooks Sync, Mailchimp, Slack Notifications, Advanced Analytics, Fraud Detection Pro, Shopify Sync) — /dashboard/extensions and /admin/extensions render real data.
+- Dev server restarted twice: (1) after schema/db:push to pick up new Prisma client, (2) after adding NEXTAUTH_SECRET to .env. Currently running on PID 12767 (next-server v16.1.3) on port 3000.
+
+Next actions for follow-up agents:
+1. P1 (audit step 4): Switch `(admin)/layout.tsx` and `(merchant)/layout.tsx` from `AppShell` to `RoleShell`/`UnifiedShell` so admins/merchants get RoleSwitcher + EnvSwitcher + Cmd+K. Currently both layouts still use the older AppShell.
+2. P1 (audit step 5): Restore /waitlist to a real waitlist signup form (currently renders the Economic Transparency dashboard).
+3. P1 (audit step 6): Align env-mode default — `src/lib/environment.ts:13` defaults to `'live'`, but `src/components/env-switcher.tsx` defaults to `'sandbox'`. Pick one.
+4. P1 (audit step 7): Wire EnvSwitcher to also POST /api/runtime/host so the in-memory runtimeHost.activeEnvironment follows the cookie (currently the badge is cosmetic for in-memory queries).
+5. P1 (audit step 8): Fix /api/simulate POST crash when scenario lacks `financialOperators` — `src/kernel/world-store.ts:181` should default to `[]`.
+6. Pre-existing non-idempotency: `scripts/seed.ts` uses `db.account.create` (not upsert) for the nested Merchant record at line 48 — fails on second run with P2002 on Merchant.email unique constraint. Make it upsert-based for re-runnability.

@@ -1,0 +1,902 @@
+     1→// PaySwap — Production Prisma Schema
+     2→// SQLite-ready (uses compatible types, normalized, indexed, soft-deletes, audit fields)
+     3→// NOTE: SQLite does not support BigInt/Decimal/Json — all JSON is stored as String,
+     4→// and all timestamps-as-integers are stored as Int.
+     5→
+     6→generator client {
+     7→  provider = "prisma-client-js"
+     8→}
+     9→
+    10→datasource db {
+    11→  provider = "sqlite"
+    12→  url      = env("DATABASE_URL")
+    13→}
+    14→
+    15→// ═══════════════════════════════════════════════════════════════════════════
+    16→// AUTH & USERS
+    17→// ═══════════════════════════════════════════════════════════════════════════
+    18→
+    19→model User {
+    20→  id              String      @id @default(cuid())
+    21→  email           String      @unique
+    22→  passwordHash    String?
+    23→  name            String?
+    24→  phone           String?
+    25→  avatarUrl       String?
+    26→  status          String      @default("PENDING") // PENDING, ACTIVE, SUSPENDED, FROZEN
+    27→  emailVerified   DateTime?
+    28→  lastLoginAt     DateTime?
+    29→  lastLoginIp     String?
+    30→  mfaEnabled      Boolean     @default(false)
+    31→  mfaSecret       String?
+    32→  createdAt       DateTime    @default(now())
+    33→  updatedAt       DateTime    @updatedAt
+    34→  deletedAt       DateTime?
+    35→
+    36→  roles           UserRole[]
+    37→  accounts        Account[]
+    38→  sessions        Session[]
+    39→  auditLogs       AuditLog[]
+    40→  teamMemberships TeamMember[]
+    41→
+    42→  // Extension marketplace (added in task 2-prisma-fix)
+    43→  extensions         Extension[]
+    44→  extensionReviews   ExtensionReview[]
+    45→  // Organization memberships (added in task 2-prisma-fix)
+    46→  orgMemberships     OrganizationMember[]
+    47→
+    48→  @@index([status])
+    49→}
+    50→
+    51→model UserRole {
+    52→  id          String   @id @default(cuid())
+    53→  userId      String
+    54→  role        String   // CUSTOMER, MERCHANT, MERCHANT_STAFF, LP, TREASURY, COMPLIANCE, SUPPORT, DEVELOPER, OPERATIONS, ADMIN, SUPER_ADMIN
+    55→  merchantId  String?  // if MERCHANT or MERCHANT_STAFF
+    56→  permissions String?  // JSON string of granular permissions
+    57→  createdAt   DateTime @default(now())
+    58→
+    59→  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+    60→
+    61→  @@unique([userId, role, merchantId])
+    62→  @@index([merchantId])
+    63→}
+    64→
+    65→model Session {
+    66→  id           String   @id @default(cuid())
+    67→  userId       String
+    68→  token        String   @unique
+    69→  expiresAt    DateTime
+    70→  ip           String?
+    71→  userAgent    String?
+    72→  createdAt    DateTime @default(now())
+    73→
+    74→  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+    75→
+    76→  @@index([userId])
+    77→  @@index([expiresAt])
+    78→}
+    79→
+    80→model WaitlistEntry {
+    81→  id           String   @id @default(cuid())
+    82→  email        String   @unique
+    83→  name         String
+    84→  company      String?
+    85→  phone        String?
+    86→  country      String
+    87→  businessType String?  // INDIVIDUAL, SMALL_BUSINESS, ENTERPRISE, STARTUP, NGO
+    88→  status       String   @default("PENDING") // PENDING, APPROVED, REJECTED, CONVERTED
+    89→  notes        String?
+    90→  reviewedBy   String?
+    91→  reviewedAt   DateTime?
+    92→  createdAt    DateTime @default(now())
+    93→
+    94→  @@index([status])
+    95→  @@index([country])
+    96→}
+    97→
+    98→// ═══════════════════════════════════════════════════════════════════════════
+    99→// ACCOUNTS & MERCHANTS
+   100→// ═══════════════════════════════════════════════════════════════════════════
+   101→
+   102→model Account {
+   103→  id        String   @id @default(cuid())
+   104→  userId    String
+   105→  type      String   // CUSTOMER, MERCHANT, LP
+   106→  status    String   @default("PENDING") // PENDING, ACTIVE, SUSPENDED, CLOSED
+   107→  createdAt DateTime @default(now())
+   108→  updatedAt DateTime @updatedAt
+   109→  deletedAt DateTime?
+   110→
+   111→  user      User       @relation(fields: [userId], references: [id])
+   112→  merchant  Merchant?
+   113→  customer  Customer?
+   114→  lpProfile LPProfile?
+   115→  wallets   Wallet[]
+   116→
+   117→  @@index([userId])
+   118→  @@index([type, status])
+   119→}
+   120→
+   121→model Merchant {
+   122→  id                  String   @id @default(cuid())
+   123→  accountId           String   @unique
+   124→  name                String
+   125→  legalName           String?
+   126→  email               String   @unique
+   127→  phone               String?
+   128→  country             String
+   129→  currency            String   @default("GHS")
+   130→  website             String?
+   131→  logoUrl             String?
+   132→  description         String?
+   133→  businessType        String?
+   134→  registrationNumber  String?
+   135→  taxId               String?
+   136→  address             String?  // JSON string
+   137→  tier                String   @default("UNVERIFIED") // UNVERIFIED, VERIFIED, TRUSTED, PREMIUM
+   138→  bond                Float    @default(0)
+   139→  status              String   @default("PENDING") // PENDING, VERIFIED, ACTIVE, SUSPENDED, CLOSED
+   140→  kycLevel            Int      @default(0)
+   141→  settings            String?  // JSON string
+   142→  createdAt           DateTime @default(now())
+   143→  updatedAt           DateTime @updatedAt
+   144→  deletedAt           DateTime?
+   145→
+   146→  account            Account           @relation(fields: [accountId], references: [id])
+   147→  products           Product[]
+   148→  customers          CustomerRecord[]
+   149→  invoices           Invoice[]
+   150→  payouts            Payout[]
+   151→  refunds            Refund[]
+   152→  subscriptions      Subscription[]
+   153→  paymentLinks       PaymentLink[]
+   154→  apiKeys            ApiKey[]
+   155→  webhookEndpoints   WebhookEndpoint[]
+   156→  teamMembers        TeamMember[]
+   157→  payments           Payment[]
+   158→
+   159→  // Extension marketplace installs (added in task 2-prisma-fix)
+   160→  extensionInstalls  ExtensionInstall[]
+   161→
+   162→  @@index([status])
+   163→  @@index([tier])
+   164→  @@index([country])
+   165→}
+   166→
+   167→model Customer {
+   168→  id              String   @id @default(cuid())
+   169→  accountId       String?  @unique
+   170→  name            String
+   171→  email           String
+   172→  phone           String?
+   173→  country         String?
+   174→  metadata        String?  // JSON
+   175→  totalSpent      Float    @default(0)
+   176→  transactionCount Int     @default(0)
+   177→  createdAt       DateTime @default(now())
+   178→  updatedAt       DateTime @updatedAt
+   179→  deletedAt       DateTime?
+   180→
+   181→  account    Account?         @relation(fields: [accountId], references: [id])
+   182→  payments   Payment[]
+   183→  invoices   Invoice[]
+   184→  records    CustomerRecord[]
+   185→
+   186→  @@index([email])
+   187→}
+   188→
+   189→model CustomerRecord {
+   190→  id              String   @id @default(cuid())
+   191→  merchantId      String
+   192→  customerId      String?
+   193→  name            String
+   194→  email           String
+   195→  phone           String?
+   196→  country         String?
+   197→  metadata        String?  // JSON
+   198→  totalSpent      Float    @default(0)
+   199→  transactionCount Int     @default(0)
+   200→  createdAt       DateTime @default(now())
+   201→  updatedAt       DateTime @updatedAt
+   202→  deletedAt       DateTime?
+   203→
+   204→  merchant  Merchant @relation(fields: [merchantId], references: [id])
+   205→  customer  Customer? @relation(fields: [customerId], references: [id])
+   206→
+   207→  @@index([merchantId])
+   208→  @@index([email])
+   209→}
+   210→
+   211→model LPProfile {
+   212→  id          String   @id @default(cuid())
+   213→  accountId   String   @unique
+   214→  name        String
+   215→  country     String
+   216→  currencies  String   // JSON array
+   217→  tier        String   @default("verified")
+   218→  stake       Float    @default(0)
+   219→  collateral  Float    @default(0)
+   220→  capacity    String?  // JSON
+   221→  reputation  Float    @default(0.5)
+   222→  status      String   @default("pending")
+   223→  createdAt   DateTime @default(now())
+   224→  updatedAt   DateTime @updatedAt
+   225→
+   226→  account Account @relation(fields: [accountId], references: [id])
+   227→
+   228→  @@index([status])
+   229→}
+   230→
+   231→// ═══════════════════════════════════════════════════════════════════════════
+   232→// WALLETS
+   233→// ═══════════════════════════════════════════════════════════════════════════
+   234→
+   235→model Wallet {
+   236→  id              String   @id @default(cuid())
+   237→  accountId       String
+   238→  name            String
+   239→  currency        String
+   240→  balance         Float    @default(0)
+   241→  pendingBalance  Float    @default(0)
+   242→  lockedBalance   Float    @default(0)
+   243→  isDefault       Boolean  @default(false)
+   244→  createdAt       DateTime @default(now())
+   245→  updatedAt       DateTime @updatedAt
+   246→
+   247→  account     Account           @relation(fields: [accountId], references: [id])
+   248→  transactions WalletTransaction[]
+   249→
+   250→  @@index([accountId])
+   251→  @@unique([accountId, currency])
+   252→}
+   253→
+   254→model WalletTransaction {
+   255→  id           String   @id @default(cuid())
+   256→  walletId     String
+   257→  type         String   // CREDIT, DEBIT, LOCK, UNLOCK
+   258→  amount       Float
+   259→  currency     String
+   260→  counterparty String?
+   261→  reference    String?
+   262→  txHash       String?
+   263→  createdAt    DateTime @default(now())
+   264→
+   265→  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+   266→
+   267→  @@index([walletId])
+   268→  @@index([createdAt])
+   269→}
+   270→
+   271→// ═══════════════════════════════════════════════════════════════════════════
+   272→// PAYMENTS & PAYOUTS
+   273→// ═══════════════════════════════════════════════════════════════════════════
+   274→
+   275→model Payment {
+   276→  id                  String   @id @default(cuid())
+   277→  merchantId          String
+   278→  customerId          String?
+   279→  amount              Float
+   280→  currency            String
+   281→  sourceCurrency      String?
+   282→  destinationCurrency String?
+   283→  status              String   @default("PENDING") // PENDING, PROCESSING, SETTLING, COMPLETED, FAILED, CANCELLED, REFUNDED
+   284→  method              String?  // CARD, MOBILE_MONEY, BANK, QR, PAYMENT_LINK, CHECKOUT
+   285→  corridor            String?
+   286→  lpId                String?
+   287→  fee                 Float    @default(0)
+   288→  netAmount           Float    @default(0)
+   289→  fxRate              Float    @default(1)
+   290→  txHash              String?
+   291→  evidence            String?  // JSON
+   292→  reference           String?
+   293→  description         String?
+   294→  metadata            String?  // JSON
+   295→  failureReason       String?
+   296→  createdAt           DateTime @default(now())
+   297→  updatedAt           DateTime @updatedAt
+   298→  settledAt           DateTime?
+   299→
+   300→  merchant  Merchant @relation(fields: [merchantId], references: [id])
+   301→  customer  Customer? @relation(fields: [customerId], references: [id])
+   302→  refunds   Refund[]
+   303→
+   304→  @@index([merchantId, status])
+   305→  @@index([customerId])
+   306→  @@index([createdAt])
+   307→  @@index([corridor])
+   308→}
+   309→
+   310→model Payout {
+   311→  id                  String   @id @default(cuid())
+   312→  merchantId          String
+   313→  method              String   // BANK, MOBILE_MONEY, ONCHAIN
+   314→  sourceAmount        Float
+   315→  sourceAsset         String
+   316→  sourceCurrency      String
+   317→  destinationCurrency String
+   318→  destination         String?  // JSON
+   319→  fxRate              Float    @default(1)
+   320→  feeBps              Int      @default(50)
+   321→  fee                 Float    @default(0)
+   322→  netAmount           Float    @default(0)
+   323→  status              String   @default("REQUESTED") // REQUESTED, REVIEWING, PROCESSING, COMPLETED, FAILED, CANCELLED
+   324→  txHash              String?
+   325→  evidence            String?  // JSON
+   326→  reason              String?
+   327→  failureReason       String?
+   328→  approvedBy          String?
+   329→  approvedAt          DateTime?
+   330→  createdAt           DateTime @default(now())
+   331→  processedAt         DateTime?
+   332→  completedAt         DateTime?
+   333→
+   334→  merchant Merchant @relation(fields: [merchantId], references: [id])
+   335→
+   336→  @@index([merchantId, status])
+   337→  @@index([createdAt])
+   338→}
+   339→
+   340→model Refund {
+   341→  id          String   @id @default(cuid())
+   342→  merchantId  String
+   343→  paymentId   String
+   344→  amount      Float
+   345→  type        String   // FULL, PARTIAL
+   346→  reason      String?
+   347→  status      String   @default("PENDING") // PENDING, APPROVED, PROCESSED, REJECTED
+   348→  requestedBy String
+   349→  approvedBy  String?
+   350→  processedAt DateTime?
+   351→  createdAt   DateTime @default(now())
+   352→
+   353→  merchant Merchant @relation(fields: [merchantId], references: [id])
+   354→  payment  Payment  @relation(fields: [paymentId], references: [id])
+   355→
+   356→  @@index([merchantId])
+   357→  @@index([paymentId])
+   358→}
+   359→
+   360→// ═══════════════════════════════════════════════════════════════════════════
+   361→// PRODUCTS, INVOICES, SUBSCRIPTIONS, PAYMENT LINKS
+   362→// ═══════════════════════════════════════════════════════════════════════════
+   363→
+   364→model Product {
+   365→  id          String   @id @default(cuid())
+   366→  merchantId  String
+   367→  name        String
+   368→  description String?
+   369→  price       Float
+   370→  currency    String
+   371→  type        String   @default("PHYSICAL")
+   372→  imageUrl    String?
+   373→  metadata    String?  // JSON
+   374→  status      String   @default("ACTIVE")
+   375→  createdAt   DateTime @default(now())
+   376→  updatedAt   DateTime @updatedAt
+   377→  deletedAt   DateTime?
+   378→
+   379→  merchant Merchant @relation(fields: [merchantId], references: [id])
+   380→
+   381→  @@index([merchantId, status])
+   382→}
+   383→
+   384→model Invoice {
+   385→  id          String   @id @default(cuid())
+   386→  merchantId  String
+   387→  customerId  String?
+   388→  number      String
+   389→  items       String   // JSON array
+   390→  subtotal    Float
+   391→  tax         Float    @default(0)
+   392→  total       Float
+   393→  currency    String
+   394→  status      String   @default("DRAFT") // DRAFT, SENT, PAID, OVERDUE, VOID
+   395→  dueDate     DateTime?
+   396→  sentAt      DateTime?
+   397→  paidAt      DateTime?
+   398→  paymentId   String?
+   399→  createdAt   DateTime @default(now())
+   400→  updatedAt   DateTime @updatedAt
+   401→
+   402→  merchant Merchant @relation(fields: [merchantId], references: [id])
+   403→  customer  Customer? @relation(fields: [customerId], references: [id])
+   404→
+   405→  @@index([merchantId, status])
+   406→  @@index([customerId])
+   407→}
+   408→
+   409→model Subscription {
+   410→  id                  String   @id @default(cuid())
+   411→  merchantId          String
+   412→  customerId          String?
+   413→  planName            String
+   414→  amount              Float
+   415→  currency            String
+   416→  interval            String   // DAILY, WEEKLY, MONTHLY, YEARLY
+   417→  status              String   @default("ACTIVE")
+   418→  currentPeriodStart  DateTime?
+   419→  currentPeriodEnd    DateTime?
+   420→  trialEnd            DateTime?
+   421→  canceledAt          DateTime?
+   422→  lastPaymentAt       DateTime?
+   423→  failedAttempts      Int      @default(0)
+   424→  createdAt           DateTime @default(now())
+   425→  updatedAt           DateTime @updatedAt
+   426→
+   427→  merchant Merchant @relation(fields: [merchantId], references: [id])
+   428→
+   429→  @@index([merchantId, status])
+   430→}
+   431→
+   432→model PaymentLink {
+   433→  id              String   @id @default(cuid())
+   434→  merchantId      String
+   435→  amount          Float
+   436→  currency        String
+   437→  description     String?
+   438→  reference       String?
+   439→  status          String   @default("ACTIVE")
+   440→  url             String   @unique
+   441→  expiresAt       DateTime?
+   442→  paymentCount    Int      @default(0)
+   443→  totalCollected  Float    @default(0)
+   444→  createdAt       DateTime @default(now())
+   445→
+   446→  merchant Merchant @relation(fields: [merchantId], references: [id])
+   447→
+   448→  @@index([merchantId])
+   449→}
+   450→
+   451→// ═══════════════════════════════════════════════════════════════════════════
+   452→// API KEYS & WEBHOOKS & TEAM
+   453→// ═══════════════════════════════════════════════════════════════════════════
+   454→
+   455→model ApiKey {
+   456→  id          String   @id @default(cuid())
+   457→  merchantId  String
+   458→  label       String
+   459→  keyPrefix   String   // psk_live_xxx or psk_test_xxx
+   460→  keyHash     String   @unique
+   461→  scopes      String   // JSON array
+   462→  lastUsedAt  DateTime?
+   463→  lastUsedIp  String?
+   464→  status      String   @default("ACTIVE")
+   465→  expiresAt   DateTime?
+   466→  createdAt   DateTime @default(now())
+   467→
+   468→  merchant Merchant @relation(fields: [merchantId], references: [id])
+   469→
+   470→  @@index([merchantId])
+   471→}
+   472→
+   473→model WebhookEndpoint {
+   474→  id          String   @id @default(cuid())
+   475→  merchantId  String
+   476→  url         String
+   477→  secretHash  String
+   478→  events      String   // JSON array
+   479→  status      String   @default("ACTIVE")
+   480→  createdAt   DateTime @default(now())
+   481→
+   482→  merchant    Merchant           @relation(fields: [merchantId], references: [id])
+   483→  deliveries  WebhookDelivery[]
+   484→
+   485→  @@index([merchantId])
+   486→}
+   487→
+   488→model WebhookDelivery {
+   489→  id            String   @id @default(cuid())
+   490→  endpointId    String
+   491→  eventType     String
+   492→  payload       String   // JSON
+   493→  signature     String
+   494→  status        String   @default("PENDING")
+   495→  attempts      Int      @default(0)
+   496→  responseStatus Int?
+   497→  responseBody  String?
+   498→  nextRetryAt   DateTime?
+   499→  deliveredAt   DateTime?
+   500→  createdAt     DateTime @default(now())
+   501→
+   502→  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+   503→
+   504→  @@index([endpointId])
+   505→  @@index([status])
+   506→}
+   507→
+   508→model TeamMember {
+   509→  id         String   @id @default(cuid())
+   510→  merchantId String
+   511→  email      String
+   512→  role       String   // OWNER, ADMIN, DEVELOPER, ANALYST, VIEWER, SUPPORT
+   513→  status     String   @default("PENDING")
+   514→  invitedAt  DateTime @default(now())
+   515→  joinedAt   DateTime?
+   516→  userId     String?
+   517→
+   518→  merchant Merchant @relation(fields: [merchantId], references: [id])
+   519→  user     User?     @relation(fields: [userId], references: [id])
+   520→
+   521→  @@index([merchantId])
+   522→  @@unique([merchantId, email])
+   523→}
+   524→
+   525→// ═══════════════════════════════════════════════════════════════════════════
+   526→// COMPLIANCE
+   527→// ═══════════════════════════════════════════════════════════════════════════
+   528→
+   529→model ComplianceReview {
+   530→  id          String   @id @default(cuid())
+   531→  entityType  String   // MERCHANT, CUSTOMER, LP
+   532→  entityId    String
+   533→  type        String   // KYC, KYB, SANCTIONS, PEP, AML, RISK
+   534→  status      String   @default("PENDING")
+   535→  data        String?  // JSON
+   536→  reviewerId  String?
+   537→  reviewedAt  DateTime?
+   538→  notes       String?
+   539→  createdAt   DateTime @default(now())
+   540→
+   541→  @@index([entityType, entityId])
+   542→  @@index([status])
+   543→}
+   544→
+   545→model AMLAlert {
+   546→  id          String   @id @default(cuid())
+   547→  entityType  String
+   548→  entityId    String
+   549→  alertType   String   // STRUCTURING, VELOCITY, HIGH_RISK_CORRIDOR, PEP, SANCTIONS_HIT
+   550→  severity    String   // LOW, MEDIUM, HIGH, CRITICAL
+   551→  score       Float
+   552→  details     String?  // JSON
+   553→  status      String   @default("OPEN")
+   554→  assignedTo  String?
+   555→  createdAt   DateTime @default(now())
+   556→  closedAt    DateTime?
+   557→
+   558→  @@index([status])
+   559→  @@index([entityId])
+   560→}
+   561→
+   562→model SAR {
+   563→  id            String   @id @default(cuid())
+   564→  caseId        String?
+   565→  filedBy       String
+   566→  narrative     String
+   567→  amount        Float
+   568→  entities      String   // JSON array
+   569→  regulatoryRef String?
+   570→  status        String   @default("DRAFT")
+   571→  filedAt       DateTime?
+   572→  createdAt     DateTime @default(now())
+   573→
+   574→  @@index([status])
+   575→}
+   576→
+   577→// ═══════════════════════════════════════════════════════════════════════════
+   578→// AUDIT LOG
+   579→// ═══════════════════════════════════════════════════════════════════════════
+   580→
+   581→model AuditLog {
+   582→  id           String   @id @default(cuid())
+   583→  userId       String?
+   584→  action       String
+   585→  resourceType String
+   586→  resourceId   String?
+   587→  result       String   // SUCCESS, DENIED, ERROR
+   588→  ip           String?
+   589→  userAgent    String?
+   590→  details      String?  // JSON
+   591→  createdAt    DateTime @default(now())
+   592→
+   593→  user User? @relation(fields: [userId], references: [id])
+   594→
+   595→  @@index([userId])
+   596→  @@index([action])
+   597→  @@index([resourceType, resourceId])
+   598→  @@index([createdAt])
+   599→}
+   600→
+   601→// ═══════════════════════════════════════════════════════════════════════════
+   602→// LEGACY (keep for backward compat with existing simulation engine)
+   603→// ═══════════════════════════════════════════════════════════════════════════
+   604→
+   605→model SimulationRun {
+   606→  id              String   @id @default(cuid())
+   607→  runId           String   @unique
+   608→  kernelVersion   String
+   609→  scenarioName    String
+   610→  scenario        String
+   611→  result          String
+   612→  resultHash      String
+   613→  amount          Float
+   614→  currency        String
+   615→  priority        String
+   616→  buyerCountry    String
+   617→  merchantCountry String
+   618→  costPercent     Float
+   619→  settlementMs    Int
+   620→  riskScore       Float
+   621→  confidence      Float
+   622→  settled         Boolean  @default(false)
+   623→  amendments      Int      @default(0)
+   624→  failures        Int      @default(0)
+   625→  createdAt       DateTime @default(now())
+   626→
+   627→  @@index([createdAt])
+   628→  @@index([buyerCountry, merchantCountry])
+   629→  @@index([resultHash])
+   630→}
+   631→
+   632→model EventRecord {
+   633→  id        String   @id @default(cuid())
+   634→  eventId   String   @unique
+   635→  type      String
+   636→  payload   String
+   637→  ts        Int      // SQLite does not support BigInt — store epoch-ms as Int
+   638→  frame     Int      @default(0)
+   639→  seq       Int      @default(0)
+   640→  createdAt DateTime @default(now())
+   641→
+   642→  @@index([type])
+   643→  @@index([ts])
+   644→  @@index([seq])
+   645→}
+   646→
+   647→model LedgerSnapshotRecord {
+   648→  id           String   @id @default(cuid())
+   649→  snapshotId   String   @unique
+   650→  asOfTs       Int      // SQLite does not support BigInt — store epoch-ms as Int
+   651→  asOfSeq      Int
+   652→  accounts     String
+   653→  trialBalance String
+   654→  entryCount   Int
+   655→  eventCount   Int
+   656→  durationMs   Int
+   657→  createdAt    DateTime @default(now())
+   658→
+   659→  @@index([asOfTs])
+   660→  @@index([asOfSeq])
+   661→}
+   662→
+   663→// ═══════════════════════════════════════════════════════════════════════════
+   664→// EXTENSION MARKETPLACE (added in task 2-prisma-fix)
+   665→// ═══════════════════════════════════════════════════════════════════════════
+   666→
+   667→model Extension {
+   668→  id            String    @id @default(cuid())
+   669→  slug          String    @unique
+   670→  name          String
+   671→  description   String
+   672→  developerId   String
+   673→  category      String    // payments | analytics | compliance | accounting | crm | marketing | shipping | other
+   674→  iconUrl       String?
+   675→  version       String    @default("1.0.0")
+   676→  status        String    @default("draft") // draft | submitted | review | approved | published | rejected | suspended
+   677→  permissions   String    // JSON array: read_payments | write_payments | read_customers | write_customers | send_webhooks
+   678→  pricing       String    @default("free") // free | paid | freemium
+   679→  price         Float     @default(0)
+   680→  config        String?   // JSON schema object for merchant config
+   681→  changelog     String?   // JSON array of { version, date, changes }
+   682→  installCount  Int       @default(0)
+   683→  rating        Float     @default(0)
+   684→  reviewCount   Int       @default(0)
+   685→  submittedAt   DateTime?
+   686→  reviewedAt    DateTime?
+   687→  reviewedBy    String?   // userId of admin reviewer
+   688→  reviewNotes   String?
+   689→  publishedAt   DateTime?
+   690→  createdAt     DateTime  @default(now())
+   691→  updatedAt     DateTime  @updatedAt
+   692→
+   693→  developer User               @relation(fields: [developerId], references: [id])
+   694→  installs   ExtensionInstall[]
+   695→  reviews    ExtensionReview[]
+   696→
+   697→  @@index([status])
+   698→  @@index([category])
+   699→  @@index([developerId])
+   700→}
+   701→
+   702→model ExtensionInstall {
+   703→  id          String   @id @default(cuid())
+   704→  extensionId String
+   705→  merchantId  String
+   706→  status      String   @default("active") // active | disabled
+   707→  config      String?  // JSON object — merchant-specific config for the extension
+   708→  installedAt DateTime @default(now())
+   709→  createdAt   DateTime @default(now())
+   710→  updatedAt   DateTime @updatedAt
+   711→
+   712→  extension Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+   713→  merchant  Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+   714→
+   715→  @@unique([extensionId, merchantId])
+   716→  @@index([merchantId])
+   717→  @@index([status])
+   718→}
+   719→
+   720→model ExtensionReview {
+   721→  id          String   @id @default(cuid())
+   722→  extensionId String
+   723→  userId      String
+   724→  rating      Int
+   725→  comment     String
+   726→  createdAt   DateTime @default(now())
+   727→
+   728→  extension Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+   729→  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+   730→
+   731→  // NOTE: No @@unique([extensionId, userId]) — the seed script creates multiple
+   732→  // reviews per extension by the same developer user, so we allow it.
+   733→  @@index([extensionId])
+   734→  @@index([userId])
+   735→}
+   736→
+   737→// ═══════════════════════════════════════════════════════════════════════════
+   738→// SIMULATOR PERSISTENCE (added in task 2-prisma-fix)
+   739→// ═══════════════════════════════════════════════════════════════════════════
+   740→
+   741→model SavedScenarioRecord {
+   742→  id             String   @id @default(cuid())
+   743→  scenarioId     String   @unique
+   744→  name           String
+   745→  description    String?
+   746→  category       String?
+   747→  scenario       String   // JSON-serialized SimulationScenario
+   748→  baselineHash   String?
+   749→  baselineCost   Float    @default(0)
+   750→  baselineTime   Int      @default(0)
+   751→  baselineRisk   Float    @default(0)
+   752→  baselineConf   Float    @default(0)
+   753→  lastRunAt      DateTime?
+   754→  lastRunPassed  Boolean?
+   755→  createdAt      DateTime @default(now())
+   756→
+   757→  @@index([category])
+   758→  @@index([createdAt])
+   759→}
+   760→
+   761→model LedgerEntryRecord {
+   762→  id            String   @id @default(cuid())
+   763→  runId         String
+   764→  txId          String?
+   765→  accountId     String?
+   766→  accountLabel  String?
+   767→  accountType   String?
+   768→  currency      String?
+   769→  debit         Float    @default(0)
+   770→  credit        Float    @default(0)
+   771→  balanceAfter  Float    @default(0)
+   772→  memo          String?
+   773→  frame         Int      @default(0)
+   774→  createdAt     DateTime @default(now())
+   775→
+   776→  @@index([runId])
+   777→  @@index([accountId])
+   778→}
+   779→
+   780→model TwinTokenRecord {
+   781→  id             String   @id @default(cuid())
+   782→  runId          String
+   783→  symbol         String?
+   784→  amount         Float    @default(0)
+   785→  currency       String?
+   786→  fromCountry    String?
+   787→  toCountry      String?
+   788→  status         String?
+   789→  mintedAtFrame  Int?
+   790→  burnedAtFrame  Int?
+   791→  memo           String?
+   792→  createdAt      DateTime @default(now())
+   793→
+   794→  @@index([runId])
+   795→}
+   796→
+   797→model PlanAmendmentRecord {
+   798→  id               String   @id @default(cuid())
+   799→  runId            String
+   800→  failureType      String?
+   801→  failureLabel     String?
+   802→  reason           String?
+   803→  recoveryStrategy String?
+   804→  insertedAtFrame  Int      @default(0)
+   805→  stepCount        Int      @default(0)
+   806→  createdAt        DateTime @default(now())
+   807→
+   808→  @@index([runId])
+   809→}
+   810→
+   811→model CheckpointRecord {
+   812→  id             String   @id @default(cuid())
+   813→  name           String   @unique
+   814→  lastSeq        Int      @default(0)
+   815→  lastTs         Int      // SQLite does not support BigInt — store epoch-ms as Int
+   816→  lastSnapshotId String?
+   817→  totalCount     Int      @default(0)
+   818→  createdAt      DateTime @default(now())
+   819→  updatedAt      DateTime @updatedAt
+   820→}
+   821→
+   822→// ═══════════════════════════════════════════════════════════════════════════
+   823→// OPS INCIDENTS (added in task 2-prisma-fix)
+   824→// ═══════════════════════════════════════════════════════════════════════════
+   825→
+   826→model Incident {
+   827→  id             String    @id @default(cuid())
+   828→  title          String
+   829→  description    String?
+   830→  severity       String    @default("P2") // P1 | P2 | P3 | P4
+   831→  status         String    @default("open") // open | investigating | identified | monitoring | resolved
+   832→  component      String?   // api | payments | payouts | webhooks | connectors | blockchain
+   833→  createdBy      String?   // userId of creator
+   834→  assignedTo     String?   // userId of assignee
+   835→  acknowledgedAt DateTime?
+   836→  resolvedAt     DateTime?
+   837→  createdAt      DateTime  @default(now())
+   838→  updatedAt      DateTime  @updatedAt
+   839→
+   840→  updates IncidentUpdate[]
+   841→
+   842→  @@index([status])
+   843→  @@index([severity])
+   844→  @@index([component])
+   845→  @@index([createdAt])
+   846→}
+   847→
+   848→model IncidentUpdate {
+   849→  id         String   @id @default(cuid())
+   850→  incidentId String
+   851→  authorId   String?  // userId of author
+   852→  message    String
+   853→  status     String?  // investigating | identified | monitoring | resolved
+   854→  createdAt  DateTime @default(now())
+   855→
+   856→  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+   857→
+   858→  @@index([incidentId])
+   859→  @@index([createdAt])
+   860→}
+   861→
+   862→// ═══════════════════════════════════════════════════════════════════════════
+   863→// ORGANIZATIONS (added in task 2-prisma-fix)
+   864→// ═══════════════════════════════════════════════════════════════════════════
+   865→
+   866→model Organization {
+   867→  id           String   @id @default(cuid())
+   868→  name         String
+   869→  slug         String   @unique
+   870→  type         String   @default("merchant") // merchant | lp | platform
+   871→  status       String   @default("active") // active | pending | suspended
+   872→  billingEmail String?
+   873→  country      String?
+   874→  currency     String   @default("GHS")
+   875→  plan         String   @default("starter") // starter | growth | scale | enterprise
+   876→  logoUrl      String?
+   877→  createdAt    DateTime @default(now())
+   878→  updatedAt    DateTime @updatedAt
+   879→
+   880→  members OrganizationMember[]
+   881→
+   882→  @@index([type])
+   883→  @@index([status])
+   884→}
+   885→
+   886→model OrganizationMember {
+   887→  id             String    @id @default(cuid())
+   888→  organizationId String
+   889→  userId         String
+   890→  role           String    @default("viewer") // owner | admin | developer | analyst | finance | support | viewer
+   891→  status         String    @default("pending") // active | pending | suspended
+   892→  invitedAt      DateTime  @default(now())
+   893→  joinedAt       DateTime?
+   894→
+   895→  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+   896→  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+   897→
+   898→  @@unique([organizationId, userId])
+   899→  @@index([userId])
+   900→  @@index([status])
+   901→}
+   902→

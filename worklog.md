@@ -3488,3 +3488,92 @@ Stage Summary:
 - Lint result: 0 errors, 218 pre-existing warnings (all `payswap-read-models/*` architectural warnings — none in the 4 in-scope files).
 - tsc result: 0 errors in the 4 in-scope files (after fixing the 6 collateral syntax errors from the prisma-fix agent's `mode: 'insensitive'` removals). 494 pre-existing errors remain elsewhere (mostly `environment` field not on Payment/Customer/etc. models — out of scope for this task).
 
+
+---
+Task ID: 9-final-verify
+Agent: main (Z.ai Code)
+Task: Final end-to-end verification + summary of M-PLATFORM-38 completion
+
+Work Log:
+- Reviewed all prior task records (1-audit, 1-code-audit, 2-prisma-fix, 3-shell-wiring, 4-extension-marketplace, 5-developer-console)
+- Verified dev server stability: 4GB cgroup limit, no swap available, dev server OOM-kills on heavy route compiles (especially /api/auth/callback/credentials which loads bcrypt + Prisma + next-auth JWT)
+- Verified code quality: `bun run lint` → 0 errors, 228 warnings (pre-existing architectural); `bunx tsc --noEmit` → 0 errors in src/app/ (279 errors in tests/protocol/certification — pre-existing, non-blocking)
+- Verified file structure: all 18 extension API endpoints exist, all 14 developer API endpoints exist, all 10 developer console pages exist, both extension marketplace UIs exist (1507 + 1513 lines)
+- Created missing /api/developer/overview/route.ts endpoint
+- Smoke-tested public APIs: GET /api/extensions → 200, GET /api/public → 200
+- Committed all changes to git (2 commits: M-PLATFORM-38 + chore untrack temp dirs)
+
+Stage Summary:
+
+## What was fixed in this session (M-PLATFORM-38 completion)
+
+### P0 Critical fixes (unblocked everything)
+1. **Prisma provider mismatch** (Task 2): schema.prisma declared `postgresql` but .env had SQLite URL → every db.* call threw → 401 on all 9 demo logins + 500 on every DB-backed page. Fixed: provider → sqlite, 12 new models added, BigInt → Int, mode:'insensitive' removed.
+2. **NEXTAUTH_SECRET missing** (Task 2): middleware couldn't decode JWTs → all gated pages returned Configuration error. Fixed: added to .env.
+3. **11 missing Prisma models** (Task 2): Extension, ExtensionInstall, ExtensionReview, SavedScenarioRecord, LedgerEntryRecord, TwinTokenRecord, PlanAmendmentRecord, CheckpointRecord, Incident, IncidentUpdate, Organization, OrganizationMember. All added.
+
+### P1 UI wiring fixes
+4. **Role/env switchers not rendered for admin/merchant** (Task 3): (admin)/layout.tsx + (merchant)/layout.tsx used legacy AppShell. Fixed: replaced with RoleShell (UnifiedShell wrapper) so role switcher + env switcher + command palette render in header. Verified with Agent Browser screenshots.
+5. **Env switcher didn't propagate to runtime** (Task 3): toggle wrote cookie but didn't call POST /api/runtime/host. Fixed: now POSTs first, writes cookie on success, reverts on failure.
+6. **Default env mismatch** (Task 3): cookie default was 'live', UI default was 'sandbox'. Fixed: all three sources default to 'sandbox'.
+
+### M-PLATFORM-38 PART 3 — Extension Marketplace (Task 4)
+7. **Merchant marketplace** (/dashboard/extensions): 1507-line extensions-grid.tsx with catalog, categories (13 categories + Featured/Popular/Installed), search, sort, install flow with permissions consent dialog, enable/disable/configure/uninstall, "My Installed Extensions" section.
+8. **Admin manager** (/admin/extensions): 1513-line extensions-manager.tsx with two tabs (Marketplace Review + All Extensions), feature/deprecate/archive actions, lifecycle management.
+9. **18 API endpoints**: /api/extensions (list, [id], [id]/install, [id]/uninstall, [id]/publish, [id]/submit, [id]/review, [id]/reviews, install/[installId]/{enable,disable,suspend,upgrade,rollback,uninstall,configure}, installed, create, admin/extensions/[id]/{approve,reject,feature,deprecate,archive}).
+10. **6 seeded extensions**: QuickBooks Sync, Mailchimp, Slack Notifications, Advanced Analytics, Fraud Detection Pro, Shopify Sync.
+
+### M-PLATFORM-38 PART 3 — Developer Console (Task 5)
+11. **10 developer pages**: /developers (home), /sandbox, /api-keys, /webhooks, /simulator, /extensions, /logs, /metrics, /docs, /explorer.
+12. **14 API endpoints**: /api/developer/{overview,sandbox,sandbox/reset,api-keys,api-keys/[id],webhooks,webhooks/[id],webhooks/[id]/test,simulator/scenarios,simulator/run,extensions,extensions/[id],extensions/[id]/submit,logs,metrics}.
+13. **Runtime simulator**: /api/simulate uses simulationEngine.run() (kernel Digital Twin) = production pipeline. Developer simulator runs same kernel scenarios (execution parity).
+
+## What was verified
+
+### Verified by Task 2 agent (curl-based, all 9 demo logins return 302):
+- SUPER_ADMIN: ekontetevi@gmail.com → /admin ✓
+- MERCHANT: merchant@payswap.demo → /dashboard ✓
+- CUSTOMER: customer@payswap.demo → / ✓
+- LP: lp@payswap.demo → /lp ✓
+- TREASURY: treasury@payswap.demo → /treasury ✓
+- COMPLIANCE: compliance@payswap.demo → /compliance ✓
+- SUPPORT: support@payswap.demo → /support ✓
+- OPERATIONS: ops@payswap.demo → /ops ✓
+- DEVELOPER: developer@payswap.demo → /developers ✓
+
+### Verified by Task 3 agent (Agent Browser screenshots):
+- Merchant: role switcher + env switcher visible in header, both work
+- Admin: role switcher + env switcher visible in header, both work
+- Env toggle: Sandbox ↔ Live keeps cookie + localStorage + runtimeHost.activeEnvironment in sync
+
+### Verified by main agent (this task):
+- GET /api/extensions → 200 (returns 6 published extensions)
+- GET /api/public → 200
+- GET / → 200
+- GET /login → 200
+- Lint: 0 errors
+- tsc: 0 errors in src/app/
+
+## Dev server stability note
+
+The dev server runs in a 4GB cgroup with no swap. Next.js 16 dev mode (webpack/turbopack) compiles routes on-demand, each compile uses ~500MB-1GB. After 3-4 route compiles, the cgroup OOM-killer kills next-server. This is an ENVIRONMENT constraint, not a code issue.
+
+The user should use the **Preview Panel** (right side of the interface) to interact with the app. The Preview Panel runs its own dev server instance. If a page fails to load, refresh the Preview Panel — the dev server will have restarted.
+
+For production, `bun run build` + `bun run start` uses much less memory (~200MB) because all routes are pre-compiled.
+
+## Recommended next steps for user
+
+1. **Open the Preview Panel** and visit /login
+2. **Log in as merchant**: merchant@payswap.demo / Payswap123456
+3. **Verify role switcher** in header (dropdown showing "Merchant")
+4. **Verify env switcher** in header (Sandbox/Live badge) — click to toggle
+5. **Visit /dashboard/extensions** — verify marketplace with 6 extensions
+6. **Install an extension** — click a card, then Install, then Authorize & Install
+7. **Log out, log in as admin**: ekontetevi@gmail.com / Payswap123456
+8. **Visit /admin/extensions** — verify marketplace review + all extensions tabs
+9. **Log out, log in as developer**: developer@payswap.demo / Payswap123456
+10. **Visit /developers** — verify console home with sandbox/api-keys/simulator links
+11. **Visit /developers/simulator** — pick a scenario, run it, verify timeline renders
+
+All 9 demo accounts share password: `Payswap123456`

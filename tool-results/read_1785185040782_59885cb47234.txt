@@ -1,0 +1,201 @@
+     1→399 /home/z/my-project/tool-results/read_1785185031416_90c5f0cff2e7.txt
+     2→   201→  - Live/Test: `getEnvironmentState()` → queries runtimeHost.getRuntime('live'/'sandbox') for eventCount/treasuryAccounts/twinTokens/isReady. `switchEnvironment(env)`, `getActiveEnvironment()` — only mutates an in-memory field; no event emitted, no persistence.
+     3→   202→  - Extensions: `registerExtension(ext)`, `getExtension(id)`, `updateExtensionStatus(id, status)`, `listExtensions()`, `getMarketplace()` (filters by published/installed/enabled, slices featured=rating>4 top 5, popular=top 10 by installCount), `generateAPIKey(developerId, name, env, perms)`, `getDeveloperConsole(developerId)`. All in-memory `Map<>` storage; NOT persisted to DB; NOT seeded with any extension on startup.
+     4→   203→  - UX: `getNavigation(activeRole)` returns tasks + 8 roles list + activeRole + environment. `getRoleContext(role)` returns displayName + tasks + hardcoded `healthScore: 95` + hardcoded `onboardingComplete: true`. `getTasksForRole(role)` returns 2-6 tasks per role (merchant=6, lp=3, developer=3, treasury_operator=3, support=2, admin=4, council=3, customer=2).
+     5→   204→- **`src/runtime/platform/index.ts`** (3 lines) — barrel export of types + PlatformEngine + PlatformInputs.
+     6→   205→
+     7→   206→### Wiring (src/runtime/index.ts)
+     8→   207→- Line 35-36: `import { PlatformEngine } from './platform';`
+     9→   208→- Line ~362 (Runtime interface): `platform: PlatformEngine;` declared as a Runtime member.
+    10→   209→- Line ~639 (createRuntime): `const platform = new PlatformEngine({ runtime: null as never });` then post-construction `(platform as unknown as { inputs: { runtime: Runtime } }).inputs.runtime = runtime;` (line ~708). This is a circular-dependency workaround — PlatformEngine needs `runtime` but `runtime` needs `platform`.
+    11→   210→- Re-exported: `export * from './platform';` (line ~134).
+    12→   211→
+    13→   212→### Existing API endpoints
+    14→   213→- **`/api/platform/extensions`** (route.ts, 53 lines) — GET → `runtime.platform.getMarketplace()`; POST → `action: 'register' | 'install' | 'enable'` (no auth check). Uses in-memory PlatformEngine; not the Prisma-backed extensions.
+    15→   214→- **`/api/platform/simulator`** (route.ts, 59 lines) — GET → returns 5 hardcoded scenarios (local_rail, reserve_to_reserve, reserve_to_market, market_to_reserve, market_to_market); POST → builds SimulationScenario, calls `runtime.platform.simulate(scenario)`. No auth check.
+    16→   215→- **`/api/extensions/list`** (route.ts, 89 lines) — GET. Prisma-backed (`db.extension.findMany`). Has filters: ?category, ?q (name+description contains), ?sort (popular|newest|rating|name). Categories hard-coded to: payments, analytics, compliance, accounting, crm, marketing, shipping, other. **Would crash — `db.extension` is undefined.**
+    17→   216→- **`/api/extensions/create`** (route.ts, 178 lines) — POST. Auth: `requireSession()`. Prisma-backed. Validates name (2-80 chars), description (≥10), category, pricing (free|paid|freemium), permissions (read_payments|write_payments|read_customers|write_customers|send_webhooks), config JSON, changelog. Generates unique slug. Creates with `status: 'draft'`. **Would crash — `db.extension` undefined.**
+    18→   217→- **`/api/extensions/[id]`** (route.ts, 187 lines) — GET (public for published; for non-published requires dev or admin) + PATCH (dev or admin; only draft/rejected editable by dev). **Would crash.**
+    19→   218→- **`/api/extensions/[id]/submit`** (route.ts, 70 lines) — POST. Dev-only. Sets status=submitted, requires ≥1 permission. **Would crash.**
+    20→   219→- **`/api/extensions/[id]/publish`** (route.ts, 124 lines) — POST. Admin-only (`requireAdminSession()`). Actions: approve|reject|review|suspend|reinstate. State transitions validated. **Would crash.**
+    21→   220→- **`/api/extensions/[id]/install`** (route.ts, 168 lines) — POST (creates ExtensionInstall row, increments installCount) + PATCH (updates config/status). Merchant-only (`requireMerchantId()`). **Would crash.**
+    22→   221→- **`/api/extensions/[id]/uninstall`** (route.ts, 54 lines) — POST. Merchant-only. Idempotent. Decrements installCount. **Would crash.**
+    23→   222→- **NO admin endpoints exist at `/api/admin/extensions/*`** — confirmed by directory listing.
+    24→   223→
+    25→   224→### Existing UI pages
+    26→   225→- **`src/app/(admin)/admin/extensions/page.tsx`** (116 lines) — server component, fetches `db.extension.findMany` ordered by `[status asc, updatedAt desc]`, joins developer users, builds stats (inReview, published, suspended, totalInstalls). Renders `<AdminExtensionsManager>` with extensions/inReview/published/suspended/stats/isAdmin. **Page would 500 — model missing.**
+    27→   226→- **`src/app/(admin)/admin/extensions/extensions-manager.tsx`** (876 lines) — full review console: stats cards, "In Review" section with approve/reject/review/suspend/reinstate dialogs, "Published" section with suspend, "Suspended" section with reinstate. Per-extension collapsible: developer info, permissions, pricing, install count, rating, review count, changelog, config schema. Status badges with color coding. **Component is fully built but receives no data because page 500s.**
+    28→   227→- **`src/app/(merchant)/dashboard/extensions/page.tsx`** (104 lines) — server component, fetches published extensions + merchant's installs. Renders `<MerchantExtensionsGrid>`. Uses `requireMerchant()` guard. **Page would 500 — model missing.**
+    29→   228→- **`src/app/(merchant)/dashboard/extensions/extensions-grid.tsx`** (543 lines) — full marketplace: category filter chips, search box, installed section, marketplace section, per-extension card (icon, name, category badge, version badge, pricing tag, star rating + review count, install count), Install/Installed+Configure/Uninstall buttons. Configure dialog is schema-driven (built from `ext.config.properties`). **Component is fully built but receives no data.**
+    30→   229→- **`scripts/seed-extensions.ts`** exists (referenced in prior audit) — defines 6 published extensions (QuickBooks Sync, Mailchimp, Slack Notifications, Advanced Analytics, Fraud Detection Pro, Shopify Sync) with changelogs/ratings/reviews. Cannot run because `db.extension` undefined.
+    31→   230→
+    32→   231→### Other extension code
+    33→   232→- **`src/kernel/extension.ts`** (56 lines) — `ExtensionRuntime` class with hook system (beforeRoute|afterRoute|beforeSettle|afterSettle|onEvent). `Extension` interface is `{id, name, version, hooks}`. Used by `kernel/simulation.ts` lines 125/132/154 (`extensionRuntime.fire('beforeRoute'/'afterRoute'/'afterSettle', ctx)`). Empty by default — no extensions register. **This is the runtime hook system, NOT the marketplace.**
+    34→   233→- **`src/extensions/platform/index.ts`** (232 lines) — separate `ExtensionPlatform` class with manifest/lifecycle (submitted→reviewed→approved→installed→enabled→running→disabled→suspended→removed). Has `ExtensionManifest` (capabilities, commands, entities, policies, events, contracts, stateMachines, permissions, limits), `ExtensionRecord`, `ExtensionSDK` (converge/registerEntity/on/emit/query/capabilities.list). Methods: submit/approve/install/enable/disable/suspend/remove/get/list/enabled/isEnabled. `createExtensionSDK(extensionId)` factory. **NEVER IMPORTED by any other file (grep-confirmed) — dead code.** Would have been the "real" extension runtime per the Phase-2 protocol design.
+    35→   234→- **`src/runtime/engines/inspector/service.ts`** (572 lines) — `InspectorService` with `getExecutionTrace(paymentId, env)`, `getResourceGraph`, `getEconomicGraph`, `getCapabilityRouteGraph`, `getRecommendationProvenance`, `getNetworkOverview`. Read-only. Used by 5 API endpoints under `/api/runtime/inspector/`. **No "decision inspector" class exists** — but `getExecutionTrace` returns compiler passes + pipeline stages + domainEvents which serves the same purpose.
+    36→   235→- **`src/protocol/security/rbac.ts`** — separate RBAC system (8 roles: viewer/analyst/developer/admin/owner/treasury_admin/lp_admin/super_admin; 29 permissions). Used by `protocol/security/auth.ts` and `protocol/security/middleware.ts` factories. **NOT wired into NextAuth session or role-switcher.tsx** — parallel RBAC system that exists in protocol but isn't consumed by the app's auth path.
+    37→   236→
+    38→   237→### GAPS vs M-PLATFORM-38 spec (per types.ts comment block lines 9-13)
+    39→   238→The spec promises 4 parts. Status:
+    40→   239→1. **Runtime Simulator** — ✅ EXISTS but only the in-memory `PlatformEngine.simulate()` (single `wallet.credit` command) + the older `kernel/simulation.ts SimulationEngine` (full 877-line implementation). Spec says "Nothing is skipped. If the simulator routes differently from production, it is a bug." — but `PlatformEngine.simulate()` line 105-106 explicitly says "simplified; in a full implementation, this would execute all plan steps". GAP: PlatformEngine simulator does NOT execute the full plan.
+    41→   240→2. **Live/Test Mode** — ⚠️ RuntimeHost has full isolation (sandbox+live, 14 isolation checks), but EnvSwitcher UI doesn't call `POST /api/runtime/host`. DB layer has no `environment` column on Payment/Payout/Refund/Product/CustomerRecord. GAP: env switching is cosmetic for in-memory + broken for DB.
+    42→   241→3. **Extension Platform (lifecycle + permissions + marketplace)** — ❌ Prisma models missing (Extension, ExtensionInstall, ExtensionReview). Two parallel extension systems (in-memory PlatformEngine + dead extensions/platform/index.ts) exist but neither is wired to the UIs (UIs hit Prisma directly). GAP: entire subsystem non-functional at runtime.
+    43→   242→4. **UX Refactor (progressive disclosure + role switching + task navigation)** — ⚠️ RoleSwitcher + EnvSwitcher + CommandPalette exist in UnifiedShell, used by 7 of 9 role layouts. Admin + Merchant layouts still use legacy AppShell (no switchers). TaskItem interface exists in types.ts but `getTasksForRole` returns static hardcoded tasks — no actual page navigation wired to tasks. GAP: 2 layouts missing switchers; tasks not wired.
+    44→   243→
+    45→   244→## 2. Role Switching — code map
+    46→   245→
+    47→   246→### Where roles are read from session
+    48→   247→- **JWT issued in `src/lib/auth.ts:58-63`** — `jwt({token, user})` callback: `if (user) { token.id = user.id; token.roles = (user as any).roles ?? []; }`. So `token.roles` is populated on sign-in.
+    49→   248→- **Session hydrated in `src/lib/auth.ts:65-71`** — `session({session, token})` callback: `(session.user as any).id = token.id; (session.user as any).roles = token.roles;`. So `session.user.roles` is populated on every request.
+    50→   249→- **Roles fetched from DB in `src/lib/auth.ts:24-27`** — `db.user.findUnique({ where: { email }, include: { roles: true } })` then line 45: `roles: user.roles.map((r) => r.role)`. So `roles` is an array of strings like `['MERCHANT', 'ADMIN']` matching `UserRole.role` column values.
+    51→   250→- **DB schema `prisma/schema.prisma:43-55`** — `model UserRole { id, userId, role String, merchantId?, permissions?, createdAt }` with `@@unique([userId, role, merchantId])`. Comment line 46: `// CUSTOMER, MERCHANT, MERCHANT_STAFF, LP, TREASURY, COMPLIANCE, SUPPORT, DEVELOPER, OPERATIONS, ADMIN, SUPER_ADMIN`. **11 roles**.
+    52→   251→
+    53→   252→### Whether `session.user.roles` is populated
+    54→   253→- ✅ YES — `src/lib/auth.ts:68` (`(session.user as any).roles = token.roles;`).
+    55→   254→- Verified by every layout that reads it: `(session.user as any)?.roles as string[] | undefined` pattern appears in middleware.ts:13, auth-guards.ts:67, api-auth.ts:55, role-switcher.tsx:31, app-shell.tsx:110, and all 7 RoleShell-based layouts.
+    56→   255→
+    57→   256→### Whether RoleSwitcher actually works
+    58→   257→- ✅ The component itself works. **`src/components/role-switcher.tsx:30-37`** reads `session.user.roles` and sorts by `ROLE_ORDER` from nav-config.
+    59→   258→- **`src/components/role-switcher.tsx:76-102`** — clicking a role navigates to `ROLE_LANDING_PATH[role]` (e.g., MERCHANT → /dashboard, ADMIN → /admin, LP → /lp, etc.).
+    60→   259→- ❌ **BUT** RoleSwitcher only renders inside `UnifiedShell` (line 168 of unified-shell.tsx). UnifiedShell is used by RoleShell. RoleShell is used by 7 layouts: (lp), (support), (compliance), (ops), (customer), (treasury), (developer).
+    61→   260→- ❌ **`(admin)/layout.tsx:16`** and **`(merchant)/layout.tsx:25`** use `AppShell` (not RoleShell). AppShell has NO RoleSwitcher (verified — `src/components/app-shell.tsx` does not import role-switcher).
+    62→   261→- **GAP**: Admin and Merchant users cannot switch roles via the UI. They'd have to sign out and sign back in. (Already documented in prior `1-audit`.)
+    63→   262→- **GAP**: RoleSwitcher takes `currentRole` as a prop (line 26). The 7 RoleShell-based layouts pass a hardcoded `currentRole` (e.g., `(lp)/layout.tsx:14` passes `currentRole="LP"`). This is correct for single-role contexts but doesn't reflect whether the user has multiple roles — the switcher's `activeRole = currentRole && ROLE_LABEL[currentRole] ? currentRole : roles[0]` logic (line 39-41) means if the user has multiple roles, the hardcoded `currentRole` always wins. **The hardcoded currentRole overrides the "first role" fallback for multi-role users — by design but can be confusing.**
+    64→   263→
+    65→   264→### Whether layouts enforce RBAC
+    66→   265→- ✅ YES at two layers:
+    67→   266→  1. **Next.js middleware `src/middleware.ts:16-35`** — `withAuth` wrapper reads `token.roles` and matches against `routeRoles` map: `/dashboard` → MERCHANT/MERCHANT_STAFF/ADMIN/SUPER_ADMIN; `/admin` → ADMIN/SUPER_ADMIN; `/treasury` → TREASURY/ADMIN/SUPER_ADMIN; etc. Redirects to `/unauthorized` on mismatch. Matcher (line 47) covers all 9 role routes.
+    68→   267→  2. **Server layout guards**: `(admin)/layout.tsx:15` calls `requireAdmin()`; `(merchant)/layout.tsx:18` calls `requireMerchant()`; the other 7 layouts inline the same pattern: `getServerSession → if (!session) redirect('/login') → if (!roles.some(...)) redirect('/unauthorized')`.
+    69→   268→- **API-level RBAC** via `src/lib/api-auth.ts`: `requireSession()`, `requireMerchantId()` (returns null if no MERCHANT/MERCHANT_STAFF role), `requireAdminSession()` (returns null if no ADMIN/SUPER_ADMIN). Plus `unauthorized()` (401) and `forbidden()` (403) helpers. Used by all extension API endpoints + payments/refunds/payouts/etc.
+    70→   269→
+    71→   270→### GAPS
+    72→   271→- **`(admin)` and `(merchant)` layouts don't use UnifiedShell** — they miss RoleSwitcher + EnvSwitcher + CommandPalette (Cmd+K).
+    73→   272→- **Hardcoded `currentRole`** in each RoleShell-based layout — doesn't adapt if a user with multiple roles lands on a section they have access to via a different role. E.g., a MERCHANT+ADMIN user landing on `/admin` sees `currentRole="ADMIN"` — correct — but the switcher's display logic assumes the hardcoded role is the "active" one.
+    74→   273→- **No use of `permissions` field on UserRole** — `UserRole.permissions String?` (JSON string of granular permissions) is in the schema but never read by any code (grep-confirmed). Fine-grained per-role-per-merchant permissions are stored but unused.
+    75→   274→- **Protocol-layer RBAC (`src/protocol/security/rbac.ts`) is disconnected from app-layer RBAC** — 8 roles (viewer/analyst/developer/admin/owner/treasury_admin/lp_admin/super_admin) with 29 permissions exist but are only used by `protocol/security/middleware.ts` factories which NO API route imports. Two parallel RBAC systems.
+    76→   275→- **No middleware-level enforcement for `/api/*`** — middleware.ts matcher (line 47) only covers page routes, not API routes. API RBAC relies on per-route `requireSession/requireMerchantId/requireAdminSession` calls. Inconsistent — easy to forget on a new endpoint.
+    77→   276→
+    78→   277→## 3. Environment Switching — code map
+    79→   278→
+    80→   279→### How env mode is stored (localStorage + cookie)
+    81→   280→- **Client storage `src/components/env-switcher.tsx:11`** — `const STORAGE_KEY = 'payswap.env-mode';` (NOT 'payswap-env-mode' — that's the cookie name, line 50).
+    82→   281→- **Read `src/components/env-switcher.tsx:17-25`** — `readStoredMode()` reads from `window.localStorage.getItem('payswap.env-mode')`. Default: `'sandbox'` (line 21).
+    83→   282→- **Write `src/components/env-switcher.tsx:45-55`** — `writeStoredMode(next)` writes to localStorage AND `document.cookie = 'payswap-env-mode=${next}; path=/; max-age=2592000; samesite=lax'` (30-day cookie). Dispatches `payswap:env-mode-change` custom event.
+    84→   283→- **Sync hook `src/components/env-switcher.tsx:74-76`** — `useEnvMode()` uses `useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)`. Server snapshot is always `'sandbox'` (line 41-43).
+    85→   284→- **Server-side reader `src/lib/environment.ts:10-14`** — `getEnvironment()` reads `cookies().get('payswap-env-mode')`. Default: `'live'` if cookie absent (line 13: `envCookie?.value === 'sandbox' ? 'sandbox' : 'live'`).
+    86→   285→
+    87→   286→### Which API routes read `payswap-env-mode` cookie
+    88→   287→- **Direct cookie reads**: only `src/lib/environment.ts` (1 file).
+    89→   288→- **Indirect (via `getEnvironment()`)**: 10 API endpoints — payments/create, payouts/create, refunds/create, invoices/create, payment-links/create, webhooks/create, api-keys/create, customers/create, products/create, subscription/, customers/[id]/notes.
+    90→   289→- **`/admin/network` page** also calls `getEnvironment()` (line 5, 37) and uses `where: { environment: env }` filters on `db.payment.count`, `db.aMLAlert.count`, etc.
+    91→   290→
+    92→   291→### Whether RuntimeHost supports both sandbox and live
+    93→   292→- ✅ YES — **`src/runtime/host/runtime-host.ts:45-65`** — `RuntimeHost` constructor creates TWO completely independent `createRuntime()` instances (sandbox + live). 14 isolation checks in `verifyIsolation()` (lines 138-163): eventStore, payments, refunds, wallets, treasury, twinTokens, lpRuntime, marketplace, economicCompiler, coordinator, schema, recovery, invariants, dispatcher.
+    94→   293→- ✅ `getRuntime(env)`, `getActiveRuntime()`, `switchEnvironment(env)`, `execute(command)` (routes by `command.metadata.environment`), `executeNested(commands, metadata)`, `getReport()` all exist.
+    95→   294→- ✅ Singleton exported from `src/runtime/index.ts:736-740` as `runtimeHost` (globalThis-cached for Next.js dev mode).
+    96→   295→- ❌ **GAP**: Only `/api/runtime/host` (route.ts) and `runtime/platform/engine.ts:getEnvironmentState()` use `runtimeHost`. NO business endpoint routes via `runtimeHost.execute()` based on env. The default singleton `runtime` (line 730-734) is the LIVE runtime only — most endpoints use this directly.
+    97→   296→- ❌ **GAP**: `EnvSwitcher.toggle()` (env-switcher.tsx:91-105) writes cookie + reloads page — but does NOT call `POST /api/runtime/host` to switch `runtimeHost.activeEnvironment`. So in-memory queries (`/api/runtime/ledger`, `/api/runtime/projections/*`, `/api/runtime/simulator/compare`, etc.) always read from `runtime` (the live singleton), regardless of cookie value.
+    98→   297→
+    99→   298→### Whether page data actually differs between sandbox/live
+   100→   299→- ⚠️ MIXED — three independent storage layers, each with different env-awareness:
+   101→   300→  1. **In-memory runtime** (`runtime` singleton): NOT env-aware. Always live.
+   102→   301→  2. **In-memory runtimeHost** (`runtimeHost`): env-aware via `getRuntime(env)`, but only `/api/runtime/host` reads it.
+   103→   302→  3. **Prisma DB**: attempted env-awareness (10 create endpoints write `environment: env`) BUT:
+   104→   303→     - Prisma `Payment` model (schema lines 264-297) has NO `environment` column.
+   105→   304→     - Prisma `Payout` (lines 299-327), `Refund` (329-347), `Product` (353+), `CustomerRecord` (178-198) all have NO `environment` column.
+   106→   305→     - `paymentService.create()` (payment-service.ts:62,73,99) writes `environment: params.environment` to `db.customerRecord.findFirst({ where: { environment: ... }})` and `db.payment.create({ data: { environment: ... }})` — **TypeScript strict mode should reject these writes as unknown fields**.
+   107→   306→     - `refundReadModel.list` (read-models/v2/index.ts:140-148) accepts `env` parameter and applies in-memory filter `(r as unknown as { environment?: string }).environment === env` — but since the column doesn't exist, this filter never matches; falls through to default `?? env ?? 'live'`.
+   108→   307→     - `/admin/network/page.tsx:56-115` filters `where: { environment: env }` on payment/AMLAlert counts — **would error at Prisma runtime**.
+   109→   308→- ❌ **GAP**: Prisma schema has no `environment` column anywhere. Either (a) add it to all domain models, or (b) remove the env-param plumbing from services + read-models + admin/network page.
+   110→   309→- ❌ **GAP**: Default mismatch — `env-switcher.tsx:21` defaults to `'sandbox'`; `environment.ts:13` defaults to `'live'`. First-visit shows "Sandbox" badge but API treats as "Live". (Already documented in prior audit.)
+   111→   310→
+   112→   311→### GAPS
+   113→   312→- **`PlatformEnvironment` type in `runtime/platform/types.ts:111`** is `'live' | 'test'` — but everywhere else uses `'live' | 'sandbox'`. Inconsistent.
+   114→   313→- **No middleware-level env enforcement** — middleware.ts doesn't read the cookie. API endpoints manually call `getEnvironment()` (10 endpoints do, 90+ don't).
+   115→   314→- **No persistence of `runtimeHost.activeEnvironment`** — server restarts reset to 'sandbox' (constructor default, runtime-host.ts:47).
+   116→   315→- **`EnvSwitcher` doesn't call `POST /api/runtime/host`** — half-wired. Cookie toggles DB-filtering (when DB works); does NOT toggle in-memory runtime. (Already documented.)
+   117→   316→- **`useEnvMode()` is only consumed by `env-switcher.tsx` + `command-palette.tsx`** — no data-fetching component uses it to switch query sources. Pages rely on server-side `getEnvironment()` via cookie.
+   118→   317→
+   119→   318→## 4. Runtime Simulator — code map
+   120→   319→
+   121→   320→### Which components exist
+   122→   321→- **`src/components/admin/kernel-simulation-console.tsx`** (401 lines) — ❌ ORPHANED. Not imported anywhere (grep-confirmed). Calls `/api/simulate` (the older kernel endpoint). Has preset scenarios, buyer/merchant country/currency/amount/priority inputs, renders verdict + metrics + AI narrative + transaction flow + amendments + ledger entries + event stream + twin tokens + result hash.
+   123→   322→- **`src/components/admin/scenario-builder.tsx`** (658 lines) — ❌ ORPHANED. Not imported anywhere. Loads actors from `/api/admin/network/actors`, supports custom simulation params (successRate/refundRate/webhookFailureRate/complianceAlertRate/highValueRate/payoutFrequency), duration picker (1h/1d/1w/1m), merchant+LP multi-select, calls `/api/simulate/world/custom`.
+   124→   323→- **`src/components/admin/world-simulator.tsx`** (607 lines) — ❌ ORPHANED. Not imported anywhere. 5 preset scenarios (normal/holiday/outage/growth/stress), progress bar, network impact (before/after snapshot), event timeline.
+   125→   324→- **`src/components/admin/simulation-console.tsx`** (251 lines) — ❌ ORPHANED. Not imported anywhere. 5 quick-action buttons (payment/payout/aml/lp-default/stress) calling `/api/admin/simulate/*` endpoints.
+   126→   325→- **`src/components/simulator/scenario-builder.tsx`** (362 lines) — ✅ USED. Imported by `/admin/runtime/page.tsx:8` and `kernel-runtime-console.tsx:5` (which is itself orphaned). Full scenario editor: transaction (buyer/merchant country/currency/amount/priority), treasury (origin/destination reserve + stablecoin + emergency + policy), liquidity providers (add/remove with id/name/jurisdiction/currencies/speed/capacity/reputation/success/manual/online/feeBps + source kind), financial operators (add/remove with id/name/type/country/currency/balance), failures (10 failure types), AI weights (8 sliders), reserve policy (4 options). Imports types from `@/kernel`.
+   127→   326→- **`src/components/simulator/`** (25 files) — large library of panels used by `/admin/runtime`: execution-graph, ai-reasoning, metrics-panel, world-state, replay-stepper, treasury-amendments, constitution-panel, reasoning-panel, solver-panel, protocol-panel, state-machine-panel, financial-graph, lp-lifecycle, world-inspector, runtime-services, engines-panel, entity-registry, optimization-panel, protocol-scenarios, scenario-library, theme-toggle, execution-graph-dag, checkout-widget, format.
+   128→   327→- **`src/components/admin/kernel-runtime-console.tsx`** (322 lines) — ❌ ORPHANED (not imported by any page). Was likely an alternate runtime console. Uses `simulator/scenario-builder.tsx` + 19 tabs.
+   129→   328→- **`src/lib/world-simulator.ts`** (586 lines) — ✅ USED. `runWorldSimulation({duration, scenario, environment, customParams, actorFilter})` — generates synthetic payments/payouts/refunds/invoices/webhooks/ledger entries/audit logs/compliance alerts by calling `paymentService.create()` etc. (NOT direct Prisma). Returns SimulationResult with NetworkImpact (before/after snapshot). Comment line 14: "The simulator NEVER calls Prisma directly for domain objects."
+   130→   329→- **`src/runtime/engines/simulator/engine.ts`** (234 lines) — ✅ EXISTS. `SimulatorEngine.compare(intent, environment)` — runs the same intent through both production (compile + execute) and simulation (compile only, no side effects). Returns `SimulationComparison` with `TraceEquivalenceResult` (compiler passes, pipeline stages, execution plan, events, differences). Comment line 56: "we prove trace equivalence at the compiler level (which is pure) and note the pipeline-level differences as expected". GAP: simulation does NOT execute the pipeline (line 98-101 comment: "Simulation run: compile only"). So sim ≠ prod at the pipeline level — only at the compiler level.
+   131→   330→- **`src/runtime/engines/simulator/types.ts`** (138 lines) — `ExecutionMode = 'production' | 'simulation'`, `SideEffectPolicy = 'real' | 'simulated' | 'dry-run'`, `RuntimeContext`, `WorldStateOverrides` (reserveOverrides/lpAvailability/feeOverrides), `TraceEquivalenceResult`, `TraceDifference`, `SimulationComparison`. **`WorldStateOverrides` interface exists but is NOT used by `SimulatorEngine.compare()`** — what-if override capability is defined but not implemented.
+   132→   331→- **`src/kernel/simulation.ts`** (878 lines) — ✅ USED by `/api/simulate` POST. `SimulationEngine.run(scenario, opts)` — the older in-memory simulator. Full implementation: builds world from scenario, runs planner, executes plan, generates replay frames, builds world inspector, treasury AI, amendments, ledger, twin tokens, protocol state, events. Lines 125/132/154 fire extension hooks. Singleton `simulationEngine` exported at line 877.
+   133→   332→
+   134→   333→### Existing API endpoints (simulator)
+   135→   334→- **`/api/simulate`** (route.ts, 183 lines) — GET returns default scenario + library scenarios + engines metadata. POST runs scenario via `simulationEngine.run()`, then enhances narrative with ZAI LLM (best-effort), persists to db.simulationRun + db.ledgerEntryRecord + db.twinTokenRecord + db.planAmendmentRecord + db.auditLog (silent failure on missing models).
+   136→   335→- **`/api/simulate/world`** (route.ts, 45 lines) — POST. Admin-only. Calls `runWorldSimulation({duration, scenario, environment})` from `lib/world-simulator.ts`.
+   137→   336→- **`/api/simulate/world/custom`** (route.ts) — POST. Admin-only. Calls `runWorldSimulation` with custom params + actor filter.
+   138→   337→- **`/api/scenarios`** (route.ts) — GET/POST/DELETE. Manages saved scenarios via `db.savedScenarioRecord` (model missing). **Would 500.**
+   139→   338→- **`/api/scenarios/regress`** (route.ts) — POST. Runs all saved scenarios as regression. Depends on db.savedScenarioRecord. **Would 500.**
+   140→   339→- **`/api/admin/simulate/payment`** (route.ts) — POST. Creates a COMPLETED Payment for the first merchant (admin testing).
+   141→   340→- **`/api/admin/simulate/payout`** (route.ts) — POST. Creates a COMPLETED Payout.
+   142→   341→- **`/api/admin/simulate/aml`** (route.ts) — POST. Creates an OPEN AMLAlert.
+   143→   342→- **`/api/platform/simulator`** (route.ts, 59 lines) — GET/POST. Uses `runtime.platform.simulate()` (the newer M-PLATFORM-38 simulator). No auth.
+   144→   343→- **`/api/runtime/simulator/compare`** (route.ts, 56 lines) — POST. Auth-required. Calls `runtime.simulator.compare(intent, env)` (the M-RT-13 trace equivalence check).
+   145→   344→- **`/api/runtime/twin/simulate`** (route.ts) — POST. Uses `runtime.digitalTwin` (M-RT-11).
+   146→   345→- **`/api/runtime/inspector/*`** — 5 endpoints. Read-only network overview, resource graph, economic graph, capability-route graph, recommendation provenance.
+   147→   346→
+   148→   347→### Existing UI pages (simulator)
+   149→   348→- **`/admin/runtime`** (`src/app/(admin)/admin/runtime/page.tsx`, 278 lines) — ✅ ACTIVE. Client component. Fetches `/api/simulate` on mount. 19 tabs in result panel: Execution, AI Reasoning, Metrics, World State, Time Machine (replay), Treasury, Constitution, Fin. Graph, LP Lifecycle, Inspector, Reasoning, Solver, Protocol, State Machine, Optimization, Engines, Entities, Runtime, Protocol Scenarios. Uses `simulator/scenario-builder.tsx`. Buttons: Run Simulation (✅), Reset (✅), Save Scenario (❌ 500), Delete Scenario (❌ 500), Run Regression (❌ 500), Load Library Scenario (✅), Theme Toggle (✅).
+   150→   349→- **`/admin/platform`** (`src/app/(admin)/admin/platform/page.tsx`, 433 lines) — ✅ ACTIVE. 6 tabs: Dashboard, Simulator, Council, Ledger, Trust, Directorate. Simulator tab uses `/api/platform/simulator` (POST). Has a basic scenario form (from/to country, amount, currency, sender/receiver reserve, local). Renders timeline (6 steps) + execution plan summary. AI Runtime Assistant card on dashboard tab — calls `/api/runtime/trust POST action=stress_test` (NOT `/api/platform/simulator` or `runtime.platform.askAI`). **GAP: AI assistant in UI doesn't use `PlatformEngine.askAI()` — uses the trust layer's stress test instead.**
+   151→   350→- **`/admin/simulations`** (`src/app/(admin)/admin/simulations/page.tsx`, 240 lines) — ✅ ACTIVE (page renders) but data layer broken. Server component, calls `db.simulationRun.findMany` (model exists). Filter chips by scenario type. Renders SimulationsTable. **Would 500 due to Prisma provider mismatch.**
+   152→   351→
+   153→   352→### Whether scenario builder is complete
+   154→   353→- ✅ **`simulator/scenario-builder.tsx`** is comprehensive: transaction, treasury, LPs (with source kind, manual, online), financial operators, 10 failure types, 8 AI weight sliders, 4 reserve policies, priority (5 options), accordion UI.
+   155→   354→- ❌ **`admin/scenario-builder.tsx`** is ALSO complete (658 lines) but for a different purpose — world simulation (duration, success/refund/webhook/compliance/high-value/payout rates, merchant/LP actor multi-select). It's orphaned.
+   156→   355→- **GAP**: Two scenario builders exist for two different simulators (kernel transaction sim vs. world sim). Neither is wired together. The world sim UI (orphaned `admin/world-simulator.tsx`) is not accessible from any page.
+   157→   356→- **GAP**: `WorldStateOverrides` (reserve/lp/fee overrides) is defined in `runtime/engines/simulator/types.ts:60-67` but `SimulatorEngine.compare()` does NOT use it. No what-if scenario support.
+   158→   357→
+   159→   358→### Whether timeline renders
+   160→   359→- ✅ YES — three timelines:
+   161→   360→  1. **`/admin/runtime`** page renders `result.replay` via `ReplayStepper` (simulator/replay-stepper.tsx, 244 lines) — full time-machine with play/pause/skip-back/skip-forward/reset, per-frame ledger entries + events + twin tokens + amendments + workflows + insurance. 12 frame types with icons (debit/credit/mint/burn/ledger/events/ai/amendment/workflow/insurance/treasury/settlement).
+   162→   361→  2. **`/admin/platform`** page renders `simResult.timeline` as a simple list of 6 steps (page.tsx:254-265) — step number + status badge + stage name + description.
+   163→   362→  3. **`kernel-simulation-console.tsx`** (orphaned) renders events as a list (line 357-372).
+   164→   363→
+   165→   364→### Whether decision inspector exists
+   166→   365→- ⚠️ PARTIAL — no class literally named "DecisionInspector", but:
+   167→   366→  - **`AIReasoningView`** (`simulator/ai-reasoning.tsx`, 110 lines) renders a "Decision trace" section (line 47-53) — step-by-step decisions with rationale from `reasoning.decisions[]`.
+   168→   367→  - **`ReasoningPanel`** (`simulator/reasoning-panel.tsx`) renders ReasoningResultSummary[] from the kernel's ReasoningEngine (10 reasoning capabilities: optimization, explanation, anomaly, treasury, forecasting, LP, fraud, insurance, governance, extension).
+   169→   368→  - **`InspectorService.getExecutionTrace(paymentId, env)`** (inspector/service.ts:283) returns full execution trace: compiler passes (with alternatives + tradeoffs), pipeline stages (with eventsEmitted), plan details (lpAllocations, settlementLegs, reserveAllocations, fxHops, alternativesConsidered, executionTiming), explanation, provenance. Exposed via `/api/runtime/inspector/*` but NO UI panel renders this — `WorldInspectorPanel` (simulator/world-inspector.tsx) shows before/after reserves + per-frame deltas, NOT the execution trace.
+   170→   369→  - **GAP**: `InspectorService.getExecutionTrace()` is fully implemented but NOT exposed in any UI panel. The Execution tab in `/admin/runtime` uses `ExecutionGraph` (simulator/execution-graph.tsx) which renders `result.plan` (kernel plan), NOT the runtime's `ExecutionTraceView`.
+   171→   370→  - **GAP**: No UI for `/api/runtime/simulator/compare` (the M-RT-13 trace equivalence check). The endpoint exists and returns `SimulationComparison` with `TraceEquivalenceResult`, but no page renders it.
+   172→   371→
+   173→   372→### Whether AI assistant is integrated
+   174→   373→- ⚠️ PARTIAL — three separate AI surfaces:
+   175→   374→  1. **`PlatformEngine.askAI(query)`** (runtime/platform/engine.ts:195-262) — pattern-matches 6 question types (routing, invariants, balance, solvency, health, stress). NO LLM. Returns hardcoded responses with runtime data. Exposed via... **NOT EXPOSED via any API endpoint.** The /admin/platform page's AI assistant calls `/api/runtime/trust POST action=stress_test` instead (page.tsx:78-82). **DEAD CODE.**
+   176→   375→  2. **`/api/simulate` POST** (route.ts:46-57) — calls `generateLLMNarrative(result)` using ZAI SDK (z-ai-web-dev-sdk). Enhances `result.plan.reasoning.narrative` with an LLM-generated narrative. Best-effort (falls back cleanly).
+   177→   376→  3. **`/api/ai/insights`**, **`/api/ai/treasury`**, **`/api/ai/lp-recommendations`**, **/api/ai/compliance`** — 4 separate AI API endpoints using ZAI SDK.
+   178→   377→- **GAP**: `PlatformEngine.askAI()` is implemented but never called from any UI or API. The /admin/platform AI assistant ignores it.
+   179→   378→- **GAP**: Three different AI systems (PlatformEngine.askAI, /api/simulate LLM narrative, /api/ai/* endpoints) with no unified interface.
+   180→   379→
+   181→   380→### GAPS
+   182→   381→- **4 orphaned simulator components** (~1,917 lines total): `admin/kernel-simulation-console.tsx`, `admin/scenario-builder.tsx`, `admin/world-simulator.tsx`, `admin/simulation-console.tsx`, `admin/kernel-runtime-console.tsx`. Should be deleted or wired.
+   183→   382→- **3 parallel simulator engines**: `kernel/simulation.ts SimulationEngine` (877 lines, used by /api/simulate), `runtime/engines/simulator SimulatorEngine` (234 lines, used by /api/runtime/simulator/compare — but no UI), `runtime/platform/engine.ts PlatformEngine.simulate()` (506 lines, used by /api/platform/simulator). Three simulate functions, three API endpoints, three result shapes.
+   184→   383→- **`SimulatorEngine.compare()` doesn't actually execute the simulation pipeline** (engine.ts:98-101 comment) — only compiles. So the M-RT-13 "sim = prod" invariant holds at the compiler level but NOT at the pipeline level. The runtime has `RuntimeHost` with full sandbox isolation that COULD run the full pipeline in sandbox, but `SimulatorEngine` doesn't use it.
+   185→   384→- **`WorldStateOverrides` defined but unused** — what-if scenarios not implemented.
+   186→   385→- **No UI for trace equivalence** — `/api/runtime/simulator/compare` returns rich `TraceEquivalenceResult` but no page renders it.
+   187→   386→- **No UI for `InspectorService.getExecutionTrace()`** — fully implemented, exposed via API, but no panel consumes it.
+   188→   387→- **`PlatformEngine.askAI()` is dead code** — implemented but no API endpoint exposes it; the /admin/platform AI assistant uses the trust layer's stress_test instead.
+   189→   388→- **`/api/simulate` POST crashes when `scenario.financialOperators` is omitted** — `kernel/world-store.ts:181` does `scenario.financialOperators.map(...)` without null-check. (Already documented in prior audit.)
+   190→   389→- **Persist-run writes to 4 missing models** — `LedgerEntryRecord`, `TwinTokenRecord`, `PlanAmendmentRecord` (all missing from schema), `SimulationRun` (exists). Silent failure due to `.catch()`. So /admin/simulations shows 0 runs. (Already documented.)
+   191→   390→- **Decision inspector UI fragmentary** — decisions surface in 3 places (AIReasoningView "Decision trace", ReasoningPanel, InspectorService.getExecutionTrace) with no unified view.
+   192→   391→
+   193→   392→---
+   194→   393→
+   195→   394→**Code audit verdict:** The four subsystems exist as substantial code (extension platform ~1.5k lines, role switching ~600 lines, env switching ~200 lines, runtime simulator ~3.5k lines across kernel+runtime+components). The runtime layer (M-RT-13 SimulatorEngine, M-RT-29 RuntimeHost, M-PLATFORM-38 PlatformEngine) is architecturally complete and internally consistent. The integration layer between runtime and UI is the critical gap:
+   196→   395→- 4 of 4 subsystems have orphaned components (extension marketplace pages exist but Prisma models missing; 4 simulator admin components orphaned; PlatformEngine.askAI dead code; SimulatorEngine.compare has no UI).
+   197→   396→- The env-switcher toggles a cookie that doesn't propagate to runtimeHost.activeEnvironment.
+   198→   397→- The role-switcher works but isn't rendered in 2 of 9 layouts.
+   199→   398→- The simulator has 3 parallel engines with 3 parallel API endpoints and 3 parallel result shapes — needs consolidation.
+   200→   399→
+   201→   400→Implementation agents should target the GAPS sections above — each gap is a discrete unit of work with file paths and line numbers cited.
