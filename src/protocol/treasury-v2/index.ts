@@ -104,3 +104,6 @@ export {
   treasuryEngine,
   type HookResult,
 } from './treasury';
+
+// M-RT-20 fix: re-export emergencyFreezeEngine (needed by /api/treasury/freeze).
+export { EmergencyFreezeEngine, emergencyFreezeEngine } from './freezes';

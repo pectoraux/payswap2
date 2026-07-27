@@ -140,3 +140,8 @@ export type {
   DailyReconciliationInput,
   DailyReconciliationReport,
 } from './ledger/reconciliation';
+
+// M-RT-20 fix: re-export connector classes + registry (needed by connectors/adapters.ts).
+export { connectorRegistry, ConnectorRegistry, Connector } from './connectors';
+export type { ConnectorConfig, ConnectorResult } from './connectors';
+
