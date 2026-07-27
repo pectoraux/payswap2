@@ -98,6 +98,8 @@ import {
 import { EconomicControlPlane } from './control-plane';
 // M-ECO-35: Canonical Economic Ledger & Solvency Engine:
 import { EconomicLedgerEngine } from './ledger';
+// M-ECO-36: Global Economic Directorate (strategic planning + autonomous directors):
+import { GlobalEconomicDirectorate } from './directorate';
 
 // Re-export the public surface.
 export * from './types';
@@ -253,6 +255,8 @@ export type {
 } from './control-plane';
 // M-ECO-35: Economic Ledger:
 export * from './ledger';
+// M-ECO-36: Global Economic Directorate:
+export * from './directorate';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -366,6 +370,8 @@ export interface Runtime {
   controlPlane: EconomicControlPlane;
   // M-ECO-35: Canonical Economic Ledger & Solvency Engine.
   ledger: EconomicLedgerEngine;
+  // M-ECO-36: Global Economic Directorate (strategic planning + autonomous directors).
+  directorate: GlobalEconomicDirectorate;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -716,6 +722,13 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     getEventCount: () => eventStore.size(),
   });
 
+  // ── M-ECO-36: Global Economic Directorate ───────────────────────────────
+  const directorate = new GlobalEconomicDirectorate({
+    getDigitalTwin: () => controlPlane.buildDigitalTwin(),
+    getControlPlaneReport: () => controlPlane.getReport(),
+    getBalanceSheet: () => ledger.getBalanceSheet(),
+  });
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -787,6 +800,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     lpIntelligence,
     controlPlane,
     ledger,
+    directorate,
     health,
     migrations,
     invariants,
