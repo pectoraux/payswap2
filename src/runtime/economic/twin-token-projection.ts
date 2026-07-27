@@ -22,6 +22,9 @@ function posKey(accountId: string, tokenType: TokenType, currency: string): stri
 }
 
 export class TwinTokenProjection {
+  /** Event type prefixes this projection handles (for ProjectionRunner). */
+  readonly handles = ['twin.'] as const;
+
   private readonly positions = new Map<string, TwinTokenPosition>();
   private lastPosition = -1;
   private eventsAppliedCount = 0;

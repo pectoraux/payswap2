@@ -111,6 +111,9 @@ export interface LPOfferWithdrawnPayload {
 // ─── LP Projection ─────────────────────────────────────────────────────────
 
 export class LPRuntimeProjection {
+  /** Event type prefixes this projection handles (for ProjectionRunner). */
+  readonly handles = ['lp.'] as const;
+
   private readonly lps = new Map<string, EconomicLPProfile>();
   private readonly offers = new Map<string, LPOffer>();
   private lastPosition = -1;

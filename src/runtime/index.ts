@@ -83,6 +83,8 @@ import { createDefaultAdapters, type SettlementAdapterRegistry } from './settlem
 import { SchemaRegistry, registerAllEventTypes } from './event-evolution';
 // M-RT-28: Runtime Recovery (Recovery Manager + Kernel Manifest):
 import { RecoveryManager, buildManifest, type KernelManifest } from './recovery';
+// M-RT-29: Dual Runtime (RuntimeHost — Sandbox + Live isolation):
+import { RuntimeHost, type RuntimeContext } from './host';
 
 // Re-export the public surface.
 export * from './types';
@@ -197,6 +199,9 @@ export * from './settlement';
 export * from './event-evolution';
 // M-RT-28: Runtime Recovery public surface:
 export * from './recovery';
+// M-RT-29: Dual Runtime public surface:
+export { RuntimeHost } from './host';
+export type { RuntimeContext } from './host';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -484,6 +489,10 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const lpRuntime = new LPRuntimeProjection();
   const marketplace = new EconomicMarketplace(lpRuntime);
   const economicCompiler = new EconomicCompiler(marketplace);
+  // M-RT-29 fix: register LP + twin token projections with the ProjectionRunner
+  // so they receive live events from the EventStore.
+  projectionRunner.register(lpRuntime as unknown as import('./read-models').Projection);
+  projectionRunner.register(twinTokens as unknown as import('./read-models').Projection);
 
   // ── M-RT-19: Migration Manager (owns all capability backfills) ──────────
   const migrations = new MigrationManager();
@@ -638,3 +647,18 @@ export function dispatch(
 
 /** Re-export key types for callers. */
 export type { MerchantIntent, TypedIntent, ExecutionResult, RuntimeClock, EventStore, PolicyEngine };
+
+/**
+ * M-RT-29: The global RuntimeHost singleton (Sandbox + Live).
+ *
+ * Owns two completely independent runtime instances. Use `runtimeHost.get('sandbox')`
+ * or `runtimeHost.get('live')` to access a specific runtime.
+ *
+ * Uses globalThis so Next.js dev-mode doesn't create duplicate hosts.
+ */
+const globalForHost = globalThis as unknown as { __PAYSWAP_RUNTIME_HOST__?: RuntimeHost };
+export const runtimeHost: RuntimeHost =
+  globalForHost.__PAYSWAP_RUNTIME_HOST__ ?? new RuntimeHost();
+if (!globalForHost.__PAYSWAP_RUNTIME_HOST__) {
+  globalForHost.__PAYSWAP_RUNTIME_HOST__ = runtimeHost;
+}
