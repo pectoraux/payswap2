@@ -67,6 +67,7 @@ import { NoOpFinancialKnowledgeGraph, type FinancialKnowledgeGraph } from './gra
 import { PaymentsService, PaymentBackfillService } from './engines/payments';
 import { RefundsService, RefundBackfillService } from './engines/refunds';
 import { WalletsService, WalletBackfillService } from './engines/wallets';
+import { TreasuryService, TreasuryBackfillService } from './engines/treasury';
 import { ProjectionHealthRegistry, MigrationManager } from './migration';
 import { LiquidityComposer } from './engines/liquidity-composer';
 // M-RT-20: Economic Integrity Hardening (Invariant Engine):
@@ -159,6 +160,8 @@ export { RefundsService, RefundBackfillService, RefundProjection } from './engin
 export type { RefundView, RefundRequestedPayload, RefundListOptions } from './engines/refunds';
 export { WalletsService, WalletBackfillService, WalletProjection } from './engines/wallets';
 export type { WalletView, WalletCreatedPayload, WalletListOptions } from './engines/wallets';
+export { TreasuryService, TreasuryBackfillService, TreasuryProjection } from './engines/treasury';
+export type { TreasuryAccountView, AccountKind, TreasuryListOptions } from './engines/treasury';
 export * from './migration';
 export { LiquidityComposer, buildGraph, findPaths, optimizeSplit, rankPaths, decomposeCost } from './engines/liquidity-composer';
 export type { CompositionRequest, ComposedExecutionPlan, ExecutionLeg, SplitPlan, PathAllocation, GraphBuildInputs, LPOfferInput, ReserveBridgeInput } from './engines/liquidity-composer';
@@ -255,6 +258,9 @@ export interface Runtime {
   // M-RT-23: Wallets capability (stateful aggregate — derived balances).
   wallets: WalletsService;
   walletBackfill: WalletBackfillService;
+  // M-RT-24: Treasury Kernel (financial source of truth — 5 account types).
+  treasury: TreasuryService;
+  treasuryBackfill: TreasuryBackfillService;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -433,11 +439,21 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     correlationPrefix: 'backfill:wallet',
   });
 
+  // ── M-RT-24: Treasury Kernel (financial source of truth) ────────────────
+  const treasury = new TreasuryService({ eventStore, clock });
+  projectionRunner.register(treasury.projection);
+  const treasuryBackfill = new TreasuryBackfillService({
+    treasuryService: treasury,
+    environment: opts.environment ?? 'live',
+    correlationPrefix: 'backfill:treasury',
+  });
+
   // ── M-RT-19: Migration Manager (owns all capability backfills) ──────────
   const migrations = new MigrationManager();
   migrations.register('payments', 1, () => paymentBackfill.run(), () => paymentBackfill.status(), () => paymentBackfill.status().then((s) => payments.health(s.prismaCount)));
   migrations.register('refunds', 1, () => refundBackfill.run(), () => refundBackfill.status(), () => refundBackfill.status().then((s) => refunds.health(s.prismaCount)));
   migrations.register('wallets', 1, () => walletBackfill.run(), () => walletBackfill.status(), () => walletBackfill.status().then((s) => wallets.health(s.prismaCount)));
+  migrations.register('treasury', 1, () => treasuryBackfill.run(), () => treasuryBackfill.status(), () => treasuryBackfill.status().then((s) => treasury.health(s.prismaCount)));
   migrations.triggerAll();
 
   // ── M-RT-19: Projection health registry ─────────────────────────────────
@@ -445,6 +461,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   health.register('payments', async () => { const s = await paymentBackfill.status(); return payments.health(s.prismaCount); });
   health.register('refunds', async () => { const s = await refundBackfill.status(); return refunds.health(s.prismaCount); });
   health.register('wallets', async () => { const s = await walletBackfill.status(); return wallets.health(s.prismaCount); });
+  health.register('treasury', async () => { const s = await treasuryBackfill.status(); return treasury.health(s.prismaCount); });
 
   // ── M-RT-20: Invariant Engine (economic integrity hardening) ────────────
   const invariants = new InvariantEngine();
@@ -509,6 +526,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     refundBackfill,
     wallets,
     walletBackfill,
+    treasury,
+    treasuryBackfill,
     health,
     migrations,
     invariants,
