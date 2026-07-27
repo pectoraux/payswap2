@@ -87,6 +87,8 @@ import { RecoveryManager, buildManifest, type KernelManifest } from './recovery'
 import { RuntimeHost, type RuntimeContext } from './host';
 // M-RT-30: Liquidity Intelligence & Settlement Kernel:
 import { LiquidityPolicyEngine, BandwidthEngine, SettlementContractEngine, DisputeEngine } from './liquidity';
+// M-ECO-31: Adaptive Liquidity Intelligence (the "brain"):
+import { LiquidityIntelligenceEngine as EcoIntelligenceEngine } from './eco-intelligence';
 
 // Re-export the public surface.
 export * from './types';
@@ -206,6 +208,15 @@ export { RuntimeHost } from './host';
 export type { RuntimeContext } from './host';
 // M-RT-30: Liquidity Intelligence public surface:
 export * from './liquidity';
+// M-ECO-31: Adaptive Liquidity Intelligence public surface (explicit re-exports to avoid conflicts):
+export { LiquidityIntelligenceEngine as EcoIntelligenceEngine } from './eco-intelligence';
+export type {
+  ReserveForecast, BandwidthOptimization, CorridorIntelligenceView,
+  CorridorHealth, LPIntelligenceView, ReserveExpansionRecommendation,
+  TreasuryPolicyDecision as EcoTreasuryPolicyDecision,
+  PredictiveOpportunity, EconomicHealthDashboard as EcoEconomicHealthDashboard,
+  CountryEconomicHealth, IntelligencePolicyConfig,
+} from './eco-intelligence';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -306,6 +317,8 @@ export interface Runtime {
   bandwidth: BandwidthEngine;
   settlementContracts: SettlementContractEngine;
   disputes: DisputeEngine;
+  // M-ECO-31: Adaptive Liquidity Intelligence (the economic brain).
+  intelligence: EcoIntelligenceEngine;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -556,7 +569,6 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   projectionRunner.register(disputes as unknown as import('./read-models').Projection);
   const liquidityPolicy = new LiquidityPolicyEngine({
     getReserve: (country, currency) => {
-      // Query treasury for reserve accounts.
       const accounts = treasury.projection.listByKind('reserve');
       const match = accounts.find((a) => a.reference === country && a.currency === currency);
       return match?.availableBalance ?? 0;
@@ -567,6 +579,30 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
       return match?.availableBalance ?? 0;
     },
     getBandwidth: (country, assetType) => bandwidth.getAvailableBandwidth(country, assetType),
+  });
+
+  // ── M-ECO-31: Adaptive Liquidity Intelligence ───────────────────────────
+  const intelligence = new EcoIntelligenceEngine({
+    getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
+      id: a.id, kind: a.kind, ownerId: a.ownerId, currency: a.currency,
+      availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
+    })),
+    getBandwidthPositions: () => bandwidth.list().map((b) => ({
+      owner: b.owner, country: b.country, assetType: b.assetType,
+      capacity: b.capacity, reserved: b.reserved, used: b.used, available: b.available,
+      escrow: b.escrow, bond: b.bond, status: b.status,
+    })),
+    getLPs: () => lpRuntime.listLPs().map((lp) => ({
+      lpId: lp.lpId, name: lp.name, confidence: lp.confidence, riskScore: lp.riskScore,
+      totalCapacity: lp.totalCapacity,
+      supportedCorridors: lp.supportedCorridors.map((c) => ({ from: c.from, to: c.to, capacity: c.capacity, spreadBps: c.spreadBps, latencyMs: c.latencyMs })),
+    })),
+    getLPOffers: () => lpRuntime.listOffers().map((o) => ({
+      offerId: o.offerId, lpId: o.lpId, from: o.from, to: o.to,
+      capacity: o.capacity, spreadBps: o.spreadBps, latencyMs: o.latencyMs,
+      confidence: o.confidence, riskScore: o.riskScore,
+    })),
+    getEventCount: () => eventStore.size(),
   });
 
   const runtime: Runtime = {
@@ -633,6 +669,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     bandwidth,
     settlementContracts,
     disputes,
+    intelligence,
     health,
     migrations,
     invariants,
