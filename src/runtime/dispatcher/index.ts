@@ -26,5 +26,9 @@ export {
   ExecuteRefundCommandHandler,
   ReserveLiquidityCommandHandler,
   ReleaseLiquidityCommandHandler,
+  WalletCreditCommandHandler,
+  WalletDebitCommandHandler,
+  WalletReserveCommandHandler,
+  WalletReleaseCommandHandler,
   BUILTIN_HANDLERS,
 } from './handlers';

@@ -66,6 +66,7 @@ import { NoOpFinancialKnowledgeGraph, type FinancialKnowledgeGraph } from './gra
 // M-RT-16/18/19: Capability migration + liquidity composition:
 import { PaymentsService, PaymentBackfillService } from './engines/payments';
 import { RefundsService, RefundBackfillService } from './engines/refunds';
+import { WalletsService, WalletBackfillService } from './engines/wallets';
 import { ProjectionHealthRegistry, MigrationManager } from './migration';
 import { LiquidityComposer } from './engines/liquidity-composer';
 // M-RT-20: Economic Integrity Hardening (Invariant Engine):
@@ -156,14 +157,25 @@ export { PaymentsService, PaymentBackfillService, PaymentProjection } from './en
 export type { PaymentView, PaymentRecordedPayload, PaymentListOptions } from './engines/payments';
 export { RefundsService, RefundBackfillService, RefundProjection } from './engines/refunds';
 export type { RefundView, RefundRequestedPayload, RefundListOptions } from './engines/refunds';
+export { WalletsService, WalletBackfillService, WalletProjection } from './engines/wallets';
+export type { WalletView, WalletCreatedPayload, WalletListOptions } from './engines/wallets';
 export * from './migration';
 export { LiquidityComposer, buildGraph, findPaths, optimizeSplit, rankPaths, decomposeCost } from './engines/liquidity-composer';
 export type { CompositionRequest, ComposedExecutionPlan, ExecutionLeg, SplitPlan, PathAllocation, GraphBuildInputs, LPOfferInput, ReserveBridgeInput } from './engines/liquidity-composer';
 export * from './read-models/v2';
 // M-RT-20: Invariant Engine public surface:
 export * from './invariants';
-// M-RT-21: Runtime Dispatcher public surface:
-export * from './dispatcher';
+// M-RT-21/22: Runtime Dispatcher public surface (explicit re-exports to avoid RetryPolicy conflict with scheduling):
+export { RuntimeDispatcher, CommandRegistry, BUILTIN_HANDLERS } from './dispatcher';
+export type { DispatchResult, DispatcherInputs, CommandHandler, CommandResult } from './dispatcher';
+export type { RuntimeCommand, CommandMetadata, AnyRuntimeCommand, CommandType } from './dispatcher';
+export type { CreatePaymentCommand, CreateRefundCommand, ExecuteRefundCommand, ReserveLiquidityCommand, ReleaseLiquidityCommand, WalletCreditCommand, WalletDebitCommand, WalletReserveCommand, WalletReleaseCommand } from './dispatcher';
+export { IdempotencyStore } from './dispatcher';
+export type { CachedResult } from './dispatcher';
+export { defaultShouldRetry } from './dispatcher';
+export type { RetryPolicyOptions, RetryOutcome } from './dispatcher';
+// Re-export RetryPolicy with an alias to avoid conflict with scheduling's RetryPolicy.
+export { RetryPolicy as DispatcherRetryPolicy } from './dispatcher';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -240,6 +252,9 @@ export interface Runtime {
   // M-RT-19: Refunds capability (uses BackfillEngine<T>).
   refunds: RefundsService;
   refundBackfill: RefundBackfillService;
+  // M-RT-23: Wallets capability (stateful aggregate — derived balances).
+  wallets: WalletsService;
+  walletBackfill: WalletBackfillService;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -409,16 +424,27 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     correlationPrefix: 'backfill:refund',
   });
 
+  // ── M-RT-23: Wallets capability (stateful aggregate — derived balances) ─
+  const wallets = new WalletsService({ eventStore, clock });
+  projectionRunner.register(wallets.projection);
+  const walletBackfill = new WalletBackfillService({
+    walletsService: wallets,
+    environment: opts.environment ?? 'live',
+    correlationPrefix: 'backfill:wallet',
+  });
+
   // ── M-RT-19: Migration Manager (owns all capability backfills) ──────────
   const migrations = new MigrationManager();
   migrations.register('payments', 1, () => paymentBackfill.run(), () => paymentBackfill.status(), () => paymentBackfill.status().then((s) => payments.health(s.prismaCount)));
   migrations.register('refunds', 1, () => refundBackfill.run(), () => refundBackfill.status(), () => refundBackfill.status().then((s) => refunds.health(s.prismaCount)));
+  migrations.register('wallets', 1, () => walletBackfill.run(), () => walletBackfill.status(), () => walletBackfill.status().then((s) => wallets.health(s.prismaCount)));
   migrations.triggerAll();
 
   // ── M-RT-19: Projection health registry ─────────────────────────────────
   const health = new ProjectionHealthRegistry();
   health.register('payments', async () => { const s = await paymentBackfill.status(); return payments.health(s.prismaCount); });
   health.register('refunds', async () => { const s = await refundBackfill.status(); return refunds.health(s.prismaCount); });
+  health.register('wallets', async () => { const s = await walletBackfill.status(); return wallets.health(s.prismaCount); });
 
   // ── M-RT-20: Invariant Engine (economic integrity hardening) ────────────
   const invariants = new InvariantEngine();
@@ -481,6 +507,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     paymentBackfill,
     refunds,
     refundBackfill,
+    wallets,
+    walletBackfill,
     health,
     migrations,
     invariants,

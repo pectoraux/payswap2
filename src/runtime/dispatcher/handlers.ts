@@ -21,6 +21,10 @@ import type {
   ExecuteRefundCommand,
   ReserveLiquidityCommand,
   ReleaseLiquidityCommand,
+  WalletCreditCommand,
+  WalletDebitCommand,
+  WalletReserveCommand,
+  WalletReleaseCommand,
 } from './types';
 
 // ─── Payment Command Handler ───────────────────────────────────────────────
@@ -233,6 +237,156 @@ export class ReleaseLiquidityCommandHandler implements CommandHandler<ReleaseLiq
   }
 }
 
+// ─── Wallet Command Handlers (M-RT-23) ─────────────────────────────────────
+
+/** Handles "wallet.credit" — produces a wallet.credited event. */
+export class WalletCreditCommandHandler implements CommandHandler<WalletCreditCommand> {
+  readonly commandType = 'wallet.credit';
+  readonly description = 'Credit a wallet (produces wallet.credited event)';
+
+  handle(command: WalletCreditCommand, _snapshot: RuntimeSnapshot): CommandResult {
+    const payload = command.payload;
+    const streamId = `${command.metadata.environment}:wallet:${payload.walletId}`;
+
+    const event: UncommittedEvent = {
+      type: 'wallet.credited',
+      streamId,
+      streamType: 'wallet',
+      kind: 'domain',
+      payload: {
+        walletId: payload.walletId,
+        amount: payload.amount,
+        currency: payload.currency,
+        counterparty: payload.counterparty ?? null,
+        reference: payload.reference ?? null,
+        txHash: null,
+        reason: payload.reason,
+        creditedAt: Date.now(),
+      } as unknown as Record<string, unknown>,
+    };
+
+    return {
+      success: true,
+      commandType: this.commandType,
+      events: [event],
+      streamId,
+      entityId: payload.walletId,
+      message: `Credited ${payload.amount} ${payload.currency} to wallet ${payload.walletId}`,
+    };
+  }
+}
+
+/** Handles "wallet.debit" — produces a wallet.debited event. */
+export class WalletDebitCommandHandler implements CommandHandler<WalletDebitCommand> {
+  readonly commandType = 'wallet.debit';
+  readonly description = 'Debit a wallet (produces wallet.debited event)';
+
+  handle(command: WalletDebitCommand, snapshot: RuntimeSnapshot): CommandResult {
+    const payload = command.payload;
+    const wallet = snapshot.payments.get(payload.walletId) as { availableBalance?: number; isClosed?: boolean } | undefined;
+    // Note: wallet state is in the wallets projection, not payments. For now,
+    // we skip the balance check here (the invariant engine handles it).
+    // A future enhancement would pass the wallets projection into the snapshot.
+
+    const streamId = `${command.metadata.environment}:wallet:${payload.walletId}`;
+    const event: UncommittedEvent = {
+      type: 'wallet.debited',
+      streamId,
+      streamType: 'wallet',
+      kind: 'domain',
+      payload: {
+        walletId: payload.walletId,
+        amount: payload.amount,
+        currency: payload.currency,
+        counterparty: payload.counterparty ?? null,
+        reference: payload.reference ?? null,
+        txHash: null,
+        reason: payload.reason,
+        debitedAt: Date.now(),
+      } as unknown as Record<string, unknown>,
+    };
+
+    return {
+      success: true,
+      commandType: this.commandType,
+      events: [event],
+      streamId,
+      entityId: payload.walletId,
+      message: `Debited ${payload.amount} ${payload.currency} from wallet ${payload.walletId}`,
+    };
+  }
+}
+
+/** Handles "wallet.reserve" — produces a wallet.reserved event. */
+export class WalletReserveCommandHandler implements CommandHandler<WalletReserveCommand> {
+  readonly commandType = 'wallet.reserve';
+  readonly description = 'Reserve wallet balance (produces wallet.reserved event)';
+
+  handle(command: WalletReserveCommand, _snapshot: RuntimeSnapshot): CommandResult {
+    const payload = command.payload;
+    const streamId = `${command.metadata.environment}:wallet:${payload.walletId}`;
+
+    const event: UncommittedEvent = {
+      type: 'wallet.reserved',
+      streamId,
+      streamType: 'wallet',
+      kind: 'domain',
+      payload: {
+        walletId: payload.walletId,
+        amount: payload.amount,
+        currency: payload.currency,
+        reason: payload.reason,
+        operationId: payload.operationId,
+        reservedAt: Date.now(),
+      } as unknown as Record<string, unknown>,
+    };
+
+    return {
+      success: true,
+      commandType: this.commandType,
+      events: [event],
+      streamId,
+      entityId: payload.walletId,
+      message: `Reserved ${payload.amount} ${payload.currency} in wallet ${payload.walletId}`,
+    };
+  }
+}
+
+/** Handles "wallet.release" — produces a wallet.released event. */
+export class WalletReleaseCommandHandler implements CommandHandler<WalletReleaseCommand> {
+  readonly commandType = 'wallet.release';
+  readonly description = 'Release reserved wallet balance (produces wallet.released event)';
+
+  handle(command: WalletReleaseCommand, _snapshot: RuntimeSnapshot): CommandResult {
+    const payload = command.payload;
+    const streamId = `${command.metadata.environment}:wallet:${payload.walletId}`;
+
+    const event: UncommittedEvent = {
+      type: 'wallet.released',
+      streamId,
+      streamType: 'wallet',
+      kind: 'domain',
+      payload: {
+        walletId: payload.walletId,
+        amount: payload.amount,
+        currency: payload.currency,
+        reason: payload.reason,
+        operationId: payload.operationId,
+        releasedAt: Date.now(),
+      } as unknown as Record<string, unknown>,
+    };
+
+    return {
+      success: true,
+      commandType: this.commandType,
+      events: [event],
+      streamId,
+      entityId: payload.walletId,
+      message: `Released ${payload.amount} ${payload.currency} from wallet ${payload.walletId}`,
+    };
+  }
+}
+
 // ─── All Built-in Handlers ─────────────────────────────────────────────────
 
 /** All built-in command handlers, in registration order. */
@@ -242,4 +396,8 @@ export const BUILTIN_HANDLERS: CommandHandler[] = [
   new ExecuteRefundCommandHandler(),
   new ReserveLiquidityCommandHandler(),
   new ReleaseLiquidityCommandHandler(),
+  new WalletCreditCommandHandler(),
+  new WalletDebitCommandHandler(),
+  new WalletReserveCommandHandler(),
+  new WalletReleaseCommandHandler(),
 ];

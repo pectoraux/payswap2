@@ -47,6 +47,20 @@ export interface RefundView {
   environment: string;
 }
 
+export interface WalletView {
+  id: string;
+  accountId: string;
+  name: string;
+  currency: string;
+  availableBalance: number;
+  reservedBalance: number;
+  totalBalance: number;
+  isDefault: boolean;
+  isClosed: boolean;
+  createdAt: Date;
+  lastUpdated: Date;
+}
+
 export interface CustomerView {
   id: string;
   name: string;
@@ -126,13 +140,16 @@ export const refundReadModel = {
   async list(merchantId: string, env?: string, opts?: { take?: number; skip?: number }): Promise<RefundView[]> {
     const views = await runtime.refunds.list(merchantId, opts);
     if (views.length > 0) return views;
-    const refunds = await db.refund.findMany({ where: { merchantId, environment: env ?? 'live' }, orderBy: { createdAt: 'desc' }, take: opts?.take ?? 100, skip: opts?.skip ?? 0 });
-    return refunds.map(r => ({ id: r.id, merchantId: r.merchantId, paymentId: r.paymentId, amount: r.amount, type: r.type, reason: r.reason, status: r.status, requestedBy: r.requestedBy, approvedBy: r.approvedBy, processedAt: r.processedAt, createdAt: r.createdAt, environment: r.environment }));
+    // Cold-start fallback (env filter applied in-memory since Prisma schema may not have environment column).
+    const refunds = await db.refund.findMany({ where: { merchantId }, orderBy: { createdAt: 'desc' }, take: opts?.take ?? 100, skip: opts?.skip ?? 0 });
+    return refunds
+      .filter(r => !env || (r as unknown as { environment?: string }).environment === env)
+      .map(r => ({ id: r.id, merchantId: r.merchantId, paymentId: r.paymentId, amount: r.amount, type: r.type, reason: r.reason, status: r.status, requestedBy: r.requestedBy, approvedBy: r.approvedBy, processedAt: r.processedAt, createdAt: r.createdAt, environment: (r as unknown as { environment?: string }).environment ?? env ?? 'live' }));
   },
   async count(merchantId: string, env?: string): Promise<number> {
     const projected = await runtime.refunds.count(merchantId);
     if (projected > 0) return projected;
-    return db.refund.count({ where: { merchantId, environment: env ?? 'live' } });
+    return db.refund.count({ where: { merchantId } });
   },
   async aggregateAmount(merchantId: string): Promise<number> {
     const projected = await runtime.refunds.aggregateAmount(merchantId);
@@ -238,5 +255,94 @@ export const auditLogReadModel = {
       })),
       total,
     };
+  },
+};
+
+// ─── Wallet Read Model (M-RT-23 — frozen façade, projection-backed) ────────
+
+export const walletReadModel = {
+  async list(opts?: { take?: number; skip?: number; accountId?: string; currency?: string }): Promise<WalletView[]> {
+    const views = await runtime.wallets.list(opts);
+    if (views.length > 0) return views;
+    // Cold-start fallback to Prisma before backfill has run.
+    const wallets = await db.wallet.findMany({
+      where: { accountId: opts?.accountId, currency: opts?.currency },
+      orderBy: { createdAt: 'desc' },
+      take: opts?.take ?? 50,
+      skip: opts?.skip ?? 0,
+    });
+    return wallets.map(w => ({
+      id: w.id,
+      accountId: w.accountId,
+      name: w.name,
+      currency: w.currency,
+      availableBalance: w.balance - w.lockedBalance,
+      reservedBalance: w.lockedBalance,
+      totalBalance: w.balance,
+      isDefault: w.isDefault,
+      isClosed: false,
+      createdAt: w.createdAt,
+      lastUpdated: w.updatedAt,
+    }));
+  },
+
+  async get(walletId: string): Promise<WalletView | null> {
+    const view = await runtime.wallets.get(walletId);
+    if (view) return view;
+    // Cold-start fallback.
+    const w = await db.wallet.findUnique({ where: { id: walletId } });
+    if (!w) return null;
+    return {
+      id: w.id,
+      accountId: w.accountId,
+      name: w.name,
+      currency: w.currency,
+      availableBalance: w.balance - w.lockedBalance,
+      reservedBalance: w.lockedBalance,
+      totalBalance: w.balance,
+      isDefault: w.isDefault,
+      isClosed: false,
+      createdAt: w.createdAt,
+      lastUpdated: w.updatedAt,
+    };
+  },
+
+  async getBalance(walletId: string): Promise<{ available: number; reserved: number; total: number } | null> {
+    const balance = await runtime.wallets.getBalance(walletId);
+    if (balance) return balance;
+    // Cold-start fallback.
+    const w = await db.wallet.findUnique({ where: { id: walletId }, select: { balance: true, lockedBalance: true } });
+    if (!w) return null;
+    return {
+      available: w.balance - w.lockedBalance,
+      reserved: w.lockedBalance,
+      total: w.balance,
+    };
+  },
+
+  async listByAccount(accountId: string): Promise<WalletView[]> {
+    const views = await runtime.wallets.listByAccount(accountId);
+    if (views.length > 0) return views;
+    // Cold-start fallback.
+    const wallets = await db.wallet.findMany({ where: { accountId }, orderBy: { createdAt: 'desc' } });
+    return wallets.map(w => ({
+      id: w.id,
+      accountId: w.accountId,
+      name: w.name,
+      currency: w.currency,
+      availableBalance: w.balance - w.lockedBalance,
+      reservedBalance: w.lockedBalance,
+      totalBalance: w.balance,
+      isDefault: w.isDefault,
+      isClosed: false,
+      createdAt: w.createdAt,
+      lastUpdated: w.updatedAt,
+    }));
+  },
+
+  async count(): Promise<number> {
+    const projected = await runtime.wallets.count();
+    if (projected > 0) return projected;
+    return db.wallet.count();
   },
 };

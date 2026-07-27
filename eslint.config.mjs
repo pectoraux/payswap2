@@ -11,7 +11,7 @@ const __dirname = dirname(__filename);
  * Forbids `db.<table>` reads outside the runtime for migrated capabilities.
  * ERROR for refund (M-RT-19), WARN for payment (M-RT-18 re-migration is incremental).
  */
-const READ_ERROR_TABLES = ["refund"];
+const READ_ERROR_TABLES = ["refund", "wallet"];
 const READ_WARN_TABLES = ["payment"];
 const READ_ALLOWED_PREFIXES = [
   "src/runtime/", "src/lib/db", "src/lib/auth", "src/app/api/auth",

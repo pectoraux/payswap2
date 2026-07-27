@@ -154,6 +154,50 @@ export interface ReleaseLiquidityPayload {
 
 export type ReleaseLiquidityCommand = RuntimeCommand<'reserve.release', ReleaseLiquidityPayload>;
 
+// ─── Wallet Commands (M-RT-23) ─────────────────────────────────────────────
+
+export interface WalletCreditPayload {
+  walletId: string;
+  amount: number;
+  currency: string;
+  reason: string;
+  counterparty?: string;
+  reference?: string;
+}
+
+export type WalletCreditCommand = RuntimeCommand<'wallet.credit', WalletCreditPayload>;
+
+export interface WalletDebitPayload {
+  walletId: string;
+  amount: number;
+  currency: string;
+  reason: string;
+  counterparty?: string;
+  reference?: string;
+}
+
+export type WalletDebitCommand = RuntimeCommand<'wallet.debit', WalletDebitPayload>;
+
+export interface WalletReservePayload {
+  walletId: string;
+  amount: number;
+  currency: string;
+  reason: string;
+  operationId: string;
+}
+
+export type WalletReserveCommand = RuntimeCommand<'wallet.reserve', WalletReservePayload>;
+
+export interface WalletReleasePayload {
+  walletId: string;
+  amount: number;
+  currency: string;
+  reason: string;
+  operationId: string;
+}
+
+export type WalletReleaseCommand = RuntimeCommand<'wallet.release', WalletReleasePayload>;
+
 // ─── Union of All Commands ─────────────────────────────────────────────────
 
 export type AnyRuntimeCommand =
@@ -164,7 +208,11 @@ export type AnyRuntimeCommand =
   | CreatePayoutCommand
   | CreateInvoiceCommand
   | ReserveLiquidityCommand
-  | ReleaseLiquidityCommand;
+  | ReleaseLiquidityCommand
+  | WalletCreditCommand
+  | WalletDebitCommand
+  | WalletReserveCommand
+  | WalletReleaseCommand;
 
 /** All registered command types (for validation). */
 export const COMMAND_TYPES = [
@@ -176,6 +224,10 @@ export const COMMAND_TYPES = [
   'invoice.create',
   'reserve.lock',
   'reserve.release',
+  'wallet.credit',
+  'wallet.debit',
+  'wallet.reserve',
+  'wallet.release',
 ] as const;
 
 export type CommandType = typeof COMMAND_TYPES[number];
