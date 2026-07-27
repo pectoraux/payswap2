@@ -100,6 +100,8 @@ import { EconomicControlPlane } from './control-plane';
 import { EconomicLedgerEngine } from './ledger';
 // M-ECO-36: Global Economic Directorate (strategic planning + autonomous directors):
 import { GlobalEconomicDirectorate } from './directorate';
+// M-ECO-37: Economic Council (coordinated decision protocol + consensus):
+import { EconomicCouncil } from './council';
 
 // Re-export the public surface.
 export * from './types';
@@ -257,6 +259,8 @@ export type {
 export * from './ledger';
 // M-ECO-36: Global Economic Directorate:
 export * from './directorate';
+// M-ECO-37: Economic Council:
+export * from './council';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -372,6 +376,8 @@ export interface Runtime {
   ledger: EconomicLedgerEngine;
   // M-ECO-36: Global Economic Directorate (strategic planning + autonomous directors).
   directorate: GlobalEconomicDirectorate;
+  // M-ECO-37: Economic Council (coordinated decision protocol + weighted consensus).
+  council: EconomicCouncil;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -729,6 +735,40 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     getBalanceSheet: () => ledger.getBalanceSheet(),
   });
 
+  // ── M-ECO-37: Economic Council ─────────────────────────────────────────
+  const council = new EconomicCouncil({
+    getDirectorRecommendations: () => {
+      const plan = directorate.globalPlan();
+      return plan.recommendations.map((r) => ({
+        director: r.director,
+        action: r.action,
+        description: r.description,
+        targetCountries: r.targetCountries,
+        amount: r.amount,
+        currency: r.currency,
+        expectedROI: r.expectedROI,
+        expectedRisk: r.expectedRisk,
+        confidence: r.confidence,
+        rationale: r.rationale,
+      }));
+    },
+    validateConstitution: (ctx) => controlPlane.validateConstitution({
+      twinTokenSupply: ledger.getBalanceSheet().liabilities.twinTokensOutstanding,
+      totalReserves: ledger.getBalanceSheet().assets.totalAssets,
+      fiatReserves: ledger.getBalanceSheet().assets.fiatReserves,
+      stablecoinReserves: ledger.getBalanceSheet().assets.stablecoinReserves,
+      reserveCoverage: 0.5,
+      lpExposure: 0,
+      countryExposure: {},
+      stablecoinExposure: ledger.getBalanceSheet().assets.stablecoinReserves,
+      escrowLocked: true,
+      recipientConfirmed: true,
+      settlementRailSupported: true,
+      viaTransactionCoordinator: true,
+      viaSettlementContract: true,
+    }),
+  });
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -801,6 +841,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     controlPlane,
     ledger,
     directorate,
+    council,
     health,
     migrations,
     invariants,
