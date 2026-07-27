@@ -204,7 +204,21 @@ export class WalletsService {
     } catch {
       lag = 0;
     }
-    const healthy = lag === 0 && (canonicalRows === undefined || rows >= canonicalRows);
+
+    // Enhanced metrics (M-RT-23 hardening): total balances + negative-balance count.
+    const totalAvailable = this.projection.totalAvailableBalance();
+    const totalReserved = this.projection.totalReservedBalance();
+    const totalBalance = totalAvailable + totalReserved;
+    // Count wallets with negative balances (should always be 0 if invariants hold).
+    let negativeBalances = 0;
+    for (const walletId of this.projection.list({ take: 10000 }).map((w) => w.id)) {
+      const bal = this.projection.getBalance(walletId);
+      if (bal && (bal.available < -0.01 || bal.reserved < -0.01)) {
+        negativeBalances++;
+      }
+    }
+
+    const healthy = lag === 0 && (canonicalRows === undefined || rows >= canonicalRows) && negativeBalances === 0;
     return {
       projection: 'wallets',
       version: 1,
@@ -217,8 +231,15 @@ export class WalletsService {
       canonicalRows,
       message: canonicalRows !== undefined && rows < canonicalRows
         ? `Backfill pending: ${canonicalRows} in Prisma, ${rows} in projection`
-        : healthy ? 'Healthy' : `Lagging by ${lag} events`,
-    };
+        : negativeBalances > 0
+          ? `UNHEALTHY: ${negativeBalances} wallet(s) with negative balances`
+          : healthy ? 'Healthy' : `Lagging by ${lag} events`,
+      // Enhanced operational metrics (M-RT-23 hardening).
+      totalAvailable,
+      totalReserved,
+      totalBalance,
+      negativeBalances,
+    } as ProjectionHealth & { totalAvailable: number; totalReserved: number; totalBalance: number; negativeBalances: number };
   }
 
   // ── Internal: hydrate ───────────────────────────────────────────────────

@@ -41,10 +41,21 @@ export interface RuntimeSnapshot {
   refunds: Map<string, unknown>;
   /** Reserve ledger state: reserveId → balances. */
   reserves: Map<string, InvariantReserveBalances>;
+  /** Wallet projection state: walletId → balances. (M-RT-23.) */
+  wallets: Map<string, InvariantWalletBalances>;
   /** Ledger entries (for double-entry verification). */
   ledgerEntries: LedgerEntry[];
   /** Execution plans that have been compiled (for hash verification). */
   executionPlans: Map<string, { id: string; hash: string }>;
+}
+
+/** Wallet balances (from the WalletProjection). (M-RT-23.) */
+export interface InvariantWalletBalances {
+  walletId: string;
+  available: number;
+  reserved: number;
+  total: number;
+  isClosed: boolean;
 }
 
 /** Reserve balances (from the ReserveLedger projection). Renamed to avoid conflict. */

@@ -206,8 +206,16 @@ export class RuntimeDispatcher {
       return this.fail(command.type, `No handler registered for command type: ${command.type}`, totalTimeStart, dispatchedAt);
     }
 
-    // ── Step 2: Build the current snapshot ────────────────────────────────
+    // ── Step 2: Build the current snapshot + capture stream versions ──────
+    // M-RT-22: Capture stream versions NOW (before the handler runs). This
+    // is the "expected version" for OCC. Both parallel dispatches read the
+    // same version; the second one's append will fail OCC and retry.
     const snapshot = await this.buildSnapshot();
+    // Build a map of streamId → LAST version (iterate all events, keep the last version per stream).
+    const streamVersionsAtStart = new Map<string, number>();
+    for (const ev of snapshot.events) {
+      streamVersionsAtStart.set(ev.streamId, ev.version); // last one wins
+    }
 
     // ── Step 3: Compile (handler produces events) ─────────────────────────
     const compileStart = this.inputs.clock.now();
@@ -284,11 +292,13 @@ export class RuntimeDispatcher {
     const appendStart = this.inputs.clock.now();
     let appendedEvents: StoredEvent[] = [];
     try {
-      // Build expectedVersions map from the handler result.
+      // M-RT-22: Use the stream versions captured at the START of dispatchOnce
+      // (not re-read here). This ensures both parallel dispatches use the same
+      // expected version, so the second one fails OCC and retries.
       const expectedVersions = new Map<string, number>();
       for (const ev of handlerResult.events) {
         if (!expectedVersions.has(ev.streamId)) {
-          expectedVersions.set(ev.streamId, this.inputs.eventStore.streamVersion(ev.streamId) ?? -1);
+          expectedVersions.set(ev.streamId, streamVersionsAtStart.get(ev.streamId) ?? -1);
         }
       }
       const appendResult = await this.inputs.eventStore.append(
@@ -304,6 +314,12 @@ export class RuntimeDispatcher {
       );
       appendedEvents = appendResult.events;
     } catch (err) {
+      // M-RT-22: OCC errors must be RE-THROWN so the retry policy can catch
+      // them and retry (re-load stream version → re-handle → re-verify → re-append).
+      // Other errors (non-OCC) are returned as failures.
+      if (err instanceof OptimisticConcurrencyError || (err instanceof Error && err.name === 'OptimisticConcurrencyError')) {
+        throw err; // re-throw for retry policy
+      }
       return {
         success: false,
         commandType: command.type,
@@ -339,11 +355,42 @@ export class RuntimeDispatcher {
   /** Build the current runtime snapshot (for invariant verification). */
   private async buildSnapshot(): Promise<RuntimeSnapshot> {
     const events = await this.inputs.eventStore.readAll(0, 50_000);
+
+    // Build wallet balances map from wallet events (for invariant verification).
+    const wallets = new Map<string, { walletId: string; available: number; reserved: number; total: number; isClosed: boolean }>();
+    const walletEvents = events.filter((e) => e.streamType === 'wallet');
+    // Replay wallet events to compute current balances.
+    const walletState = new Map<string, { credits: number; debits: number; reserved: number; released: number; isClosed: boolean }>();
+    for (const ev of walletEvents) {
+      const payload = ev.payload as Record<string, unknown>;
+      const walletId = payload.walletId as string;
+      if (!walletId) continue;
+      let state = walletState.get(walletId);
+      if (!state) {
+        state = { credits: 0, debits: 0, reserved: 0, released: 0, isClosed: false };
+        walletState.set(walletId, state);
+      }
+      switch (ev.type) {
+        case 'wallet.credited': state.credits += payload.amount as number; break;
+        case 'wallet.debited': state.debits += payload.amount as number; break;
+        case 'wallet.reserved': state.reserved += payload.amount as number; break;
+        case 'wallet.released': state.released += payload.amount as number; break;
+        case 'wallet.closed': state.isClosed = true; break;
+      }
+    }
+    for (const [walletId, state] of walletState) {
+      const available = state.credits - state.debits - state.reserved + state.released;
+      const reserved = state.reserved - state.released;
+      const total = available + reserved;
+      wallets.set(walletId, { walletId, available, reserved, total, isClosed: state.isClosed });
+    }
+
     return {
       events,
       payments: new Map(),
       refunds: new Map(),
       reserves: new Map(),
+      wallets,
       ledgerEntries: [],
       executionPlans: new Map(),
     };

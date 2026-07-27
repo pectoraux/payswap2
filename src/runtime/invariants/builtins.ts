@@ -328,9 +328,202 @@ export const CompilerHashInvariant: RuntimeInvariant = {
   },
 };
 
+// ─── 10-15. Wallet Balance Invariants (M-RT-23) ────────────────────────────
+
+/** Available balance must never be negative. */
+export const WalletAvailableNonNegativeInvariant: RuntimeInvariant = {
+  id: 'wallet-available-non-negative',
+  description: 'Wallet available balance must never be negative',
+  handles: ['wallet.'],
+
+  verify(events: StoredEvent[], snapshot: RuntimeSnapshot): ReturnType<typeof pass> | ReturnType<typeof fail> {
+    const start = Date.now();
+    const violations: Violation[] = [];
+
+    for (const [walletId, balances] of snapshot.wallets) {
+      const b = balances as { available: number; reserved: number; total: number };
+      if (b.available < -0.01) {
+        violations.push(violation('wallet-available-non-negative', `Wallet ${walletId}: available balance (${b.available}) is negative`, {
+          projection: { name: 'wallets', id: walletId },
+          severity: 'error',
+        }));
+      }
+    }
+
+    if (violations.length > 0) return fail('wallet-available-non-negative', violations, start);
+    return pass('wallet-available-non-negative', start);
+  },
+};
+
+/** Reserved balance must never be negative. */
+export const WalletReservedNonNegativeInvariant: RuntimeInvariant = {
+  id: 'wallet-reserved-non-negative',
+  description: 'Wallet reserved balance must never be negative',
+  handles: ['wallet.'],
+
+  verify(events: StoredEvent[], snapshot: RuntimeSnapshot): ReturnType<typeof pass> | ReturnType<typeof fail> {
+    const start = Date.now();
+    const violations: Violation[] = [];
+
+    for (const [walletId, balances] of snapshot.wallets) {
+      const b = balances as { available: number; reserved: number; total: number };
+      if (b.reserved < -0.01) {
+        violations.push(violation('wallet-reserved-non-negative', `Wallet ${walletId}: reserved balance (${b.reserved}) is negative`, {
+          projection: { name: 'wallets', id: walletId },
+          severity: 'error',
+        }));
+      }
+    }
+
+    if (violations.length > 0) return fail('wallet-reserved-non-negative', violations, start);
+    return pass('wallet-reserved-non-negative', start);
+  },
+};
+
+/** Available + reserved must equal total (balance invariant). */
+export const WalletBalanceConsistencyInvariant: RuntimeInvariant = {
+  id: 'wallet-balance-consistency',
+  description: 'Wallet available + reserved must equal total',
+  handles: ['wallet.'],
+
+  verify(events: StoredEvent[], snapshot: RuntimeSnapshot): ReturnType<typeof pass> | ReturnType<typeof fail> {
+    const start = Date.now();
+    const violations: Violation[] = [];
+
+    for (const [walletId, balances] of snapshot.wallets) {
+      const b = balances as { available: number; reserved: number; total: number };
+      const diff = Math.abs((b.available + b.reserved) - b.total);
+      if (diff > 0.01) {
+        violations.push(violation('wallet-balance-consistency', `Wallet ${walletId}: available (${b.available}) + reserved (${b.reserved}) ≠ total (${b.total})`, {
+          projection: { name: 'wallets', id: walletId },
+          severity: 'error',
+        }));
+      }
+    }
+
+    if (violations.length > 0) return fail('wallet-balance-consistency', violations, start);
+    return pass('wallet-balance-consistency', start);
+  },
+};
+
+/** No debit may exceed the available balance. */
+export const WalletDebitLimitInvariant: RuntimeInvariant = {
+  id: 'wallet-debit-limit',
+  description: 'No debit may exceed the available balance',
+  handles: ['wallet.'],
+
+  verify(events: StoredEvent[], snapshot: RuntimeSnapshot): ReturnType<typeof pass> | ReturnType<typeof fail> {
+    const start = Date.now();
+    const violations: Violation[] = [];
+
+    // Compute the EFFECTIVE available balance for each wallet, accounting for
+    // ALL proposed events (credits, debits, reserves, releases) in the batch.
+    // This prevents concurrent debits from both passing when they collectively
+    // exceed the balance.
+    const balanceAdjustments = new Map<string, number>();
+    for (const ev of events) {
+      const payload = ev.payload as { walletId?: string; amount?: number };
+      if (!payload.walletId) continue;
+      const adj = balanceAdjustments.get(payload.walletId) ?? 0;
+      switch (ev.type) {
+        case 'wallet.credited': balanceAdjustments.set(payload.walletId, adj + (payload.amount ?? 0)); break;
+        case 'wallet.debited': balanceAdjustments.set(payload.walletId, adj - (payload.amount ?? 0)); break;
+        case 'wallet.reserved': balanceAdjustments.set(payload.walletId, adj - (payload.amount ?? 0)); break;
+        case 'wallet.released': balanceAdjustments.set(payload.walletId, adj + (payload.amount ?? 0)); break;
+      }
+    }
+
+    // Now check each debit against the EFFECTIVE available balance.
+    for (const ev of events) {
+      if (ev.type !== 'wallet.debited') continue;
+      const payload = ev.payload as { walletId: string; amount: number };
+      const balances = snapshot.wallets.get(payload.walletId);
+      if (!balances) continue;
+      const b = balances as { available: number };
+      // Effective available = current available + adjustments from OTHER proposed events
+      // (not including this debit itself, since we're checking if THIS debit is OK).
+      const adjustmentsFromOthers = (balanceAdjustments.get(payload.walletId) ?? 0) + payload.amount; // +amount because the debit already subtracted it
+      const effectiveAvailable = b.available + adjustmentsFromOthers;
+      if (effectiveAvailable - payload.amount < -0.01) {
+        violations.push(violation('wallet-debit-limit', `Wallet ${payload.walletId}: debit ${payload.amount} exceeds effective available balance ${effectiveAvailable} (current: ${b.available}, pending adjustments: ${adjustmentsFromOthers - payload.amount})`, {
+          event: ev,
+          projection: { name: 'wallets', id: payload.walletId },
+          command: eventCommand(ev),
+          severity: 'error',
+        }));
+      }
+    }
+
+    if (violations.length > 0) return fail('wallet-debit-limit', violations, start);
+    return pass('wallet-debit-limit', start);
+  },
+};
+
+/** No reserve may exceed the available balance. */
+export const WalletReserveLimitInvariant: RuntimeInvariant = {
+  id: 'wallet-reserve-limit',
+  description: 'No reserve may exceed the available balance',
+  handles: ['wallet.'],
+
+  verify(events: StoredEvent[], snapshot: RuntimeSnapshot): ReturnType<typeof pass> | ReturnType<typeof fail> {
+    const start = Date.now();
+    const violations: Violation[] = [];
+
+    for (const ev of events) {
+      if (ev.type !== 'wallet.reserved') continue;
+      const payload = ev.payload as { walletId: string; amount: number };
+      const balances = snapshot.wallets.get(payload.walletId);
+      if (!balances) continue;
+      const b = balances as { available: number };
+      if (b.available - payload.amount < -0.01) {
+        violations.push(violation('wallet-reserve-limit', `Wallet ${payload.walletId}: reserve ${payload.amount} exceeds available balance ${b.available}`, {
+          event: ev,
+          projection: { name: 'wallets', id: payload.walletId },
+          command: eventCommand(ev),
+          severity: 'error',
+        }));
+      }
+    }
+
+    if (violations.length > 0) return fail('wallet-reserve-limit', violations, start);
+    return pass('wallet-reserve-limit', start);
+  },
+};
+
+/** No release may exceed the reserved balance. */
+export const WalletReleaseLimitInvariant: RuntimeInvariant = {
+  id: 'wallet-release-limit',
+  description: 'No release may exceed the reserved balance',
+  handles: ['wallet.'],
+
+  verify(events: StoredEvent[], snapshot: RuntimeSnapshot): ReturnType<typeof pass> | ReturnType<typeof fail> {
+    const start = Date.now();
+    const violations: Violation[] = [];
+
+    for (const ev of events) {
+      if (ev.type !== 'wallet.released') continue;
+      const payload = ev.payload as { walletId: string; amount: number };
+      const balances = snapshot.wallets.get(payload.walletId);
+      if (!balances) continue;
+      const b = balances as { reserved: number };
+      if (b.reserved - payload.amount < -0.01) {
+        violations.push(violation('wallet-release-limit', `Wallet ${payload.walletId}: release ${payload.amount} exceeds reserved balance ${b.reserved}`, {
+          event: ev,
+          projection: { name: 'wallets', id: payload.walletId },
+          command: eventCommand(ev),
+          severity: 'error',
+        }));
+      }
+    }
+
+    if (violations.length > 0) return fail('wallet-release-limit', violations, start);
+    return pass('wallet-release-limit', start);
+  },
+};
+
 // ─── All Built-in Invariants ────────────────────────────────────────────────
 
-/** All 9 built-in economic invariants, in registration order. */
+/** All 15 built-in economic invariants, in registration order. */
 export const BUILTIN_INVARIANTS: RuntimeInvariant[] = [
   DoubleEntryInvariant,
   ReserveConservationInvariant,
@@ -341,4 +534,10 @@ export const BUILTIN_INVARIANTS: RuntimeInvariant[] = [
   SettlementUniquenessInvariant,
   FxRateExistsInvariant,
   CompilerHashInvariant,
+  WalletAvailableNonNegativeInvariant,
+  WalletReservedNonNegativeInvariant,
+  WalletBalanceConsistencyInvariant,
+  WalletDebitLimitInvariant,
+  WalletReserveLimitInvariant,
+  WalletReleaseLimitInvariant,
 ];

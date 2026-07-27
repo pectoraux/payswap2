@@ -51,10 +51,9 @@ export class RefundBackfillService {
     // handled by the framework.
     this.engine = new BackfillEngine<PrismaRefundRow>({
       name: 'refunds',
-      countFn: () => db.refund.count({ where: { environment: inputs.environment } }),
+      countFn: () => db.refund.count(),
       listFn: (skip, take) =>
         db.refund.findMany({
-          where: { environment: inputs.environment },
           orderBy: { createdAt: 'asc' },
           skip,
           take,
@@ -88,7 +87,7 @@ export class RefundBackfillService {
     backfilled: boolean;
   }> {
     const [prismaCount, projectionCount] = await Promise.all([
-      db.refund.count({ where: { environment: this.inputs.environment } }),
+      db.refund.count(),
       this.inputs.refundsService.totalAll(),
     ]);
     return {

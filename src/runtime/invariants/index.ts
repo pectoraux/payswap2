@@ -23,5 +23,11 @@ export {
   SettlementUniquenessInvariant,
   FxRateExistsInvariant,
   CompilerHashInvariant,
+  WalletAvailableNonNegativeInvariant,
+  WalletReservedNonNegativeInvariant,
+  WalletBalanceConsistencyInvariant,
+  WalletDebitLimitInvariant,
+  WalletReserveLimitInvariant,
+  WalletReleaseLimitInvariant,
   BUILTIN_INVARIANTS,
 } from './builtins';
