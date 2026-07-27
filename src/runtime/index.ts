@@ -81,6 +81,8 @@ import { TransactionCoordinator } from './transaction';
 import { createDefaultAdapters, type SettlementAdapterRegistry } from './settlement';
 // M-RT-27: Event Evolution (Schema Registry + Event Upcaster):
 import { SchemaRegistry, registerAllEventTypes } from './event-evolution';
+// M-RT-28: Runtime Recovery (Recovery Manager + Kernel Manifest):
+import { RecoveryManager, buildManifest, type KernelManifest } from './recovery';
 
 // Re-export the public surface.
 export * from './types';
@@ -193,6 +195,8 @@ export * from './transaction';
 export * from './settlement';
 // M-RT-27: Event Evolution public surface:
 export * from './event-evolution';
+// M-RT-28: Runtime Recovery public surface:
+export * from './recovery';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -286,6 +290,8 @@ export interface Runtime {
   settlements: SettlementAdapterRegistry;
   // M-RT-27: Schema Registry (event evolution + upcasters + projection compatibility).
   schema: SchemaRegistry;
+  // M-RT-28: Recovery Manager (checkpoint + crash recovery + projection verification).
+  recovery: RecoveryManager;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -515,6 +521,14 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const schema = new SchemaRegistry();
   registerAllEventTypes(schema);
 
+  // ── M-RT-28: Runtime Recovery (Recovery Manager) ────────────────────────
+  const recovery = new RecoveryManager({ eventStore, schema });
+  // Register all projections with the recovery manager.
+  recovery.register(payments.projection, () => payments.projection.totalAll(), () => payments.projection.eventsApplied());
+  recovery.register(refunds.projection, () => refunds.projection.totalAll(), () => refunds.projection.eventsApplied());
+  recovery.register(wallets.projection, () => wallets.projection.count(), () => wallets.projection.eventsApplied());
+  recovery.register(treasury.projection, () => treasury.projection.count(), () => treasury.projection.eventsApplied());
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -574,6 +588,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     coordinator,
     settlements,
     schema,
+    recovery,
     health,
     migrations,
     invariants,
