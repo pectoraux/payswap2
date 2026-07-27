@@ -1,226 +1,275 @@
 /**
- * PaySwap Protocol — Stellar Blockchain Adapter (BACKWARD-COMPAT SHIM).
+ * PaySwap Protocol — Stellar Adapter (Simulated).
  *
- * DEPRECATED: This module wraps the new production-grade
- * `stellarChainAdapter` from `@/protocol/chains/stellar/adapter` and
- * re-exposes it under the OLD `BlockchainAdapter` interface so existing
- * twin-token / payouts / wallets / blockchain code keeps working without
- * edits.
+ * In-process simulation of the Stellar network. Real Stellar uses the Horizon
+ * API + Soroban for smart contracts; this adapter mimics that surface area
+ * synchronously inside the runtime so protocol modules can run end-to-end
+ * without external network dependencies.
  *
- * What's preserved:
- *   - `stellarAdapter` singleton — OLD method signatures (issueAsset, burn,
- *     transfer, verify, getBalance, submitTransaction, createEscrow,
- *     healthCheck, fundAccount)
- *   - `StellarAdapter` class — instantiable, implements OLD BlockchainAdapter
+ * Semantics mirrored from Stellar:
+ *   - Assets are `Code:Issuer` pairs. Native XLM has issuer = 'native'.
+ *   - Accounts must exist + hold a trustline to a non-native asset before
+ *     receiving it. `transfer` auto-creates both for backward-compat with
+ *     legacy tests that did not pre-fund accounts.
+ *   - Every operation produces cryptographic-grade Evidence
+ *     (source: 'on_chain_state', verificationLevel: 'cryptographic').
  *
- * What's new (re-exported):
- *   - `stellarChainAdapter` — production ChainAdapter (rich interface)
- *   - `stellarNetwork` — simulated Stellar network singleton
- *
- * The legacy wrapper delegates every on-chain call to the new adapter so
- * there's ONE source of truth for chain state. A small local "gift
- * balances" map preserves the old synchronous `fundAccount(addr, code,
- * amount)` semantics (which the old code used for test setup without
- * going on-chain).
- *
- * Frozen-kernel compliance: imports only `Evidence` + `createEvidence` from
- * `@/kernel/evidence` and `uid` from `@/kernel/support`.
+ * State is kept in three maps: balances, transactions, and asset issuers.
+ * `fundAccount` is the synchronous test-setup escape hatch.
  */
+import type { BlockchainAdapter } from '@/protocol/blockchains/adapter';
 import type { Evidence } from '@/kernel/evidence';
 import { createEvidence } from '@/kernel/evidence';
-import { uid } from '@/kernel/support';
-import { stellarChainAdapter, stellarNetwork } from '../../chains/stellar/adapter';
-import type { BlockchainAdapter } from '../adapter';
+import { uid, round } from '@/kernel/support';
 
-/**
- * Legacy Stellar adapter — wraps `stellarChainAdapter` and exposes the OLD
- * `BlockchainAdapter` interface verbatim. Existing twin-token / payouts
- * code calls these methods; new code should call `stellarChainAdapter`
- * methods directly.
- */
+interface StellarTxRecord {
+  txHash: string;
+  type: 'issue' | 'burn' | 'transfer' | 'submit' | 'escrow_create';
+  assetCode: string;
+  amount: number;
+  from?: string;
+  to?: string;
+  memo?: string;
+  ts: number;
+  confirmed: boolean;
+  escrowAddress?: string;
+  signers?: string[];
+  unlockTime?: number;
+}
+
 export class StellarAdapter implements BlockchainAdapter {
   chain = 'stellar';
   isInitialized = true;
 
-  /**
-   * Local "gift" balances for the old synchronous fundAccount helper.
-   * The old `fundAccount(addr, code, amount)` just credited balances
-   * without going on-chain — we preserve that exact behavior here, and
-   * layer these gift balances on top of the new adapter's `getBalance`
-   * so callers see a unified total.
-   */
-  private giftBalances: Map<string, Map<string, number>> = new Map();
+  /** `${address}:${assetCode}` -> balance */
+  private balances = new Map<string, number>();
+  /** txHash -> record */
+  private transactions = new Map<string, StellarTxRecord>();
+  /** assetCode -> issuer (native XLM maps to 'native') */
+  private assetIssuers = new Map<string, string>();
+  /** escrowAddress -> record (for createEscrow lookups) */
+  private escrowAddresses = new Map<string, StellarTxRecord>();
 
-  /**
-   * Track the issuer for each asset code so that transfer/burn (which the
-   * old API calls without an issuer) can resolve the non-native asset
-   * correctly in the new adapter. Populated on issueAsset/registerAsset.
-   */
-  private assetIssuers: Map<string, string> = new Map();
-
-  /** Issue (mint) a Twin Token asset on Stellar. */
-  async issueAsset(params: {
-    assetCode: string; amount: number; issuer: string;
-  }): Promise<{ success: boolean; txHash?: string; evidence?: Evidence; error?: string }> {
-    // Remember the issuer for this asset code so later transfer/burn calls resolve it.
-    this.assetIssuers.set(params.assetCode, params.issuer);
-    // Ensure the asset is registered in the new adapter's network.
-    await stellarChainAdapter.registerAsset({
-      assetCode: params.assetCode, issuer: params.issuer, metadata: {},
+  // ---------------------------------------------------------------- issueAsset
+  async issueAsset(params: { assetCode: string; amount: number; issuer: string }): Promise<{ success: boolean; txHash?: string; evidence?: Evidence; error?: string }> {
+    const { assetCode, amount, issuer } = params;
+    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+    this.assetIssuers.set(assetCode, issuer);
+    this.ensureAccount(issuer, assetCode);
+    this.credit(issuer, assetCode, amount);
+    const txHash = uid('stellarTx');
+    const evidence = this.evidence({
+      entityId: issuer,
+      attestedAmount: amount,
+      currency: assetCode,
+      attester: 'stellar-network',
+      payload: { op: 'issue', txHash, assetCode, amount, issuer },
     });
-    // Ensure the issuer account exists in the Stellar network (backward-compat).
-    await this.ensureAccount(params.issuer);
-    // Old behavior: issuer mints and is credited. New API requires `to`.
-    return stellarChainAdapter.issueAsset({
-      assetCode: params.assetCode,
-      issuer: params.issuer,
-      amount: params.amount,
-      to: params.issuer,
-    });
-  }
-
-  /** Burn a Twin Token asset on Stellar. */
-  async burnAsset(params: {
-    assetCode: string; amount: number; from: string;
-  }): Promise<{ success: boolean; txHash?: string; evidence?: Evidence; error?: string }> {
-    const issuer = this.assetIssuers.get(params.assetCode);
-    // Backward-compat: ensure the holder account exists in the new network.
-    if (issuer) await this.ensureAccount(params.from);
-    return stellarChainAdapter.burnAsset({
-      assetCode: params.assetCode, amount: params.amount, from: params.from, issuer,
-    });
-  }
-
-  /** Transfer asset between Stellar accounts. */
-  async transfer(params: {
-    assetCode: string; amount: number; from: string; to: string; memo?: string;
-  }): Promise<{ success: boolean; txHash?: string; evidence?: Evidence; error?: string }> {
-    const issuer = this.assetIssuers.get(params.assetCode);
-    // Backward-compat: the old adapter credited balances without requiring accounts/trustlines.
-    // The new adapter is stricter. Auto-create accounts + trustlines so legacy callers work.
-    if (issuer) {
-      await this.ensureAccount(params.to);
-      await this.ensureTrustline(params.to, params.assetCode, issuer);
-      await this.ensureAccount(params.from);
-      await this.ensureTrustline(params.from, params.assetCode, issuer);
-    }
-    return stellarChainAdapter.transfer({
-      assetCode: params.assetCode,
-      amount: params.amount,
-      from: params.from,
-      to: params.to,
-      issuer,
-      memo: params.memo ? { type: 'text', value: params.memo } : undefined,
-    });
-  }
-
-  /** Ensure an account exists in the Stellar network (auto-create + fund for backward compat). */
-  private async ensureAccount(address: string): Promise<void> {
-    // Always try to create — createAccount is idempotent in the simulation
-    // (it funds the account if it doesn't exist, and is a no-op if it does).
-    try {
-      await stellarChainAdapter.createAccount({ address, nativeAmount: 100 });
-    } catch { /* may already exist — ignore */ }
-  }
-
-  /** Ensure a trustline exists (create if missing, for backward compat). */
-  private async ensureTrustline(holder: string, assetCode: string, issuer: string): Promise<void> {
-    // The issuer doesn't need a trustline for its own asset.
-    if (holder === issuer) return;
-    try {
-      await stellarChainAdapter.createTrustline({ holder, assetCode, issuer });
-    } catch { /* may already exist — ignore */ }
-  }
-
-  /** Verify a Stellar transaction. */
-  async verify(params: {
-    txHash: string;
-  }): Promise<{ success: boolean; confirmed: boolean; evidence?: Evidence; error?: string }> {
-    return stellarChainAdapter.verifyTransaction(params);
-  }
-
-  /** Get balance of an account for an asset. */
-  async getBalance(params: {
-    address: string; assetCode: string;
-  }): Promise<{ success: boolean; balance: number; evidence?: Evidence; error?: string }> {
-    const r = await stellarChainAdapter.getBalance(params);
-    if (!r.success) return r;
-    // Layer gift balances on top of on-chain balance
-    const gifts = this.giftBalances.get(params.address);
-    const gift = gifts?.get(params.assetCode) ?? 0;
-    return { success: true, balance: r.balance + gift, evidence: r.evidence };
-  }
-
-  /** Submit a signed Stellar transaction. */
-  async submitTransaction(params: {
-    signedTx: string;
-  }): Promise<{ success: boolean; txHash?: string; evidence?: Evidence; error?: string }> {
-    // No direct equivalent in the new adapter — return a synthetic result.
-    const txHash = uid('stellar_tx');
-    const evidence = createEvidence({
-      type: 'attestation',
-      source: 'on_chain_state',
-      verificationLevel: 'cryptographic',
-      entityId: `stellar:${txHash}`,
-      attester: 'stellar_adapter',
-      reputation: 1.0,
-      ttlMs: 999_999_999,
-      payload: {
-        chain: 'stellar',
-        txHash,
-        operation: 'submit',
-        signedTxPrefix: params.signedTx.slice(0, 64),
-      },
+    this.transactions.set(txHash, {
+      txHash, type: 'issue', assetCode, amount, to: issuer,
+      ts: Date.now(), confirmed: true,
     });
     return { success: true, txHash, evidence };
   }
 
-  /** Create a Stellar escrow account (multisig). */
-  async createEscrow(params: {
-    amount: number; assetCode: string; signer1: string; signer2: string; unlockTime?: number;
-  }): Promise<{ success: boolean; escrowAddress?: string; evidence?: Evidence; error?: string }> {
-    return stellarChainAdapter.createEscrowAccount({
-      asset: { code: params.assetCode },
-      amount: params.amount,
-      from: params.signer1,
-      signer1: params.signer1,
-      signer2: params.signer2,
-      unlockTime: params.unlockTime ?? Date.now() + 86_400_000,  // default 24h
+  // ----------------------------------------------------------------- burnAsset
+  async burnAsset(params: { assetCode: string; amount: number; from: string }): Promise<{ success: boolean; txHash?: string; evidence?: Evidence; error?: string }> {
+    const { assetCode, amount, from } = params;
+    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+    this.ensureAccount(from, assetCode);
+    const bal = this.getBal(from, assetCode);
+    if (bal < amount) return { success: false, error: 'insufficient_balance' };
+    this.debit(from, assetCode, amount);
+    const txHash = uid('stellarTx');
+    const evidence = this.evidence({
+      entityId: from,
+      attestedAmount: amount,
+      currency: assetCode,
+      attester: 'stellar-network',
+      payload: { op: 'burn', txHash, assetCode, amount, from },
     });
+    this.transactions.set(txHash, {
+      txHash, type: 'burn', assetCode, amount, from,
+      ts: Date.now(), confirmed: true,
+    });
+    return { success: true, txHash, evidence };
   }
 
-  /** Health check. */
+  // ------------------------------------------------------------------ transfer
+  async transfer(params: { assetCode: string; amount: number; from: string; to: string; memo?: string }): Promise<{ success: boolean; txHash?: string; evidence?: Evidence; error?: string }> {
+    const { assetCode, amount, from, to, memo } = params;
+    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+    // Backward-compat: auto-create accounts + trustlines on both sides.
+    this.ensureAccount(from, assetCode);
+    this.ensureAccount(to, assetCode);
+    const bal = this.getBal(from, assetCode);
+    if (bal < amount) return { success: false, error: 'insufficient_balance' };
+    this.debit(from, assetCode, amount);
+    this.credit(to, assetCode, amount);
+    const txHash = uid('stellarTx');
+    const evidence = this.evidence({
+      entityId: to,
+      attestedAmount: amount,
+      currency: assetCode,
+      attester: 'stellar-network',
+      payload: { op: 'transfer', txHash, assetCode, amount, from, to, memo },
+    });
+    this.transactions.set(txHash, {
+      txHash, type: 'transfer', assetCode, amount, from, to, memo,
+      ts: Date.now(), confirmed: true,
+    });
+    return { success: true, txHash, evidence };
+  }
+
+  // -------------------------------------------------------------------- verify
+  async verify(params: { txHash: string }): Promise<{ success: boolean; confirmed: boolean; evidence?: Evidence; error?: string }> {
+    const { txHash } = params;
+    const tx = this.transactions.get(txHash);
+    if (!tx) return { success: false, confirmed: false, error: 'tx_not_found' };
+    const evidence = this.evidence({
+      entityId: tx.from ?? tx.to ?? 'stellar-network',
+      attestedAmount: tx.amount,
+      currency: tx.assetCode,
+      attester: 'stellar-network',
+      payload: { op: 'verify', txHash, type: tx.type, confirmed: tx.confirmed },
+    });
+    return { success: true, confirmed: tx.confirmed, evidence };
+  }
+
+  // ----------------------------------------------------------------- getBalance
+  async getBalance(params: { address: string; assetCode: string }): Promise<{ success: boolean; balance: number; evidence?: Evidence; error?: string }> {
+    const { address, assetCode } = params;
+    const balance = this.getBal(address, assetCode);
+    const evidence = this.evidence({
+      entityId: address,
+      attestedAmount: balance,
+      currency: assetCode,
+      attester: 'stellar-network',
+      payload: { op: 'getBalance', address, assetCode, balance },
+    });
+    return { success: true, balance, evidence };
+  }
+
+  // ------------------------------------------------------------- submitTransaction
+  async submitTransaction(params: { signedTx: string }): Promise<{ success: boolean; txHash?: string; evidence?: Evidence; error?: string }> {
+    const { signedTx } = params;
+    if (!signedTx || signedTx.length === 0) return { success: false, error: 'empty_signed_tx' };
+    const txHash = uid('stellarTx');
+    const evidence = this.evidence({
+      entityId: 'stellar-network',
+      attester: 'stellar-network',
+      payload: { op: 'submit', txHash, signedTxLen: signedTx.length },
+    });
+    this.transactions.set(txHash, {
+      txHash, type: 'submit', assetCode: 'native', amount: 0,
+      ts: Date.now(), confirmed: true,
+    });
+    return { success: true, txHash, evidence };
+  }
+
+  // ---------------------------------------------------------------- createEscrow
+  async createEscrow(params: { amount: number; assetCode: string; signer1: string; signer2: string; unlockTime?: number }): Promise<{ success: boolean; escrowAddress?: string; evidence?: Evidence; error?: string }> {
+    const { amount, assetCode, signer1, signer2, unlockTime } = params;
+    if (amount < 0) return { success: false, error: 'amount_must_be_non_negative' };
+    const escrowAddress = uid('escrowAcct');
+    this.ensureAccount(escrowAddress, assetCode);
+    const txHash = uid('stellarTx');
+    const record: StellarTxRecord = {
+      txHash, type: 'escrow_create', assetCode, amount,
+      ts: Date.now(), confirmed: true,
+      escrowAddress, signers: [signer1, signer2], unlockTime,
+    };
+    this.transactions.set(txHash, record);
+    this.escrowAddresses.set(escrowAddress, record);
+    const evidence = this.evidence({
+      entityId: escrowAddress,
+      attestedAmount: amount,
+      currency: assetCode,
+      attester: 'stellar-network',
+      payload: { op: 'createEscrow', txHash, escrowAddress, assetCode, amount, signers: [signer1, signer2], unlockTime },
+    });
+    return { success: true, escrowAddress, evidence };
+  }
+
+  // ----------------------------------------------------------------- healthCheck
   async healthCheck(): Promise<{ healthy: boolean; latencyMs: number }> {
-    const r = await stellarChainAdapter.healthCheck();
-    return { healthy: r.healthy, latencyMs: r.latencyMs };
+    const start = Date.now();
+    // Simulated probe — in production this would hit Horizon /health.
+    const latency = Math.max(1, Date.now() - start);
+    return { healthy: true, latencyMs: latency };
   }
 
-  /**
-   * Fund an account (for testing/setup) — SYNCHRONOUS, preserves old API.
-   * The old `fundAccount(addr, code, amount)` just credited a local balance
-   * without going on-chain. We preserve that exact behavior so existing
-   * callers (e.g. wallets/route.ts seeding test balances) don't change.
-   */
+  // ----------------------------------------------------------------- fundAccount
+  /** Synchronous test-setup helper — credits a local gift balance directly. */
   fundAccount(address: string, assetCode: string, amount: number): void {
-    if (!this.giftBalances.has(address)) this.giftBalances.set(address, new Map());
-    const m = this.giftBalances.get(address)!;
-    m.set(assetCode, (m.get(assetCode) ?? 0) + amount);
+    if (amount <= 0) return;
+    this.ensureAccount(address, assetCode);
+    this.credit(address, assetCode, amount);
   }
 
-  /** Clear gift balances (for tests). */
-  resetGifts(): void {
-    this.giftBalances.clear();
+  // =============================================================== internal API
+
+  /** Look up the registered issuer for an asset code. */
+  getAssetIssuer(assetCode: string): string | undefined {
+    return this.assetIssuers.get(assetCode);
+  }
+
+  /** All recorded transactions (for inspection / debugging). */
+  getTransactionHistory(): StellarTxRecord[] {
+    return [...this.transactions.values()];
+  }
+
+  /** Snapshot of all balances — primarily for assertions in tests. */
+  getBalances(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [k, v] of this.balances) out[k] = v;
+    return out;
+  }
+
+  // ----------------------------------------------------------------- helpers
+  private key(address: string, assetCode: string): string {
+    return `${address}:${assetCode}`;
+  }
+
+  private getBal(address: string, assetCode: string): number {
+    return this.balances.get(this.key(address, assetCode)) ?? 0;
+  }
+
+  private credit(address: string, assetCode: string, amount: number): void {
+    const k = this.key(address, assetCode);
+    this.balances.set(k, round((this.balances.get(k) ?? 0) + amount, 7));
+  }
+
+  private debit(address: string, assetCode: string, amount: number): void {
+    const k = this.key(address, assetCode);
+    this.balances.set(k, round((this.balances.get(k) ?? 0) - amount, 7));
+  }
+
+  /** Auto-create account + trustline (initialized to 0) if missing. */
+  private ensureAccount(address: string, assetCode: string): void {
+    const k = this.key(address, assetCode);
+    if (!this.balances.has(k)) this.balances.set(k, 0);
+  }
+
+  private evidence(params: {
+    entityId: string;
+    attester: string;
+    attestedAmount?: number;
+    currency?: string;
+    payload: Record<string, unknown>;
+  }): Evidence {
+    return createEvidence({
+      type: 'observation',
+      source: 'on_chain_state',
+      verificationLevel: 'cryptographic',
+      entityId: params.entityId,
+      attestedAmount: params.attestedAmount,
+      currency: params.currency,
+      attester: params.attester,
+      reputation: 1.0,
+      payload: params.payload,
+    });
   }
 }
 
-/**
- * Singleton Stellar adapter — legacy interface, delegates to the new
- * production `stellarChainAdapter` under the hood.
- */
 export const stellarAdapter = new StellarAdapter();
-
-/* ============================================================================
- * Re-exports — new production adapter and network singleton.
- * ========================================================================== */
-export { stellarChainAdapter, stellarNetwork } from '../../chains/stellar/adapter';
-export { StellarNetwork } from '../../chains/stellar/adapter';

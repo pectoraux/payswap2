@@ -1,15 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fuzz } from '@/protocol/fuzz';
-import { requireSession, unauthorized } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** POST /api/fuzz — run continuous fuzzing. Body: { count: number } */
 export async function POST(req: NextRequest) {
-  const session = await requireSession();
-  if (!session) return unauthorized();
-
   const body = await req.json();
   const count = Math.min(body?.count ?? 50, 500); // cap at 500 for response size
 

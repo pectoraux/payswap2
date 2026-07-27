@@ -1,16 +1,18 @@
 // PaySwap — Production Prisma Schema
+// PostgreSQL-ready (uses compatible types, normalized, indexed, soft-deletes, audit fields)
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-// ═══════ AUTH & USERS ═══════
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTH & USERS
+// ═══════════════════════════════════════════════════════════════════════════
 
 model User {
   id              String      @id @default(cuid())
@@ -19,7 +21,7 @@ model User {
   name            String?
   phone           String?
   avatarUrl       String?
-  status          String      @default("PENDING")
+  status          String      @default("PENDING") // PENDING, ACTIVE, SUSPENDED, FROZEN
   emailVerified   DateTime?
   lastLoginAt     DateTime?
   lastLoginIp     String?
@@ -34,9 +36,6 @@ model User {
   sessions        Session[]
   auditLogs       AuditLog[]
   teamMemberships TeamMember[]
-  organizationMembers OrganizationMember[]
-  loginHistory    LoginHistory[]
-  deviceSessions  DeviceSession[]
 
   @@index([status])
 }
@@ -44,9 +43,9 @@ model User {
 model UserRole {
   id          String   @id @default(cuid())
   userId      String
-  role        String
-  merchantId  String?
-  permissions String?
+  role        String   // CUSTOMER, MERCHANT, MERCHANT_STAFF, LP, TREASURY, COMPLIANCE, SUPPORT, DEVELOPER, OPERATIONS, ADMIN, SUPER_ADMIN
+  merchantId  String?  // if MERCHANT or MERCHANT_STAFF
+  permissions String?  // JSON string of granular permissions
   createdAt   DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -77,8 +76,8 @@ model WaitlistEntry {
   company      String?
   phone        String?
   country      String
-  businessType String?
-  status       String   @default("PENDING")
+  businessType String?  // INDIVIDUAL, SMALL_BUSINESS, ENTERPRISE, STARTUP, NGO
+  status       String   @default("PENDING") // PENDING, APPROVED, REJECTED, CONVERTED
   notes        String?
   reviewedBy   String?
   reviewedAt   DateTime?
@@ -88,13 +87,15 @@ model WaitlistEntry {
   @@index([country])
 }
 
-// ═══════ ACCOUNTS & MERCHANTS ═══════
+// ═══════════════════════════════════════════════════════════════════════════
+// ACCOUNTS & MERCHANTS
+// ═══════════════════════════════════════════════════════════════════════════
 
 model Account {
   id        String   @id @default(cuid())
   userId    String
-  type      String
-  status    String   @default("PENDING")
+  type      String   // CUSTOMER, MERCHANT, LP
+  status    String   @default("PENDING") // PENDING, ACTIVE, SUSPENDED, CLOSED
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   deletedAt DateTime?
@@ -124,12 +125,12 @@ model Merchant {
   businessType        String?
   registrationNumber  String?
   taxId               String?
-  address             String?
-  tier                String   @default("UNVERIFIED")
+  address             String?  // JSON string
+  tier                String   @default("UNVERIFIED") // UNVERIFIED, VERIFIED, TRUSTED, PREMIUM
   bond                Float    @default(0)
-  status              String   @default("PENDING")
+  status              String   @default("PENDING") // PENDING, VERIFIED, ACTIVE, SUSPENDED, CLOSED
   kycLevel            Int      @default(0)
-  settings            String?
+  settings            String?  // JSON string
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   deletedAt           DateTime?
@@ -159,7 +160,7 @@ model Customer {
   email           String
   phone           String?
   country         String?
-  metadata        String?
+  metadata        String?  // JSON
   totalSpent      Float    @default(0)
   transactionCount Int     @default(0)
   createdAt       DateTime @default(now())
@@ -176,14 +177,13 @@ model Customer {
 
 model CustomerRecord {
   id              String   @id @default(cuid())
-  environment     String   @default("live")
   merchantId      String
   customerId      String?
   name            String
   email           String
   phone           String?
   country         String?
-  metadata        String?
+  metadata        String?  // JSON
   totalSpent      Float    @default(0)
   transactionCount Int     @default(0)
   createdAt       DateTime @default(now())
@@ -198,28 +198,28 @@ model CustomerRecord {
 }
 
 model LPProfile {
-  id                 String   @id @default(cuid())
-  accountId          String   @unique
-  name               String
-  country            String
-  currencies         String
-  tier               String   @default("verified")
-  stake              Float    @default(0)
-  collateral         Float    @default(0)
-  capacity           String?
-  feeBps             String?  // JSON map: { "GHS→KES": 50, "KES→UGX": 75 }
-  settlementSpeedMs  Int      @default(2000)
-  reputation         Float    @default(0.5)
-  status             String   @default("pending")
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id          String   @id @default(cuid())
+  accountId   String   @unique
+  name        String
+  country     String
+  currencies  String   // JSON array
+  tier        String   @default("verified")
+  stake       Float    @default(0)
+  collateral  Float    @default(0)
+  capacity    String?  // JSON
+  reputation  Float    @default(0.5)
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   account Account @relation(fields: [accountId], references: [id])
 
   @@index([status])
 }
 
-// ═══════ WALLETS ═══════
+// ═══════════════════════════════════════════════════════════════════════════
+// WALLETS
+// ═══════════════════════════════════════════════════════════════════════════
 
 model Wallet {
   id              String   @id @default(cuid())
@@ -243,7 +243,7 @@ model Wallet {
 model WalletTransaction {
   id           String   @id @default(cuid())
   walletId     String
-  type         String
+  type         String   // CREDIT, DEBIT, LOCK, UNLOCK
   amount       Float
   currency     String
   counterparty String?
@@ -257,29 +257,30 @@ model WalletTransaction {
   @@index([createdAt])
 }
 
-// ═══════ PAYMENTS & PAYOUTS ═══════
+// ═══════════════════════════════════════════════════════════════════════════
+// PAYMENTS & PAYOUTS
+// ═══════════════════════════════════════════════════════════════════════════
 
 model Payment {
   id                  String   @id @default(cuid())
-  environment     String   @default("live")
   merchantId          String
   customerId          String?
   amount              Float
   currency            String
   sourceCurrency      String?
   destinationCurrency String?
-  status              String   @default("PENDING")
-  method              String?
+  status              String   @default("PENDING") // PENDING, PROCESSING, SETTLING, COMPLETED, FAILED, CANCELLED, REFUNDED
+  method              String?  // CARD, MOBILE_MONEY, BANK, QR, PAYMENT_LINK, CHECKOUT
   corridor            String?
   lpId                String?
   fee                 Float    @default(0)
   netAmount           Float    @default(0)
   fxRate              Float    @default(1)
   txHash              String?
-  evidence            String?
+  evidence            String?  // JSON
   reference           String?
   description         String?
-  metadata            String?
+  metadata            String?  // JSON
   failureReason       String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
@@ -297,21 +298,20 @@ model Payment {
 
 model Payout {
   id                  String   @id @default(cuid())
-  environment     String   @default("live")
   merchantId          String
-  method              String
+  method              String   // BANK, MOBILE_MONEY, ONCHAIN
   sourceAmount        Float
   sourceAsset         String
   sourceCurrency      String
   destinationCurrency String
-  destination         String?
+  destination         String?  // JSON
   fxRate              Float    @default(1)
   feeBps              Int      @default(50)
   fee                 Float    @default(0)
   netAmount           Float    @default(0)
-  status              String   @default("REQUESTED")
+  status              String   @default("REQUESTED") // REQUESTED, REVIEWING, PROCESSING, COMPLETED, FAILED, CANCELLED
   txHash              String?
-  evidence            String?
+  evidence            String?  // JSON
   reason              String?
   failureReason       String?
   approvedBy          String?
@@ -328,13 +328,12 @@ model Payout {
 
 model Refund {
   id          String   @id @default(cuid())
-  environment     String   @default("live")
   merchantId  String
   paymentId   String
   amount      Float
-  type        String
+  type        String   // FULL, PARTIAL
   reason      String?
-  status      String   @default("PENDING")
+  status      String   @default("PENDING") // PENDING, APPROVED, PROCESSED, REJECTED
   requestedBy String
   approvedBy  String?
   processedAt DateTime?
@@ -347,11 +346,12 @@ model Refund {
   @@index([paymentId])
 }
 
-// ═══════ PRODUCTS, INVOICES, SUBSCRIPTIONS ═══════
+// ═══════════════════════════════════════════════════════════════════════════
+// PRODUCTS, INVOICES, SUBSCRIPTIONS, PAYMENT LINKS
+// ═══════════════════════════════════════════════════════════════════════════
 
 model Product {
   id          String   @id @default(cuid())
-  environment     String   @default("live")
   merchantId  String
   name        String
   description String?
@@ -359,7 +359,7 @@ model Product {
   currency    String
   type        String   @default("PHYSICAL")
   imageUrl    String?
-  metadata    String?
+  metadata    String?  // JSON
   status      String   @default("ACTIVE")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -372,16 +372,15 @@ model Product {
 
 model Invoice {
   id          String   @id @default(cuid())
-  environment     String   @default("live")
   merchantId  String
   customerId  String?
   number      String
-  items       String
+  items       String   // JSON array
   subtotal    Float
   tax         Float    @default(0)
   total       Float
   currency    String
-  status      String   @default("DRAFT")
+  status      String   @default("DRAFT") // DRAFT, SENT, PAID, OVERDUE, VOID
   dueDate     DateTime?
   sentAt      DateTime?
   paidAt      DateTime?
@@ -398,13 +397,12 @@ model Invoice {
 
 model Subscription {
   id                  String   @id @default(cuid())
-  environment     String   @default("live")
   merchantId          String
   customerId          String?
   planName            String
   amount              Float
   currency            String
-  interval            String
+  interval            String   // DAILY, WEEKLY, MONTHLY, YEARLY
   status              String   @default("ACTIVE")
   currentPeriodStart  DateTime?
   currentPeriodEnd    DateTime?
@@ -422,7 +420,6 @@ model Subscription {
 
 model PaymentLink {
   id              String   @id @default(cuid())
-  environment     String   @default("live")
   merchantId      String
   amount          Float
   currency        String
@@ -440,16 +437,17 @@ model PaymentLink {
   @@index([merchantId])
 }
 
-// ═══════ API KEYS & WEBHOOKS & TEAM ═══════
+// ═══════════════════════════════════════════════════════════════════════════
+// API KEYS & WEBHOOKS & TEAM
+// ═══════════════════════════════════════════════════════════════════════════
 
 model ApiKey {
   id          String   @id @default(cuid())
-  environment     String   @default("live")
   merchantId  String
   label       String
-  keyPrefix   String
+  keyPrefix   String   // psk_live_xxx or psk_test_xxx
   keyHash     String   @unique
-  scopes      String
+  scopes      String   // JSON array
   lastUsedAt  DateTime?
   lastUsedIp  String?
   status      String   @default("ACTIVE")
@@ -463,11 +461,10 @@ model ApiKey {
 
 model WebhookEndpoint {
   id          String   @id @default(cuid())
-  environment     String   @default("live")
   merchantId  String
   url         String
   secretHash  String
-  events      String
+  events      String   // JSON array
   status      String   @default("ACTIVE")
   createdAt   DateTime @default(now())
 
@@ -481,7 +478,7 @@ model WebhookDelivery {
   id            String   @id @default(cuid())
   endpointId    String
   eventType     String
-  payload       String
+  payload       String   // JSON
   signature     String
   status        String   @default("PENDING")
   attempts      Int      @default(0)
@@ -501,7 +498,7 @@ model TeamMember {
   id         String   @id @default(cuid())
   merchantId String
   email      String
-  role       String
+  role       String   // OWNER, ADMIN, DEVELOPER, ANALYST, VIEWER, SUPPORT
   status     String   @default("PENDING")
   invitedAt  DateTime @default(now())
   joinedAt   DateTime?
@@ -514,15 +511,17 @@ model TeamMember {
   @@unique([merchantId, email])
 }
 
-// ═══════ COMPLIANCE ═══════
+// ═══════════════════════════════════════════════════════════════════════════
+// COMPLIANCE
+// ═══════════════════════════════════════════════════════════════════════════
 
 model ComplianceReview {
   id          String   @id @default(cuid())
-  entityType  String
+  entityType  String   // MERCHANT, CUSTOMER, LP
   entityId    String
-  type        String
+  type        String   // KYC, KYB, SANCTIONS, PEP, AML, RISK
   status      String   @default("PENDING")
-  data        String?
+  data        String?  // JSON
   reviewerId  String?
   reviewedAt  DateTime?
   notes       String?
@@ -534,13 +533,12 @@ model ComplianceReview {
 
 model AMLAlert {
   id          String   @id @default(cuid())
-  environment String   @default("live")
   entityType  String
   entityId    String
-  alertType   String
-  severity    String
+  alertType   String   // STRUCTURING, VELOCITY, HIGH_RISK_CORRIDOR, PEP, SANCTIONS_HIT
+  severity    String   // LOW, MEDIUM, HIGH, CRITICAL
   score       Float
-  details     String?
+  details     String?  // JSON
   status      String   @default("OPEN")
   assignedTo  String?
   createdAt   DateTime @default(now())
@@ -548,7 +546,6 @@ model AMLAlert {
 
   @@index([status])
   @@index([entityId])
-  @@index([environment])
 }
 
 model SAR {
@@ -557,7 +554,7 @@ model SAR {
   filedBy       String
   narrative     String
   amount        Float
-  entities      String
+  entities      String   // JSON array
   regulatoryRef String?
   status        String   @default("DRAFT")
   filedAt       DateTime?
@@ -566,7 +563,9 @@ model SAR {
   @@index([status])
 }
 
-// ═══════ AUDIT LOG ═══════
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDIT LOG
+// ═══════════════════════════════════════════════════════════════════════════
 
 model AuditLog {
   id           String   @id @default(cuid())
@@ -574,10 +573,10 @@ model AuditLog {
   action       String
   resourceType String
   resourceId   String?
-  result       String
+  result       String   // SUCCESS, DENIED, ERROR
   ip           String?
   userAgent    String?
-  details      String?
+  details      String?  // JSON
   createdAt    DateTime @default(now())
 
   user User? @relation(fields: [userId], references: [id])
@@ -588,43 +587,9 @@ model AuditLog {
   @@index([createdAt])
 }
 
-// ═══════ INCIDENT MANAGEMENT ═══════
-
-model Incident {
-  id              String   @id @default(cuid())
-  title           String
-  description     String?
-  severity        String   @default("P2") // P1, P2, P3, P4
-  status          String   @default("open") // open, investigating, identified, monitoring, resolved
-  component       String?  // api, payments, payouts, webhooks, connectors, blockchain
-  createdBy       String
-  assignedTo      String?
-  acknowledgedAt  DateTime?
-  resolvedAt      DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  updates         IncidentUpdate[]
-
-  @@index([status])
-  @@index([severity])
-  @@index([createdAt])
-}
-
-model IncidentUpdate {
-  id              String   @id @default(cuid())
-  incidentId      String
-  authorId        String
-  message         String
-  status          String   // investigating, identified, monitoring, resolved
-  createdAt       DateTime @default(now())
-
-  incident        Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
-
-  @@index([incidentId])
-}
-
-// ═══════ LEGACY ═══════
+// ═══════════════════════════════════════════════════════════════════════════
+// LEGACY (keep for backward compat with existing simulation engine)
+// ═══════════════════════════════════════════════════════════════════════════
 
 model SimulationRun {
   id              String   @id @default(cuid())
@@ -649,6 +614,7 @@ model SimulationRun {
   createdAt       DateTime @default(now())
 
   @@index([createdAt])
+  @@index([buyerCountry, merchantCountry])
   @@index([resultHash])
 }
 
@@ -663,148 +629,22 @@ model EventRecord {
   createdAt DateTime @default(now())
 
   @@index([type])
+  @@index([ts])
   @@index([seq])
 }
 
-// ═══════ ORGANIZATIONS ═══════
+model LedgerSnapshotRecord {
+  id           String   @id @default(cuid())
+  snapshotId   String   @unique
+  asOfTs       BigInt
+  asOfSeq      Int
+  accounts     String
+  trialBalance String
+  entryCount   Int
+  eventCount   Int
+  durationMs   Int
+  createdAt    DateTime @default(now())
 
-model Organization {
-  id              String   @id @default(cuid())
-  name            String
-  slug            String   @unique
-  type            String   @default("merchant") // merchant, lp, platform, developer
-  status          String   @default("active") // active, suspended, closed
-  logoUrl         String?
-  billingEmail    String?
-  taxId           String?
-  address         String?
-  country         String?
-  currency        String   @default("GHS")
-  plan            String   @default("starter") // starter, growth, scale, enterprise
-  settings        String?  // JSON
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  deletedAt       DateTime?
-
-  members         OrganizationMember[]
-
-  @@index([status])
-  @@index([type])
-}
-
-model OrganizationMember {
-  id              String   @id @default(cuid())
-  organizationId  String
-  userId          String
-  role            String   @default("member") // owner, admin, developer, analyst, viewer, support, finance
-  status          String   @default("active") // pending, active, suspended
-  permissions     String?  // JSON array of granular permissions
-  invitedAt       DateTime @default(now())
-  joinedAt        DateTime?
-  invitedBy       String?
-
-  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([organizationId, userId])
-  @@index([organizationId])
-  @@index([userId])
-}
-
-model LoginHistory {
-  id              String   @id @default(cuid())
-  userId          String
-  ip              String?
-  userAgent       String?
-  success         Boolean  @default(true)
-  failureReason   String?
-  location        String?
-  createdAt       DateTime @default(now())
-
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([createdAt])
-}
-
-model DeviceSession {
-  id              String   @id @default(cuid())
-  userId          String
-  deviceName      String?
-  deviceType      String?  // desktop, mobile, tablet
-  browser         String?
-  os              String?
-  ip              String?
-  lastActiveAt    DateTime @default(now())
-  trusted         Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  revokedAt       DateTime?
-
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-}
-
-// ═══════ EXTENSION MARKETPLACE ═══════
-
-model Extension {
-  id              String   @id @default(cuid())
-  slug            String   @unique
-  name            String
-  description     String
-  developerId     String   // user who created it
-  category        String   // payments, analytics, compliance, accounting, crm, marketing, shipping, other
-  iconUrl         String?
-  version         String   @default("1.0.0")
-  status          String   @default("draft") // draft, submitted, review, approved, rejected, published, suspended
-  permissions     String   // JSON array
-  pricing         String   @default("free") // free, paid, freemium
-  price           Float    @default(0)
-  config          String?  // JSON - configuration schema
-  changelog       String?  // JSON array of {version, date, changes}
-  installCount    Int      @default(0)
-  rating          Float    @default(0)
-  reviewCount     Int      @default(0)
-  submittedAt     DateTime?
-  reviewedAt      DateTime?
-  reviewedBy      String?
-  reviewNotes     String?
-  publishedAt     DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  installs        ExtensionInstall[]
-  reviews         ExtensionReview[]
-
-  @@index([status])
-  @@index([category])
-  @@index([developerId])
-}
-
-model ExtensionInstall {
-  id              String   @id @default(cuid())
-  extensionId     String
-  merchantId      String
-  status          String   @default("active") // active, disabled
-  config          String?  // JSON - merchant-specific configuration
-  installedAt     DateTime @default(now())
-
-  extension       Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
-
-  @@unique([extensionId, merchantId])
-  @@index([merchantId])
-  @@index([extensionId])
-}
-
-model ExtensionReview {
-  id              String   @id @default(cuid())
-  extensionId     String
-  userId          String
-  rating          Int      // 1-5
-  comment         String?
-  createdAt       DateTime @default(now())
-
-  extension       Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
-
-  @@index([extensionId])
+  @@index([asOfTs])
+  @@index([asOfSeq])
 }

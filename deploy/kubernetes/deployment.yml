@@ -1,0 +1,122 @@
+# =============================================================================
+# PaySwap — Kubernetes Deployment
+# =============================================================================
+# The main PaySwap API deployment. Runs the Next.js standalone server
+# behind readiness / liveness / startup probes, with resource limits
+# and env vars sourced from the ConfigMap + Secret.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payswap-api
+  namespace: payswap
+  labels:
+    app.kubernetes.io/name: payswap
+    app.kubernetes.io/component: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payswap
+      app.kubernetes.io/component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: payswap
+        app.kubernetes.io/component: api
+    spec:
+      # Run as non-root user (matches the Dockerfile USER directive).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      # Pod anti-affinity — spread replicas across nodes.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: payswap
+                    app.kubernetes.io/component: api
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: payswap-api
+          image: payswap/api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          # Environment from ConfigMap + Secret.
+          envFrom:
+            - configMapRef:
+                name: payswap-config
+            - secretRef:
+                name: payswap-secrets
+          # Resource limits — the HPA scales based on CPU utilisation
+          # against these requests.
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          # Startup probe — gives the app up to 5 minutes (30 * 10s)
+          # to finish initialising before liveness kicks in.
+          startupProbe:
+            httpGet:
+              path: /startupz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+            successThreshold: 1
+          # Liveness probe — restart the pod if it's not responding.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 3
+            successThreshold: 1
+          # Readiness probe — stop sending traffic if the app is not
+          # ready (DB disconnected, event store not hydrated, etc.).
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 0
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 3
+            successThreshold: 1
+          # Security context — drop all capabilities, make the filesystem
+          # read-only.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          # Graceful shutdown — give the app 30s to drain in-flight
+          # requests before SIGKILL.
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - "sleep 10"
+      terminationGracePeriodSeconds: 30

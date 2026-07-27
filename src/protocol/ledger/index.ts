@@ -1,113 +1,130 @@
 /**
- * PaySwap Protocol — Double-Entry Ledger / Barrel Export.
- * -----------------------------------------------------------------------------
- * Single import surface for the ledger module:
+ * PaySwap Protocol — Ledger Module.
  *
- *   import {
- *     ledgerEngine, snapshotStore,
- *     rebuildLedgerFromEvents, dailyReconciliation,
- *     generateTreasuryReport, ...
- *   } from '@/protocol/ledger';
+ * The protocol ledger is the canonical multi-currency double-entry book for
+ * the protocol layer. It mirrors every value movement (twin token mint/burn,
+ * wallet credit/debit, payout, settlement, treasury allocation) into a
+ * balanced set of debit/credit entries against a fixed chart of accounts.
  *
- * Re-exports everything from the constituent files and instantiates the
- * singleton `ledgerEngine` and `snapshotStore`.
+ * Architecture:
+ *   - `accounts.ts`     — chart of accounts (asset / liability / equity / revenue / expense)
+ *   - `entry.ts`        — LedgerEntry + JournalEntry + createJournalEntry / validateBalanced
+ *   - `engine.ts`       — LedgerEngine: post, getJournal, balances, trial balance,
+ *                         balance sheet, income statement, integrity, reset
+ *   - `projection.ts`   — rebuildLedgerFromEvents: event → journal projection
+ *   - `reconciliation.ts`— twin token backing, escrow, payouts, merchant, treasury,
+ *                         dailyReconciliation aggregator
+ *   - `snapshots.ts`    — in-memory snapshot store (DB-backed version in persistence/)
+ *   - `reports.ts`      — daily treasury / settlement / close-pack report generators
+ *
+ * Singletons:
+ *   - `ledgerEngine`    — the protocol-wide ledger engine
+ *   - `snapshotStore`   — in-memory snapshot cache
+ *
+ * The kernel is FROZEN — this module imports only from `@/kernel/support`,
+ * `@/kernel/event`, and `@/kernel/types` (read-only kernel primitives). No
+ * writes to `src/kernel/`.
  */
-import { LedgerEngine, ledgerEngine } from './engine';
-import { SnapshotStore, snapshotStore } from './snapshots';
 
-// Re-export the singletons.
-export { ledgerEngine, snapshotStore };
-export { LedgerEngine, SnapshotStore };
-
-// Accounts
+// Chart of accounts -----------------------------------------------------------
 export {
   CHART_OF_ACCOUNTS,
   getAccount,
-  accountsByType,
+  accountType,
   twinAssetToCurrency,
-  CURRENCIES,
+  circulatingAccount,
+  escrowedAccount,
+  backingAccount,
+  bankCashAccount,
+  mmoCashAccount,
+  userWalletAccount,
+  merchantPayableAccount,
+  feeRevenueAccount,
 } from './accounts';
-export type { LedgerAccount, AccountType, NormalBalance } from './accounts';
+export type { AccountType, AccountDefinition } from './accounts';
 
-// Entries
+// Journal entries -------------------------------------------------------------
 export {
   createJournalEntry,
   validateBalanced,
-  debit,
-  credit,
 } from './entry';
 export type {
   LedgerEntry,
   JournalEntry,
-  JournalLineInput,
+  JournalLegInput,
   CreateJournalEntryParams,
+  BalanceCheckResult,
 } from './entry';
 
-// Engine types
+// Ledger engine ---------------------------------------------------------------
+export {
+  LedgerEngine,
+  ledgerEngine,
+  createLedgerEngine,
+  newLedgerId,
+} from './engine';
 export type {
   JournalFilter,
-  AccountBalanceResult,
-  TrialBalanceResult,
-  BalanceSheetResult,
-  IncomeStatementResult,
-  IntegrityResult,
+  AccountTrialBalance,
+  TrialBalance,
+  BalanceSheetGroup,
+  BalanceSheet,
+  IncomeStatement,
+  IntegrityReport,
 } from './engine';
 
-// Snapshots
-export {
-  takeSnapshot,
-  rebuildFromSnapshots,
-} from './snapshots';
-export type {
-  LedgerSnapshot,
-  AccountSnapshot,
-  TrialBalanceSnapshot,
-} from './snapshots';
-
-// Projection
+// Event → journal projection --------------------------------------------------
 export {
   rebuildLedgerFromEvents,
-  rebuildLedgerFromEventsInto,
-  rebuildLedgerFromEventStream,
-  rebuildSnapshot,
+  projectEvent,
+  projectEventsOnto,
+  sortEventsForReplay,
+  newJournalId,
 } from './projection';
-export type { LedgerSnapshotLite } from './projection';
+export type { ProjectionResult } from './projection';
 
-// Reconciliation
+// Reconciliation --------------------------------------------------------------
 export {
   reconcileTwinTokenBacking,
   reconcileEscrow,
   reconcilePayouts,
   reconcileMerchant,
-  reconcileLP,
   reconcileTreasury,
   dailyReconciliation,
 } from './reconciliation';
 export type {
-  TwinTokenBackingReconciliation,
-  EscrowReconciliation,
-  PayoutReconciliation,
-  MerchantReconciliation,
-  LPReconciliation,
-  TreasuryReconciliation,
+  ReconcileResult,
+  ReconcileDiscrepancy,
+  TwinTokenLike,
+  EscrowLike,
+  PayoutLike,
+  MerchantLike,
+  CollateralVaultLike,
+  LPLifecycleLike,
+  DailyReconciliationInput,
   DailyReconciliationReport,
 } from './reconciliation';
 
-// Reports
+// Snapshots -------------------------------------------------------------------
 export {
+  takeSnapshot,
+  SnapshotStore,
+  snapshotStore,
+} from './snapshots';
+export type { LedgerSnapshot } from './snapshots';
+
+// Reports ---------------------------------------------------------------------
+export {
+  generateDailyTreasuryReport,
   generateSettlementReport,
-  generateTreasuryReport,
-  generateLPReport,
-  generateMerchantReport,
-  generateOutstandingLiabilitiesReport,
-  generateHistoricalSnapshotReport,
-  captureSnapshot,
+  summarizeReconciliation,
+  generateDailyClosePack,
 } from './reports';
 export type {
+  TreasuryReportRow,
+  DailyTreasuryReport,
+  SettlementReportRow,
   SettlementReport,
-  TreasuryReport,
-  LPReport,
-  MerchantReport,
-  OutstandingLiabilitiesReport,
-  HistoricalSnapshotReport,
+  ReconciliationSummaryReport,
+  DailyClosePack,
 } from './reports';

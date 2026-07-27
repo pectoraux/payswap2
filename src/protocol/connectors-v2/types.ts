@@ -1,23 +1,20 @@
 /**
- * PaySwap Protocol — Production Connectors v2 — Core Types.
+ * PaySwap Protocol — Production Connectors v2 — Type Definitions.
  *
- * These types define the contract for every production connector in the
- * PaySwap runtime. Connectors are READ-ONLY with respect to protocol state:
- * they ONLY produce Evidence. A connector returning `{ success: false }` must
- * not have mutated any protocol module's state.
+ * The connectors-v2 module is the protocol-layer interface to real-world
+ * payment rails: Open Banking (PSD2), M-Pesa (Daraja), Stellar Horizon,
+ * Ethereum JSON-RPC, and FX rate feeds. Each connector turns an upstream
+ * response into kernel-grade `Evidence` so the planner can reason about
+ * off-chain state with quantified confidence.
  *
- * The ConnectorConfig shape mirrors what an SRE would provision in a secrets
- * manager + service catalog: endpoint URL, secret references (never the
- * secrets themselves), timeout, retry budget, rate-limit, idempotency TTL.
- *
- * The connector never sees the actual secret string at construction time in
- * real production — it resolves `secretRef` from the kernel's secret store at
- * call time. In this sandbox we keep a `secrets` map on the registry for the
- * HMAC signing path.
+ * These types are deliberately connector-agnostic. Every connector accepts
+ * a `ConnectorRequest` and returns a `ConnectorResponse` — the registry
+ * and audit/metrics/health subsystems operate on the abstract shape, never
+ * on the connector-specific payload.
  */
 import type { Evidence } from '@/kernel/evidence';
 
-/** Identifier for a production connector. */
+/** Connector identifier — one per upstream rail. */
 export type ConnectorId =
   | 'open_banking'
   | 'mpesa'
@@ -25,128 +22,82 @@ export type ConnectorId =
   | 'fx_rate'
   | 'stellar_horizon';
 
-/** Coarse classification — drives dashboards + alert routing. */
-export type ConnectorType =
-  | 'bank'
-  | 'mobile_money'
-  | 'blockchain_rpc'
-  | 'exchange';
+/** Connector type tag (mirrors id but is kept distinct for future multi-instance support). */
+export type ConnectorType = ConnectorId;
 
-/**
- * Connector configuration.
- *
- * `apiKeyRef` and `secretRef` are references (e.g. "vault://payswap/open-banking/prod")
- * — never inline secrets. The registry resolves them via the kernel secret
- * store at call time.
- */
+/** Static configuration for a connector instance. */
 export interface ConnectorConfig {
   id: ConnectorId;
   type: ConnectorType;
   name: string;
+  /** Base URL or endpoint descriptor (may be unused by simulated connectors). */
   endpoint: string;
-  /** Secret-manager reference for the API key (e.g. Bearer token). */
-  apiKeyRef: string;
-  /** Secret-manager reference for the HMAC signing key. */
-  secretRef: string;
-  /** Per-request hard timeout (ms). */
+  /** Per-request timeout in ms. */
   timeout: number;
-  /** Max retry attempts (in addition to the initial attempt). */
+  /** Max retry attempts on retryable failures. */
   retryCount: number;
-  /** Initial backoff (ms) — multiplied by `backoffMultiplier` each attempt. */
+  /** Base backoff (ms) between retries; multiplied exponentially. */
   retryBackoffMs: number;
-  /** Sustained requests per second the connector is allowed to issue. */
+  /** Sustained requests-per-second the upstream allows. */
   rateLimitRps: number;
-  /** Burst capacity (token-bucket size). */
+  /** Burst capacity above the sustained rate (token bucket). */
   rateLimitBurst: number;
-  /** Idempotency cache TTL (ms). Same key within this window returns cached. */
+  /** TTL for idempotency-key cache entries (ms). */
   idempotencyTtlMs: number;
 }
 
-/**
- * A single connector request. `id` is the idempotency key — callers MUST
- * supply a stable id for any operation that mutates external state (transfer,
- * STK push, raw tx submit). Read-only queries may still pass an id; it will
- * be cached for the TTL window.
- */
+/** Outbound request — `id` doubles as the idempotency key. */
 export interface ConnectorRequest {
-  /** Idempotency key — same key returns same response (cached). */
   id: string;
-  /** Operation name, e.g. 'getBalance', 'sendSTKPush'. */
   operation: string;
-  /** Operation-specific parameters. */
   params: Record<string, unknown>;
-  /** Optional shape name for response validation. */
-  expectedResponseShape?: string;
 }
 
-/**
- * Structured connector error. Every non-success response carries one.
- * Codes are the union of HTTP transport errors, upstream business errors,
- * and connector-internal errors.
- */
-export interface ConnectorError {
-  code: ConnectorErrorCode;
-  message: string;
-  retryable: boolean;
-  /** HTTP status from upstream, if applicable. */
-  httpStatus?: number;
-  /** Upstream raw body / parsed response, for forensic debug. */
-  raw?: unknown;
-  /** For RATE_LIMITED — ms to wait before retrying. */
-  retryAfterMs?: number;
-}
-
+/** Error codes every connector may emit. */
 export type ConnectorErrorCode =
   | 'AUTH_FAILED'
   | 'RATE_LIMITED'
   | 'TIMEOUT'
   | 'UPSTREAM_5XX'
-  | 'UPSTREAM_4XX'
   | 'NETWORK'
   | 'INVALID_RESPONSE'
   | 'INSUFFICIENT_FUNDS'
-  | 'ACCOUNT_FROZEN'
   | 'UNKNOWN';
 
-/** Per-connector health snapshot. */
+/** Structured error — never thrown, always returned inside `ConnectorResponse`. */
+export interface ConnectorError {
+  code: ConnectorErrorCode;
+  message: string;
+  retryable: boolean;
+  httpStatus?: number;
+}
+
+/** Successful or failed response. `evidence` is only present on success. */
+export interface ConnectorResponse {
+  success: boolean;
+  evidence?: Evidence;
+  data?: unknown;
+  error?: ConnectorError;
+  latencyMs: number;
+  attempts: number;
+  requestId: string;
+}
+
+/** Health snapshot for a single connector. */
 export interface ConnectorHealth {
   id: ConnectorId;
   healthy: boolean;
   latencyMs: number;
   lastCheckTs: number;
   consecutiveFailures: number;
-  lastError?: string;
 }
 
-/** Per-connector metrics snapshot. */
+/** Aggregate metrics for a single connector. */
 export interface ConnectorMetrics {
   id: ConnectorId;
   requestsTotal: number;
   requestsSuccess: number;
   requestsFailed: number;
-  requestsRetried: number;
-  requestsRateLimited: number;
   avgLatencyMs: number;
-  p50LatencyMs: number;
-  p99LatencyMs: number;
   lastRequestTs: number;
-}
-
-/**
- * Connector response — the canonical return type from every connector call.
- * Connectors NEVER throw. They always return a ConnectorResponse.
- *
- * Invariants:
- *   - success=true  → evidence is present, error is undefined, data is present
- *   - success=false → error is present, evidence is undefined (state untouched)
- *   - latencyMs, attempts, requestId always present
- */
-export interface ConnectorResponse {
-  success: boolean;
-  evidence?: Evidence;
-  data?: Record<string, unknown>;
-  error?: ConnectorError;
-  latencyMs: number;
-  attempts: number;
-  requestId: string;
 }

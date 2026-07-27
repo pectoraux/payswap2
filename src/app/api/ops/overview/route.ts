@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { systemOverview, alertManager, sloManager, metricsRegistry } from '@/protocol/ops';
+import { metricsRegistry, alertManager, sloManager, systemOverview } from '@/protocol/ops';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

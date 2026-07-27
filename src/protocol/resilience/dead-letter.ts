@@ -1,284 +1,227 @@
 /**
- * PaySwap Protocol — Resilience / Dead-Letter Queue.
- * -----------------------------------------------------------------------------
- * When a queue item (webhook delivery, payment, payout, settlement, connector
- * call) has been retried up to its max-attempts limit and STILL fails, it is
- * moved to the Dead-Letter Queue (DLQ). The DLQ is a persistent, auditable
- * store of last-resort items that require either:
+ * PaySwap Protocol — Resilience — Dead Letter Queue.
  *
- *   - manual review (a human investigates + decides what to do)
- *   - replay (re-submit to the original queue, e.g. after the upstream recovers)
- *   - discard (permanently give up; audit-logged with a reason)
+ * Messages that exhaust their retry budget land here for manual or automated
+ * review. Each entry captures enough context to:
+ *   - inspect what failed and why,
+ *   - replay the message through `replayFn` once the underlying issue is
+ *     resolved,
+ *   - or discard it (with a reason) after deciding it is non-recoverable.
  *
- * Every DLQ entry has:
- *   - id, originalQueue, originalId, payload
- *   - error: { code, message, attempts, lastAttemptTs }
- *   - firstAttemptTs, lastAttemptTs, dlqAt
- *   - replayable: boolean (true if the operation can be safely retried)
- *   - status: 'pending_review' | 'replayed' | 'discarded'
+ * The DLQ is in-memory; production deployments can swap this for a DB-backed
+ * implementation behind the same interface.
  *
- * Emits `resilience.dlq_entry` on push, `resilience.dlq_replayed` on replay,
- * `resilience.dlq_discarded` on discard.
- *
- * The DLQ is in-memory; production would back this with a persistent table.
- *
- * INVARIANT: DLQ entries are auditable and replayable. Once `discarded`, an
- * entry can NEVER be replayed (the status is terminal). Once `replayed`, the
- * entry's status is updated but the entry is retained for audit.
+ * The kernel is FROZEN — this module imports only from `@/kernel/event` and
+ * `@/kernel/support`.
  */
 import { eventEngine } from '@/kernel/event';
-import { uid } from '@/kernel/support';
+import { uid, nowTs } from '@/kernel/support';
 
-/** Which queue the entry came from. */
-export type DLQQueue =
-  | 'webhook'
-  | 'payment'
-  | 'payout'
-  | 'settlement'
-  | 'connector';
+/** Lifecycle state of a DLQ entry. */
+export type DeadLetterStatus = 'pending_review' | 'replayed' | 'discarded';
 
-/** Status of a DLQ entry. */
-export type DLQStatus = 'pending_review' | 'replayed' | 'discarded';
-
-/** Error info attached to a DLQ entry. */
-export interface DLQError {
+/** Error context recorded against a dead-lettered message. */
+export interface DeadLetterError {
+  /** Short machine code (e.g. `UPSTREAM_TIMEOUT`, `INVALID_PAYLOAD`). */
   code: string;
+  /** Human-readable error message. */
   message: string;
+  /** Number of attempts made before the message was dead-lettered. */
   attempts: number;
+  /** ts of the most recent attempt. */
   lastAttemptTs: number;
 }
 
-/** A DLQ entry. */
+/** A single dead-letter entry. */
 export interface DeadLetterEntry {
+  /** Unique DLQ id (e.g. `dlq_xxx`). */
   id: string;
-  originalQueue: DLQQueue;
-  originalId: string;
+  /** Name of the queue/topic the message originated from. */
+  originalQueue: string;
+  /** Original message id from the source queue, if known. */
+  originalId: string | null;
+  /** The original message payload (opaque to the DLQ). */
   payload: Record<string, unknown>;
-  error: DLQError;
+  /** Error context recorded against the message. */
+  error: DeadLetterError;
+  /** ts of the first attempt for this message. */
   firstAttemptTs: number;
-  lastAttemptTs: number;
+  /** ts the message entered the DLQ. */
   dlqAt: number;
-  replayable: boolean;
-  status: DLQStatus;
-  /** Free-form notes (e.g. discard reason, replay result). */
-  notes?: string;
+  /** Current lifecycle state. */
+  status: DeadLetterStatus;
+  /** If discarded, the reason supplied to `discard()`. */
+  discardReason?: string;
+  /** If replayed, the ts the replay was attempted. */
+  replayedAt?: number;
+  /** If replayed, the outcome of the replay attempt. */
+  replayOutcome?: { ok: true } | { ok: false; message: string };
 }
 
-/** Filter for `list()`. */
-export interface DLQFilter {
-  queue?: DLQQueue;
-  status?: DLQStatus;
-  replayable?: boolean;
-  since?: number;
-  until?: number;
+/** Optional filter passed to `list()`. All fields are optional. */
+export interface DeadLetterListFilter {
+  originalQueue?: string;
+  status?: DeadLetterStatus;
+  /** If provided, only entries whose `error.code` matches are returned. */
+  errorCode?: string;
+}
+
+/** Input shape for `push()` — the DLQ assigns the id and timestamps. */
+export interface DeadLetterPushInput {
+  originalQueue: string;
+  originalId?: string | null;
+  payload: Record<string, unknown>;
+  error: Omit<DeadLetterError, 'lastAttemptTs'> & { lastAttemptTs?: number };
+  firstAttemptTs?: number;
 }
 
 /**
  * In-memory dead-letter queue.
+ *
+ * Entries are append-only; status transitions are recorded in-place. The
+ * `replay*` methods accept a caller-supplied async `replayFn` so the DLQ
+ * itself stays decoupled from the original processing logic.
  */
 export class DeadLetterQueue {
-  private entries: Map<string, DeadLetterEntry> = new Map();
+  private readonly entries = new Map<string, DeadLetterEntry>();
+  private readonly order: string[] = [];
 
-  /**
-   * Push a failed-after-max-retries item into the DLQ.
-   *
-   * Emits `resilience.dlq_entry`.
-   */
-  push(entry: {
-    originalQueue: DLQQueue;
-    originalId: string;
-    payload: Record<string, unknown>;
-    error: DLQError;
-    firstAttemptTs?: number;
-    replayable?: boolean;
-  }): DeadLetterEntry {
-    const now = Date.now();
-    const dlqEntry: DeadLetterEntry = {
-      id: uid('dlq'),
-      originalQueue: entry.originalQueue,
-      originalId: entry.originalId,
-      payload: entry.payload,
-      error: entry.error,
-      firstAttemptTs: entry.firstAttemptTs ?? entry.error.lastAttemptTs,
-      lastAttemptTs: entry.error.lastAttemptTs,
-      dlqAt: now,
-      replayable: entry.replayable ?? true,
+  /** Add a new entry to the DLQ. Returns the stored entry. */
+  push(input: DeadLetterPushInput): DeadLetterEntry {
+    const id = uid('dlq');
+    const ts = nowTs();
+    const entry: DeadLetterEntry = {
+      id,
+      originalQueue: input.originalQueue,
+      originalId: input.originalId ?? null,
+      payload: input.payload,
+      error: {
+        code: input.error.code,
+        message: input.error.message,
+        attempts: input.error.attempts,
+        lastAttemptTs: input.error.lastAttemptTs ?? ts,
+      },
+      firstAttemptTs: input.firstAttemptTs ?? ts,
+      dlqAt: ts,
       status: 'pending_review',
     };
-    this.entries.set(dlqEntry.id, dlqEntry);
-    try {
-      eventEngine.emit(
-        'resilience.dlq_entry',
-        {
-          dlqId: dlqEntry.id,
-          originalQueue: dlqEntry.originalQueue,
-          originalId: dlqEntry.originalId,
-          errorCode: dlqEntry.error.code,
-          attempts: dlqEntry.error.attempts,
-          replayable: dlqEntry.replayable,
-          ts: now,
-        },
-        0,
-      );
-    } catch {
-      // Best-effort.
-    }
-    return dlqEntry;
+    this.entries.set(id, entry);
+    this.order.push(id);
+
+    eventEngine.emit('resilience.dlq_entry', {
+      id,
+      originalQueue: entry.originalQueue,
+      originalId: entry.originalId,
+      errorCode: entry.error.code,
+      attempts: entry.error.attempts,
+      dlqAt: entry.dlqAt,
+    });
+
+    return entry;
   }
 
-  /** Get a DLQ entry by id. */
+  /** List entries, optionally filtered. Returns a copy of each entry. */
+  list(filter?: DeadLetterListFilter): DeadLetterEntry[] {
+    const all = this.order.map((id) => this.entries.get(id)!).filter(Boolean);
+    if (!filter) return all.map((e) => ({ ...e }));
+    return all
+      .filter((e) => {
+        if (filter.originalQueue !== undefined && e.originalQueue !== filter.originalQueue) return false;
+        if (filter.status !== undefined && e.status !== filter.status) return false;
+        if (filter.errorCode !== undefined && e.error.code !== filter.errorCode) return false;
+        return true;
+      })
+      .map((e) => ({ ...e }));
+  }
+
+  /** Fetch a single entry by id (or undefined). */
   get(id: string): DeadLetterEntry | undefined {
-    return this.entries.get(id);
-  }
-
-  /** List DLQ entries (optionally filtered). */
-  list(filter?: DLQFilter): DeadLetterEntry[] {
-    let list = [...this.entries.values()];
-    if (filter?.queue) list = list.filter((e) => e.originalQueue === filter.queue);
-    if (filter?.status) list = list.filter((e) => e.status === filter.status);
-    if (filter?.replayable != null) list = list.filter((e) => e.replayable === filter.replayable);
-    if (filter?.since != null) list = list.filter((e) => e.dlqAt >= filter.since!);
-    if (filter?.until != null) list = list.filter((e) => e.dlqAt <= filter.until!);
-    return list.sort((a, b) => b.dlqAt - a.dlqAt);
-  }
-
-  /** Count of entries (optionally filtered by status). */
-  depth(status?: DLQStatus): number {
-    if (!status) return this.entries.size;
-    return this.list({ status }).length;
+    const entry = this.entries.get(id);
+    return entry ? { ...entry } : undefined;
   }
 
   /**
-   * Replay a DLQ entry — re-submit to the original queue.
-   *
-   * `replayFn` is the caller-supplied re-submission function. It receives the
-   * entry's payload and should re-enqueue it (e.g. call `webhookEngine.emit`,
-   * `payoutService.request`, etc.). Return true on success, false on failure.
-   *
-   * On success, the entry's status becomes `replayed`.
-   * On failure, the entry's status is unchanged (`pending_review`) — it can be
-   * retried again later.
+   * Replay a single entry through `replayFn`. On success the entry is marked
+   * `replayed`; on failure the entry stays `pending_review` and the failure
+   * is recorded on the entry.
    */
   async replay(
     id: string,
-    replayFn?: (entry: DeadLetterEntry) => Promise<boolean>,
-  ): Promise<DeadLetterEntry> {
+    replayFn: (entry: DeadLetterEntry) => Promise<void>,
+  ): Promise<DeadLetterEntry | undefined> {
     const entry = this.entries.get(id);
-    if (!entry) {
-      throw new Error(`DLQ entry not found: ${id}`);
-    }
-    if (entry.status === 'discarded') {
-      throw new Error(`DLQ entry ${id} is discarded — cannot replay`);
-    }
-    if (!entry.replayable) {
-      throw new Error(`DLQ entry ${id} is not replayable`);
-    }
-    if (!replayFn) {
-      throw new Error(`No replayFn provided for DLQ entry ${id}`);
-    }
+    if (!entry) return undefined;
+    const replayedAt = nowTs();
     try {
-      const ok = await replayFn(entry);
-      if (ok) {
-        entry.status = 'replayed';
-        entry.notes = `Replayed at ${Date.now()}`;
-        try {
-          eventEngine.emit(
-            'resilience.dlq_replayed',
-            { dlqId: entry.id, originalQueue: entry.originalQueue, originalId: entry.originalId, ts: Date.now() },
-            0,
-          );
-        } catch {
-          // Best-effort.
-        }
-      } else {
-        entry.notes = `Replay attempted at ${Date.now()} but replayFn returned false`;
-      }
+      await replayFn({ ...entry });
+      entry.status = 'replayed';
+      entry.replayedAt = replayedAt;
+      entry.replayOutcome = { ok: true };
     } catch (err) {
-      entry.notes = `Replay failed at ${Date.now()}: ${err instanceof Error ? err.message : String(err)}`;
+      entry.replayedAt = replayedAt;
+      entry.replayOutcome = {
+        ok: false,
+        message: err instanceof Error ? err.message : String(err),
+      };
+      // Leave status as pending_review so it can be retried again.
     }
-    return entry;
+    return { ...entry };
   }
 
-  /** Permanently discard a DLQ entry. Audit-logged with `reason`. */
-  discard(id: string, reason: string): DeadLetterEntry {
+  /** Mark an entry as discarded with a human-readable reason. */
+  discard(id: string, reason: string): DeadLetterEntry | undefined {
     const entry = this.entries.get(id);
-    if (!entry) {
-      throw new Error(`DLQ entry not found: ${id}`);
-    }
+    if (!entry) return undefined;
     entry.status = 'discarded';
-    entry.notes = `Discarded: ${reason}`;
-    try {
-      eventEngine.emit(
-        'resilience.dlq_discarded',
-        { dlqId: entry.id, originalQueue: entry.originalQueue, originalId: entry.originalId, reason, ts: Date.now() },
-        0,
-      );
-    } catch {
-      // Best-effort.
-    }
-    return entry;
+    entry.discardReason = reason;
+    return { ...entry };
   }
 
   /**
-   * Bulk-replay all entries matching the filter (default: all `pending_review`
-   * entries). Returns the count of successfully replayed entries.
+   * Replay every entry matching `queue` (or every pending entry if omitted)
+   * through `replayFn`. Returns the entries that were attempted, with their
+   * final state.
    */
   async replayAll(
-    queue?: DLQQueue,
-    replayFn?: (entry: DeadLetterEntry) => Promise<boolean>,
-  ): Promise<{ attempted: number; succeeded: number; failed: number }> {
-    const filter: DLQFilter = { status: 'pending_review', replayable: true };
-    if (queue) filter.queue = queue;
-    const entries = this.list(filter);
-    let succeeded = 0;
-    let failed = 0;
-    for (const entry of entries) {
-      try {
-        const result = await this.replay(entry.id, replayFn);
-        if (result.status === 'replayed') succeeded++;
-        else failed++;
-      } catch {
-        failed++;
-      }
+    queue?: string,
+    replayFn?: (entry: DeadLetterEntry) => Promise<void>,
+  ): Promise<DeadLetterEntry[]> {
+    if (!replayFn) return [];
+    const candidates = this.list({ originalQueue: queue, status: 'pending_review' });
+    const results: DeadLetterEntry[] = [];
+    for (const candidate of candidates) {
+      const updated = await this.replay(candidate.id, replayFn);
+      if (updated) results.push(updated);
     }
-    return { attempted: entries.length, succeeded, failed };
+    return results;
   }
 
-  /** Clear all entries (mainly for tests). */
-  reset(): void {
+  /** Number of entries currently in the DLQ. */
+  size(): number {
+    return this.entries.size;
+  }
+
+  /** Number of entries matching a status. */
+  countByStatus(status: DeadLetterStatus): number {
+    let n = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.status === status) n += 1;
+    }
+    return n;
+  }
+
+  /** Remove every entry. */
+  clear(): void {
     this.entries.clear();
+    this.order.length = 0;
   }
 }
 
-/** Singleton DLQ. */
-export const deadLetterQueue = new DeadLetterQueue();
-
-/**
- * Convenience helper: move a failed-after-max-retries item to the DLQ.
- *
- * Usage:
- *   if (delivery.attempts >= MAX_RETRIES && delivery.status === 'failed') {
- *     await moveToDLQ('webhook', delivery.id, delivery.payload, {
- *       code: 'webhook_delivery_failed',
- *       message: `Failed after ${delivery.attempts} attempts`,
- *       attempts: delivery.attempts,
- *       lastAttemptTs: delivery.lastAttemptAt ?? Date.now(),
- *     });
- *   }
- */
-export function moveToDLQ(
-  queue: DLQQueue,
-  id: string,
-  payload: Record<string, unknown>,
-  error: DLQError,
-  opts?: { firstAttemptTs?: number; replayable?: boolean },
-): DeadLetterEntry {
-  return deadLetterQueue.push({
-    originalQueue: queue,
-    originalId: id,
-    payload,
-    error,
-    firstAttemptTs: opts?.firstAttemptTs,
-    replayable: opts?.replayable,
-  });
+// Global singleton — survives Next.js dev module re-instantiation.
+const _globalForDLQ =
+  globalThis as unknown as { __PAYSWAP_DLQ?: DeadLetterQueue };
+export const deadLetterQueue: DeadLetterQueue =
+  _globalForDLQ.__PAYSWAP_DLQ ?? new DeadLetterQueue();
+if (!_globalForDLQ.__PAYSWAP_DLQ) {
+  _globalForDLQ.__PAYSWAP_DLQ = deadLetterQueue;
 }

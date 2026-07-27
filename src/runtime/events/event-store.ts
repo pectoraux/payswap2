@@ -1,13 +1,14 @@
 /**
- * Event Store — the immutable source of truth. (M-RT-1 foundation.)
+ * Event Store — the immutable source of truth. (Principle 5: Event Truth.)
  *
  * The store is audit / replay / sim / debug / inspect source ONLY. Pages
  * never replay — they read read models, which projections update
- * IMMEDIATELY on append (the subscriber fires synchronously).
+ * IMMEDIATELY on append (the subscriber fires synchronously in the same
+ * logical transaction).
  *
- * This is the in-memory implementation. It maintains a global array (total
- * order) and a per-stream version counter. Optimistic concurrency: append
- * rejects if expectedVersions disagree.
+ * M-RT-1 ships an in-memory store. M-RT-2 will add the Prisma-backed
+ * `EventRecord` persistence (append-only, OCC by stream version,
+ * snapshotable). The interface is identical.
  */
 
 import type {
@@ -20,18 +21,35 @@ import type {
 import { uid } from '../types';
 
 export interface EventStore {
+  /** Append events to one or more streams. Rejects if expectedVersion is stale. */
   append(
     events: UncommittedEvent[],
     expectedVersions: Map<string, number>,
     meta: AppendMetadata,
   ): Promise<AppendResult>;
+
+  /** Read all events for a stream, optionally from a version. */
   readStream(streamId: string, fromVersion?: number): Promise<StoredEvent[]>;
+
+  /** Read the global log from a position. */
   readAll(fromPosition: number, limit: number): Promise<StoredEvent[]>;
+
+  /** Current version of a stream (or undefined if it doesn't exist). */
   streamVersion(streamId: string): number | undefined;
+
+  /** Total events in the global log. */
   size(): number;
+
+  /** Subscribe to appended events (synchronous, drives projections). */
   subscribe(subscriber: EventSubscriber): () => void;
 }
 
+/**
+ * InMemoryEventStore — the M-RT-1 implementation.
+ *
+ * Maintains a global array (total order) and a per-stream version counter.
+ * Optimistic concurrency: append rejects if expectedVersions disagree.
+ */
 export class InMemoryEventStore implements EventStore {
   private global: StoredEvent[] = [];
   private versions: Map<string, number> = new Map();
@@ -46,6 +64,7 @@ export class InMemoryEventStore implements EventStore {
       return { fromPosition: this.global.length, toPosition: this.global.length - 1, streamVersions: new Map(this.versions), events: [] };
     }
 
+    // Verify optimistic concurrency per stream.
     for (const [streamId, expected] of expectedVersions) {
       const actual = this.versions.get(streamId);
       if (actual !== undefined && actual !== expected) {
@@ -82,15 +101,23 @@ export class InMemoryEventStore implements EventStore {
       stored.push(record);
     }
 
+    // Notify subscribers synchronously (immediate projection — Principle 5).
     for (const sub of this.subscribers) {
       await sub(stored);
     }
 
-    return { fromPosition, toPosition: this.global.length - 1, streamVersions: new Map(this.versions), events: stored };
+    return {
+      fromPosition,
+      toPosition: this.global.length - 1,
+      streamVersions: new Map(this.versions),
+      events: stored,
+    };
   }
 
   async readStream(streamId: string, fromVersion = 0): Promise<StoredEvent[]> {
-    return this.global.filter((e) => e.streamId === streamId && e.version >= fromVersion);
+    return this.global.filter(
+      (e) => e.streamId === streamId && e.version >= fromVersion,
+    );
   }
 
   async readAll(fromPosition: number, limit: number): Promise<StoredEvent[]> {
@@ -111,6 +138,7 @@ export class InMemoryEventStore implements EventStore {
   }
 }
 
+/** Thrown when an append's expectedVersion is stale (concurrent modification). */
 export class OptimisticConcurrencyError extends Error {
   constructor(
     readonly streamId: string,

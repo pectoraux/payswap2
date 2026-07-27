@@ -1,125 +1,119 @@
-import { redirect } from 'next/navigation';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { db } from '@/lib/db';
-import { getEnvironment } from '@/lib/environment';
+import { Plus, KeyRound } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/page-header';
+import { EmptyState } from '@/components/empty-state';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
-import { StatusBadge } from '@/components/status-badge';
-import { KeyRound } from 'lucide-react';
-import { CreateApiKeyDialog } from '@/components/merchant/create-api-key-dialog';
+import { requireMerchant } from '@/lib/auth-guards';
+import { db } from '@/lib/db';
+import { formatRelative, statusBadgeClass } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
-export default async function ApiKeysPage() {
-  const session = await getServerSession(authOptions);
-  if (!session) redirect('/login');
-  const userId = (session?.user as any)?.id;
-  const userRole = await db.userRole.findFirst({
-    where: { userId, role: { in: ['MERCHANT', 'MERCHANT_STAFF'] } },
-  });
-  const merchantId = userRole?.merchantId;
-  if (!merchantId) redirect('/unauthorized');
+function parseScopes(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
-  const env = await getEnvironment();
+export default async function ApiKeysPage() {
+  const { merchant } = await requireMerchant();
+
   const keys = await db.apiKey.findMany({
-    where: { merchantId, environment: env },
+    where: { merchantId: merchant.id },
     orderBy: { createdAt: 'desc' },
   });
 
-  const fmtDate = (d: Date | null) =>
-    d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Never';
-
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">API Keys</h1>
-          <p className="text-sm text-muted-foreground">
-            Authenticate API requests from your applications.
-          </p>
-        </div>
-        <CreateApiKeyDialog />
-      </div>
+      <PageHeader
+        title="API Keys"
+        description="Use API keys to authenticate requests to the PaySwap REST API."
+        actions={
+          <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
+            <Plus className="h-4 w-4" /> Create Key
+          </Button>
+        }
+      />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Your keys</CardTitle>
-          <CardDescription>
-            {keys.length} key{keys.length === 1 ? '' : 's'} configured
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {keys.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10">
-                <KeyRound className="h-6 w-6 text-emerald-500" />
-              </div>
-              <h3 className="mt-4 text-sm font-semibold">No API keys yet</h3>
-              <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-                Generate an API key to start integrating PaySwap into your app.
-              </p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Label</TableHead>
-                  <TableHead>Key</TableHead>
-                  <TableHead>Scopes</TableHead>
-                  <TableHead>Last used</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {keys.map((k) => (
+      {keys.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<KeyRound className="h-5 w-5" />}
+            title="No API keys yet"
+            description="Create a key to start integrating PaySwap. Keys come in test and live modes — test keys never move real money."
+            action={{ label: 'Create key', href: '/dashboard/settings/api-keys' }}
+          />
+        </Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Label</TableHead>
+                <TableHead>Key</TableHead>
+                <TableHead>Scopes</TableHead>
+                <TableHead>Last used</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Created</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {keys.map((k) => {
+                const scopes = parseScopes(k.scopes);
+                return (
                   <TableRow key={k.id}>
                     <TableCell className="font-medium">{k.label}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {k.keyPrefix}••••
+                    <TableCell>
+                      <code className="rounded bg-muted px-2 py-0.5 text-xs font-mono">
+                        {k.keyPrefix}…
+                      </code>
                     </TableCell>
                     <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        {k.scopes
-                          .split(',')
-                          .map((s) => s.trim())
-                          .filter(Boolean)
-                          .slice(0, 3)
-                          .map((s) => (
-                            <span
-                              key={s}
-                              className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
-                            >
+                      <div className="flex max-w-[260px] flex-wrap gap-1">
+                        {scopes.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">No scopes</span>
+                        ) : (
+                          scopes.map((s) => (
+                            <Badge key={s} variant="secondary" className="text-[10px]">
                               {s}
-                            </span>
-                          ))}
+                            </Badge>
+                          ))
+                        )}
                       </div>
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {fmtDate(k.lastUsedAt)}
+                    <TableCell className="text-muted-foreground">
+                      {formatRelative(k.lastUsedAt)}
                     </TableCell>
                     <TableCell>
-                      <StatusBadge status={k.status} />
+                      <Badge variant="outline" className={statusBadgeClass(k.status)}>
+                        {k.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatRelative(k.createdAt)}
                     </TableCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
+
+      <Card className="border-emerald-500/15 bg-emerald-500/5">
+        <EmptyState
+          icon={<KeyRound className="h-5 w-5" />}
+          title="Keep your keys safe"
+          description="Never share secret keys in client-side code, public repos, or support channels. Rotate keys immediately if you suspect a leak."
+        />
       </Card>
     </div>
   );

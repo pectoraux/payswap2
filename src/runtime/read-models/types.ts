@@ -1,10 +1,13 @@
 /**
  * Read Models & Projections — the only thing interfaces read.
- * (M-RT-1 foundation, M-RT-17/18/19 façade pattern.)
+ * (Principle 5: Event Truth; Vocabulary: Read Model, Projection.)
  *
  * Pages NEVER replay events. They read read models, which projections
  * update IMMEDIATELY on append (the EventStore subscriber fires
  * synchronously). Projections are the ONLY writers of read-model tables.
+ *
+ * M-RT-1 ships only the interfaces. M-RT-2 registers the first real
+ * projection (PaymentView) and migrates the payments page off direct Prisma.
  */
 
 import type { StoredEvent } from '../events';
@@ -12,9 +15,13 @@ import type { StoredEvent } from '../events';
 /** A projection subscribes to Domain Events and writes one read model. */
 export interface Projection {
   name: string;
+  /** Event type prefixes this projection handles (e.g. ['payment.', 'refund.']). */
   handles: string[];
+  /** Apply a batch of newly-appended events. */
   apply(events: StoredEvent[]): Promise<void>;
+  /** Wipe + rebuild from the global log (admin/ops only). */
   rebuild(allEvents: StoredEvent[]): Promise<void>;
+  /** Last global position this projection processed. */
   checkpoint(): number;
 }
 
@@ -25,7 +32,8 @@ export interface ReadModel {
 
 /**
  * ProjectionRunner — subscribes to the EventStore and dispatches events to
- * registered projections in global order.
+ * registered projections in global order. This is what makes read models
+ * update "immediately on append" (Principle 5).
  */
 export class ProjectionRunner {
   private projections: Projection[] = [];
@@ -37,6 +45,7 @@ export class ProjectionRunner {
     this.checkpoints.set(projection.name, projection.checkpoint());
   }
 
+  /** Start listening to the Event Store. */
   start(eventStore: { subscribe: (s: (e: StoredEvent[]) => void | Promise<void>) => () => void }): void {
     if (this.unsubscribe) return;
     this.unsubscribe = eventStore.subscribe(async (events) => {
@@ -46,7 +55,10 @@ export class ProjectionRunner {
         );
         if (relevant.length > 0) {
           await projection.apply(relevant);
-          this.checkpoints.set(projection.name, relevant[relevant.length - 1].globalPosition);
+          this.checkpoints.set(
+            projection.name,
+            relevant[relevant.length - 1].globalPosition,
+          );
         }
       }
     });

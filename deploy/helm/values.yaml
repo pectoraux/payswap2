@@ -1,0 +1,171 @@
+# =============================================================================
+# PaySwap — Helm chart default values
+# =============================================================================
+# Override these per-environment via `-f values.staging.yaml` or
+# `--set image.tag=v1.2.3`.
+# =============================================================================
+
+# Image
+image:
+  repository: payswap/api
+  tag: latest
+  pullPolicy: IfNotPresent
+  # Optional — name of an existing image pull secret.
+  pullSecrets: []
+
+# Workload
+nameOverride: ""
+fullnameOverride: ""
+namespace: payswap
+
+# Replicas — overridden by the HPA in production.
+replicas: 3
+
+# Service account
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+# Resources — the HPA scales against these requests.
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# Service
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+# Ingress
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: api.payswap.io
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: payswap-tls
+      hosts:
+        - api.payswap.io
+
+# HPA
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Pod disruption budget
+pdb:
+  enabled: true
+  minAvailable: 2
+
+# Probes
+probes:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    timeoutSeconds: 1
+    failureThreshold: 3
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    timeoutSeconds: 1
+    failureThreshold: 3
+  startup:
+    path: /startupz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+
+# Environment — non-secret config (ConfigMap)
+config:
+  NODE_ENV: production
+  PORT: "3000"
+  HOSTNAME: "0.0.0.0"
+  NEXT_TELEMETRY_DISABLED: "1"
+  FEATURE_FLAG_LIVE_STELLAR: "false"
+  FEATURE_FLAG_REAL_CONNECTORS: "false"
+  FEATURE_FLAG_MULTI_REGION: "false"
+  FEATURE_FLAG_COMPLIANCE_ENFORCEMENT: "true"
+  FEATURE_FLAG_TREASURY_GATES: "true"
+  FEATURE_FLAG_ADVANCED_ANALYTICS: "true"
+  SECRET_PROVIDER: vault
+  VAULT_ADDRESS: https://vault.payswap.internal:8200
+  PROMETHEUS_ENDPOINT: /metrics
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  PRIMARY_REGION: us-east-1
+
+# Environment — secrets (Secret). Leave values empty to source from
+# an external secret manager (Vault, external-secrets, etc.).
+secrets:
+  DATABASE_URL: ""
+  REDIS_URL: ""
+  VAULT_TOKEN: ""
+  OPEN_BANKING_API_KEY: ""
+  MPESA_API_KEY: ""
+  MPESA_SECRET: ""
+  STELLAR_HORIZON_URL: ""
+  ETHEREUM_RPC_URL: ""
+  ETHEREUM_RPC_API_KEY: ""
+  TRM_LABS_API_KEY: ""
+  CHAINALYSIS_API_KEY: ""
+  WALLET_ENCRYPTION_KEY: ""
+  TREASURY_MASTER_KEY: ""
+  WEBHOOK_SIGNING_SECRET: ""
+  NEXTAUTH_SECRET: ""
+
+# Node selector + tolerations (for spot instances / dedicated nodes)
+nodeSelector: {}
+tolerations: []
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: payswap
+          topologyKey: kubernetes.io/hostname
+
+# Autoscaling for auxiliary workloads (settlement worker, webhook dispatcher)
+workers:
+  settlement:
+    enabled: true
+    replicas: 2
+    queueDepthTarget: 100
+  webhook:
+    enabled: true
+    replicas: 2
+    consumerLagTarget: 5

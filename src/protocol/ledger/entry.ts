@@ -1,196 +1,235 @@
 /**
- * PaySwap Protocol — Double-Entry Ledger / Journal Entries.
- * -----------------------------------------------------------------------------
- * A LedgerEntry is a single debit OR credit line posted against one account.
- * A JournalEntry is a balanced group of LedgerEntry lines that all post together.
+ * PaySwap Protocol — Ledger Journal Entries.
  *
- * INVARIANT: every JournalEntry must satisfy
- *     sum(debits) === sum(credits)  per currency
+ * A LedgerEntry is the atomic unit of the protocol ledger: a single
+ * debit or credit against one account, in one currency, at one instant.
  *
- * `createJournalEntry` validates this invariant and throws if it's violated.
- * `validateBalanced` re-checks the invariant on an existing journal entry.
+ * A JournalEntry is a balanced group of LedgerEntries describing one
+ * business transaction (e.g. "mint TWINGHS 1000"). Every JournalEntry must
+ * satisfy, per currency:
  *
- * All entries are deep-frozen before being returned so callers cannot mutate
- * history after the fact.
+ *     sum(debits) === sum(credits)
+ *
+ * This is the fundamental invariant of double-entry bookkeeping. The
+ * `createJournalEntry()` constructor enforces it; `validateBalanced()`
+ * re-checks an existing entry.
  */
-import { uid, round } from '@/kernel/support';
+import { uid, nowTs, round } from '@/kernel/support';
 
+/** A single debit or credit against one account. Exactly one of debit/credit is non-zero. */
 export interface LedgerEntry {
-  /** Unique line id. */
+  /** Unique id of this leg. */
   id: string;
-  /** Timestamp (ms). */
+  /** Timestamp (ms since epoch). */
   ts: number;
-  /** Monotonic sequence within the ledger (assigned at post time, 0 here). */
+  /** Monotonically increasing ledger sequence number, assigned on post. */
   ledgerSeq: number;
-  /** Logical transaction id linking related journal entries. */
+  /** Id of the parent transaction this leg belongs to. */
   txId: string;
-  /** Account code from the chart of accounts (see accounts.ts). */
+  /** Fully-qualified account code (see CHART_OF_ACCOUNTS). */
   accountCode: string;
-  /** Debit amount (>=0). Exactly one of debit/credit must be >0 per line. */
+  /** Debit amount (zero for a credit-only leg). */
   debit: number;
-  /** Credit amount (>=0). Exactly one of debit/credit must be >0 per line. */
+  /** Credit amount (zero for a debit-only leg). */
   credit: number;
-  /** Currency code (e.g. 'GHS', 'USD', or the Twin Token asset code). */
+  /** ISO currency code (or asset code for twin-token accounts). */
   currency: string;
-  /** Human-readable memo / description. */
+  /** Free-form memo describing the leg. */
   memo: string;
-  /** Optional evidence id this entry cites. */
+  /** Optional evidence id cited by this leg (audit chain). */
   evidenceId?: string;
-  /** Optional simulation frame number. */
+  /** Optional simulation frame this leg belongs to. */
   frame?: number;
 }
 
+/** A balanced group of LedgerEntries describing one business transaction. */
 export interface JournalEntry {
   /** Unique journal id. */
   id: string;
-  /** Timestamp (ms). */
+  /** Timestamp (ms since epoch). */
   ts: number;
-  /** Logical transaction id. */
+  /** Transaction id — links back to the originating domain operation. */
   txId: string;
-  /** Human-readable description of the business event. */
+  /** Human-readable description of the transaction. */
   description: string;
-  /** The constituent debit/credit lines. */
+  /** The debit/credit legs of the journal entry. */
   entries: LedgerEntry[];
-  /** Whether the entry was validated as balanced. Always true after createJournalEntry. */
+  /** Whether the entry is balanced (sum debits === sum credits per currency). */
   balanced: boolean;
-  /** Optional simulation frame number. */
+  /** Optional simulation frame this journal belongs to. */
   frame?: number;
+  /** Optional evidence id cited by this journal entry. */
+  evidenceId?: string;
 }
 
-/** A single input line — caller supplies accountCode, amount, currency, side. */
-export interface JournalLineInput {
+/** Input leg for constructing a journal entry. */
+export interface JournalLegInput {
   accountCode: string;
-  /** Positive amount to post. */
-  amount: number;
+  debit?: number;
+  credit?: number;
   currency: string;
   memo?: string;
   evidenceId?: string;
-  /** Side — 'debit' or 'credit'. Defaults to 'debit'. */
-  side?: 'debit' | 'credit';
-}
-
-export interface CreateJournalEntryParams {
-  txId?: string;
-  description: string;
-  ts?: number;
   frame?: number;
-  lines: JournalLineInput[];
+}
+
+/** Input for `createJournalEntry()`. */
+export interface CreateJournalEntryParams {
+  /** Transaction id linking to the originating domain operation. */
+  txId: string;
+  /** Human-readable description. */
+  description: string;
+  /** The legs (debit/credit movements). */
+  legs: JournalLegInput[];
+  /** Optional explicit timestamp (defaults to now). */
+  ts?: number;
+  /** Optional explicit journal id (defaults to generated). */
+  id?: string;
+  /** Optional simulation frame. */
+  frame?: number;
+  /** Optional evidence id cited by the whole journal entry. */
   evidenceId?: string;
-}
-
-const EPSILON = 1e-6;
-
-function deepFreeze<T>(obj: T): T {
-  if (obj && typeof obj === 'object') {
-    Object.freeze(obj);
-    for (const v of Object.values(obj as Record<string, unknown>)) {
-      if (Array.isArray(v)) {
-        for (const item of v) deepFreeze(item);
-      } else if (v && typeof v === 'object') {
-        deepFreeze(v);
-      }
-    }
-  }
-  return obj;
+  /** Starting ledger sequence number (defaults to 0). */
+  startSeq?: number;
 }
 
 /**
- * Validate that the lines balance per currency:
- *   for each currency, sum(debit) === sum(credit)
- * Returns { balanced, byCurrency, discrepancy }.
- */
-export function validateBalanced(journal: JournalEntry): {
-  balanced: boolean;
-  byCurrency: Record<string, { debits: number; credits: number; delta: number }>;
-  discrepancy: number;
-} {
-  const byCurrency: Record<string, { debits: number; credits: number; delta: number }> = {};
-  for (const line of journal.entries) {
-    if (!byCurrency[line.currency]) {
-      byCurrency[line.currency] = { debits: 0, credits: 0, delta: 0 };
-    }
-    byCurrency[line.currency].debits = round(byCurrency[line.currency].debits + line.debit, 6);
-    byCurrency[line.currency].credits = round(byCurrency[line.currency].credits + line.credit, 6);
-  }
-  let maxDiscrepancy = 0;
-  for (const c of Object.keys(byCurrency)) {
-    const delta = round(byCurrency[c].debits - byCurrency[c].credits, 6);
-    byCurrency[c].delta = delta;
-    if (Math.abs(delta) > maxDiscrepancy) maxDiscrepancy = Math.abs(delta);
-  }
-  return { balanced: maxDiscrepancy < EPSILON, byCurrency, discrepancy: maxDiscrepancy };
-}
-
-/**
- * Create a balanced JournalEntry from input lines. Throws if the lines do not
- * balance per currency (i.e. for any currency, sum(debits) !== sum(credits)).
+ * Build a balanced JournalEntry from a set of legs.
+ *
+ * Validates that, for every currency, the sum of debits equals the sum of
+ * credits. Throws if unbalanced. Each leg must have exactly one of debit or
+ * credit non-zero (and that value must be positive).
+ *
+ * `ledgerSeq` is assigned incrementally starting from `startSeq` (default 0).
+ * The caller is responsible for using a startSeq that continues from the
+ * engine's current sequence counter; the LedgerEngine wrapper does this
+ * automatically.
  */
 export function createJournalEntry(params: CreateJournalEntryParams): JournalEntry {
-  if (!params.lines || params.lines.length === 0) {
-    throw new Error('Journal entry must have at least one line');
-  }
-  const ts = params.ts ?? Date.now();
-  const txId = params.txId ?? uid('tx');
-  const journalId = uid('journal');
+  const ts = params.ts ?? nowTs();
+  const txId = params.txId;
+  let seq = params.startSeq ?? 0;
 
-  const entries: LedgerEntry[] = params.lines.map((line, idx) => {
-    if (line.amount == null || !isFinite(line.amount) || line.amount < 0) {
-      throw new Error(`Line ${idx}: invalid amount ${line.amount}`);
+  // Validate legs and build the entries array.
+  const entries: LedgerEntry[] = [];
+  for (const leg of params.legs) {
+    const debit = leg.debit ?? 0;
+    const credit = leg.credit ?? 0;
+    if (debit < 0 || credit < 0) {
+      throw new Error(`ledger leg cannot have negative amounts (debit=${debit}, credit=${credit})`);
     }
-    if (line.amount === 0) {
-      throw new Error(`Line ${idx}: amount must be > 0 (got 0)`);
+    if (debit > 0 && credit > 0) {
+      throw new Error(`ledger leg cannot be both debit and credit (account=${leg.accountCode})`);
     }
-    const side = line.side ?? 'debit';
-    if (side !== 'debit' && side !== 'credit') {
-      throw new Error(`Line ${idx}: side must be 'debit' or 'credit' (got ${side})`);
+    if (debit === 0 && credit === 0) {
+      throw new Error(`ledger leg has zero debit and zero credit (account=${leg.accountCode})`);
     }
-    return {
+    if (!leg.currency) {
+      throw new Error(`ledger leg missing currency (account=${leg.accountCode})`);
+    }
+    entries.push({
       id: uid('le'),
       ts,
-      ledgerSeq: 0,
+      ledgerSeq: seq++,
       txId,
-      accountCode: line.accountCode,
-      debit: side === 'debit' ? round(line.amount, 6) : 0,
-      credit: side === 'credit' ? round(line.amount, 6) : 0,
-      currency: line.currency,
-      memo: line.memo ?? params.description,
-      evidenceId: line.evidenceId ?? params.evidenceId,
-      frame: params.frame,
-    };
-  });
+      accountCode: leg.accountCode,
+      debit: round(debit, 6),
+      credit: round(credit, 6),
+      currency: leg.currency,
+      memo: leg.memo ?? params.description,
+      evidenceId: leg.evidenceId ?? params.evidenceId,
+      frame: leg.frame ?? params.frame,
+    });
+  }
 
-  const journal: JournalEntry = {
-    id: journalId,
+  if (entries.length === 0) {
+    throw new Error('journal entry has no legs');
+  }
+
+  const balanced = validateBalancedInner(entries);
+  if (!balanced.balanced) {
+    throw new Error(
+      `journal entry is unbalanced — ${balanced.mismatches
+        .map((m) => `currency ${m.currency}: debit ${m.totalDebit} ≠ credit ${m.totalCredit}`)
+        .join('; ')}`,
+    );
+  }
+
+  return {
+    id: params.id ?? uid('je'),
     ts,
     txId,
     description: params.description,
     entries,
-    balanced: false,
+    balanced: true,
     frame: params.frame,
+    evidenceId: params.evidenceId,
   };
-
-  const check = validateBalanced(journal);
-  if (!check.balanced) {
-    const details = Object.entries(check.byCurrency)
-      .map(([c, v]) => `${c}: DR ${v.debits} / CR ${v.credits} (Δ ${v.delta})`)
-      .join('; ');
-    throw new Error(`Unbalanced journal entry — ${details}`);
-  }
-  journal.balanced = true;
-  return deepFreeze(journal);
 }
 
-/** Convenience helpers for building lines. */
-export const debit = (
-  accountCode: string,
-  amount: number,
-  currency: string,
-  memo?: string,
-): JournalLineInput => ({ accountCode, amount, currency, memo, side: 'debit' });
+/** Per-currency balance check result for a journal entry. */
+export interface BalanceCheckResult {
+  balanced: boolean;
+  /** Per-currency totals. */
+  currencies: {
+    currency: string;
+    totalDebit: number;
+    totalCredit: number;
+    difference: number;
+  }[];
+  /** Only the currencies that did not balance (empty when balanced). */
+  mismatches: {
+    currency: string;
+    totalDebit: number;
+    totalCredit: number;
+    difference: number;
+  }[];
+}
 
-export const credit = (
-  accountCode: string,
-  amount: number,
-  currency: string,
-  memo?: string,
-): JournalLineInput => ({ accountCode, amount, currency, memo, side: 'credit' });
+/**
+ * Re-check that a JournalEntry is balanced across every currency.
+ * Does not throw — returns the per-currency breakdown instead.
+ */
+export function validateBalanced(journal: JournalEntry): BalanceCheckResult {
+  return validateBalancedInner(journal.entries);
+}
+
+/** Internal: per-currency debit/credit balance check. */
+function validateBalancedInner(entries: LedgerEntry[]): BalanceCheckResult {
+  const totals = new Map<string, { debit: number; credit: number }>();
+  for (const e of entries) {
+    let t = totals.get(e.currency);
+    if (!t) {
+      t = { debit: 0, credit: 0 };
+      totals.set(e.currency, t);
+    }
+    t.debit = round(t.debit + e.debit, 6);
+    t.credit = round(t.credit + e.credit, 6);
+  }
+
+  const currencies: BalanceCheckResult['currencies'] = [];
+  const mismatches: BalanceCheckResult['mismatches'] = [];
+  for (const [currency, t] of totals) {
+    const diff = round(t.debit - t.credit, 6);
+    currencies.push({
+      currency,
+      totalDebit: t.debit,
+      totalCredit: t.credit,
+      difference: diff,
+    });
+    if (Math.abs(diff) > 1e-6) {
+      mismatches.push({
+        currency,
+        totalDebit: t.debit,
+        totalCredit: t.credit,
+        difference: diff,
+      });
+    }
+  }
+
+  return {
+    balanced: mismatches.length === 0,
+    currencies,
+    mismatches,
+  };
+}

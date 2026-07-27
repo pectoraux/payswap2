@@ -5,17 +5,19 @@ import { eventEngine } from '@/kernel/event';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** GET /api/ledger/trial-balance — current trial balance (rebuilt from events) */
+/** GET /api/ledger/trial-balance — full trial balance rebuilt from events */
 export async function GET() {
-  // Rebuild from the live event stream for a fresh, consistent view
   const rebuilt = rebuildLedgerFromEvents(eventEngine.read());
   const tb = rebuilt.getTrialBalance();
+  const journal = rebuilt.getJournal();
+  const legs = journal.reduce((s, j) => s + j.entries.length, 0);
+  const activeAccounts = Object.keys(tb.accounts).filter((k) => tb.accounts[k].debit !== 0 || tb.accounts[k].credit !== 0);
   return NextResponse.json({
-    totalDebits: tb.totalDebits,
-    totalCredits: tb.totalCredits,
-    balanced: tb.balanced,
+    trialBalance: { balanced: tb.balanced, totalDebits: tb.totalDebits, totalCredits: tb.totalCredits },
+    journals: journal.length,
+    legs,
+    activeAccounts,
     accounts: tb.accounts,
-    entryCount: rebuilt.getJournal().length,
     ts: Date.now(),
   });
 }

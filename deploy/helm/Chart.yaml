@@ -1,0 +1,19 @@
+apiVersion: v2
+name: payswap
+description: PaySwap production Helm chart — Next.js API, settlement worker, webhook dispatcher
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+home: https://github.com/payswap/payswap
+sources:
+  - https://github.com/payswap/payswap
+maintainers:
+  - name: PaySwap Platform Team
+    email: platform@payswap.io
+keywords:
+  - payswap
+  - payments
+  - stellar
+  - fintech
+  - nextjs
+icon: https://payswap.io/logo.png

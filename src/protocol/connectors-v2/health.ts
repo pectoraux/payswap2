@@ -1,131 +1,102 @@
 /**
  * PaySwap Protocol — Production Connectors v2 — Health Monitor.
  *
- * Tracks per-connector health: latency, consecutive failures, last error.
- * A connector is "healthy" if its consecutive-failure count is below a
- * threshold (default 3). The monitor also supports a periodic background
- * probe via `startPeriodic()` — pass a checkFn that calls `healthCheck()`
- * on each connector.
+ * Tracks per-connector health based on the success/failure of recent
+ * queries. A connector is considered healthy while `consecutiveFailures`
+ * stays below the threshold (default 3). The registry exposes this to
+ * the planner so it can prefer healthy rails during routing.
  *
- * Health is OBSERVED state — recording a failure here does NOT change any
- * protocol module's state. It only feeds dashboards and routing decisions.
+ * Health is a *runtime* concept: even a "production" connector can be
+ * briefly unhealthy during an upstream outage. The monitor never turns
+ * a connector off permanently — three successes in a row flip it back
+ * to healthy.
  */
 import type { ConnectorError, ConnectorHealth, ConnectorId } from './types';
 
-export interface HealthMonitorOptions {
-  /** Consecutive failures at/below which a connector is considered healthy. */
-  failureThreshold?: number;
+/** Default failure threshold. Configurable per-monitor. */
+export const DEFAULT_FAILURE_THRESHOLD = 3;
+
+interface HealthState {
+  id: ConnectorId;
+  healthy: boolean;
+  latencyMs: number;
+  lastCheckTs: number;
+  consecutiveFailures: number;
 }
 
-const DEFAULT_FAILURE_THRESHOLD = 3;
-
 export class HealthMonitor {
-  private health: Map<ConnectorId, ConnectorHealth> = new Map();
+  private states = new Map<ConnectorId, HealthState>();
   private readonly failureThreshold: number;
 
-  constructor(opts: HealthMonitorOptions = {}) {
-    this.failureThreshold = opts.failureThreshold ?? DEFAULT_FAILURE_THRESHOLD;
+  constructor(failureThreshold: number = DEFAULT_FAILURE_THRESHOLD) {
+    this.failureThreshold = failureThreshold;
   }
 
-  /** Record a successful call. Resets consecutiveFailures to 0. */
-  recordSuccess(id: ConnectorId, latencyMs: number): void {
-    const prev = this.health.get(id);
-    this.health.set(id, {
-      id,
-      healthy: true,
-      latencyMs,
-      lastCheckTs: Date.now(),
-      consecutiveFailures: 0,
-      lastError: prev?.lastError, // keep last error for forensics
-    });
-  }
-
-  /** Record a failed call. Increments consecutiveFailures. */
-  recordFailure(id: ConnectorId, error: ConnectorError): void {
-    const prev = this.health.get(id);
-    const consecutiveFailures = (prev?.consecutiveFailures ?? 0) + 1;
-    this.health.set(id, {
-      id,
-      healthy: consecutiveFailures < this.failureThreshold,
-      latencyMs: prev?.latencyMs ?? 0,
-      lastCheckTs: Date.now(),
-      consecutiveFailures,
-      lastError: `${error.code}: ${error.message}`,
-    });
-  }
-
-  /** Get the current health snapshot for a connector. */
-  getHealth(id: ConnectorId): ConnectorHealth {
-    return (
-      this.health.get(id) ?? {
+  private ensure(id: ConnectorId): HealthState {
+    let s = this.states.get(id);
+    if (!s) {
+      s = {
         id,
         healthy: true,
         latencyMs: 0,
         lastCheckTs: 0,
         consecutiveFailures: 0,
-      }
-    );
+      };
+      this.states.set(id, s);
+    }
+    return s;
   }
 
-  /** Boolean health check — uses the recorded healthy flag. */
-  isHealthy(id: ConnectorId): boolean {
-    return this.getHealth(id).healthy;
+  /** Record a successful query — resets the failure counter. */
+  recordSuccess(id: ConnectorId, latencyMs: number): void {
+    const s = this.ensure(id);
+    s.consecutiveFailures = 0;
+    s.healthy = true;
+    s.latencyMs = latencyMs;
+    s.lastCheckTs = Date.now();
   }
 
-  /** All connectors' health snapshots. */
-  all(): ConnectorHealth[] {
-    return [...this.health.values()];
-  }
-
-  /** Reset health for one or all connectors. */
-  reset(id?: ConnectorId): void {
-    if (id) {
-      this.health.delete(id);
-    } else {
-      this.health.clear();
+  /** Record a failed query — increments the failure counter, may flip to unhealthy. */
+  recordFailure(id: ConnectorId, _error: ConnectorError): void {
+    const s = this.ensure(id);
+    s.consecutiveFailures += 1;
+    s.lastCheckTs = Date.now();
+    if (s.consecutiveFailures >= this.failureThreshold) {
+      s.healthy = false;
     }
   }
 
-  /** Get the configured failure threshold (for diagnostics). */
-  getFailureThreshold(): number {
-    return this.failureThreshold;
+  /** Snapshot of one connector's health. */
+  getHealth(id: ConnectorId): ConnectorHealth {
+    const s = this.ensure(id);
+    return {
+      id: s.id,
+      healthy: s.healthy,
+      latencyMs: s.latencyMs,
+      lastCheckTs: s.lastCheckTs,
+      consecutiveFailures: s.consecutiveFailures,
+    };
   }
 
-  /**
-   * Start a periodic background probe. Returns a `stop` function.
-   *
-   * `checkFn` is invoked every `intervalMs`; it should call `healthCheck()`
-   * on each registered connector and `recordSuccess` / `recordFailure`
-   * accordingly. The monitor itself only schedules — it does not know which
-   * connectors exist.
-   */
-  startPeriodic(
-    checkFn: () => Promise<void>,
-    intervalMs: number,
-  ): () => void {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+  /** True if the connector is currently considered healthy. */
+  isHealthy(id: ConnectorId): boolean {
+    return this.ensure(id).healthy;
+  }
 
-    const tick = async () => {
-      if (stopped) return;
-      try {
-        await checkFn();
-      } catch {
-        // Swallow — health probe failures should not crash the runtime.
-      }
-      if (!stopped) {
-        timer = setTimeout(tick, intervalMs);
-      }
-    };
-    // Fire immediately, then on interval.
-    timer = setTimeout(tick, 0);
+  /** Health for every connector seen so far. */
+  all(): ConnectorHealth[] {
+    // Ensure all known ids appear even if never queried.
+    return [...this.states.values()].map((s) => ({
+      id: s.id,
+      healthy: s.healthy,
+      latencyMs: s.latencyMs,
+      lastCheckTs: s.lastCheckTs,
+      consecutiveFailures: s.consecutiveFailures,
+    }));
+  }
 
-    return () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-    };
+  /** Reset all health state (e.g. between simulation runs). */
+  reset(): void {
+    this.states.clear();
   }
 }
-
-/** Singleton health monitor — shared by all production connectors. */
-export const sharedHealthMonitor = new HealthMonitor();

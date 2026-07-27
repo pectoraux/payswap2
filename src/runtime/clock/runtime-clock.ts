@@ -1,50 +1,100 @@
 /**
- * Runtime Clock — the deterministic time source. (M-RT-1 foundation.)
+ * Runtime Clock — the virtual clock. Everything reads clock.now(), never
+ * Date.now(). (Principle 6: Deterministic Replay; Vocabulary: Runtime Clock.)
  *
- * Every event, every projection, every read model uses the clock's `now()`
- * for timestamps. In production, LiveClock returns wall-clock time. In
- * simulation/sandbox, VirtualClock returns a controllable virtual time.
+ * Live environment runs at 1× real time. Sandbox can run at 10×/100×/1000×,
+ * pause, seek (Time Machine), and branch (what-if).
+ *
+ * M-RT-1 ships LiveClock (1× real) + a basic VirtualClock. The full
+ * simulation clock (robust seek/branch/forecast) lands in M-RT-10.
  */
 
 export interface RuntimeClock {
-  /** Current time, in epoch milliseconds. */
+  /** Current virtual time, in epoch milliseconds. */
   now(): number;
-  /** The clock mode (for health/debugging). */
-  readonly mode: 'live' | 'virtual';
+  /** Current speed multiplier (1 = real time). */
+  speed(): number;
+  /** Freeze virtual time. (LiveClock throws.) */
+  pause(): void;
+  /** Resume virtual time after a pause. */
+  resume(): void;
+  /** Jump virtual time to `ts`. (LiveClock throws.) */
+  seekTo(ts: number): void;
+  /** Fork a new clock at `fromTs` (default: now) for what-if scenarios. */
+  branch(fromTs?: number): RuntimeClock;
 }
 
-/** LiveClock — uses real wall-clock time. */
+/**
+ * LiveClock — backs the live environment. Always real time, 1×. Cannot be
+ * paused or seeked (those throw) because live time is irreducible.
+ */
 export class LiveClock implements RuntimeClock {
-  readonly mode = 'live' as const;
   now(): number {
     return Date.now();
   }
+  speed(): number {
+    return 1;
+  }
+  pause(): void {
+    throw new Error('LiveClock cannot be paused — live time is irreducible');
+  }
+  resume(): void {
+    /* no-op */
+  }
+  seekTo(): void {
+    throw new Error('LiveClock cannot seek — live time is irreducible');
+  }
+  branch(): RuntimeClock {
+    throw new Error('LiveClock cannot branch — use a VirtualClock for what-if');
+  }
 }
 
-/** VirtualClock — controllable time for simulation/sandbox. */
+/**
+ * VirtualClock — backs the sandbox/twin environment.
+ *
+ * Model: virtual time = virtualAtEpoch + (realNow - epoch) * multiplier,
+ * unless paused. seekTo reanchors. branch forks an independent clock.
+ */
 export class VirtualClock implements RuntimeClock {
-  readonly mode = 'virtual' as const;
-  private current: number;
-  private readonly speed: number;
-  private readonly origin: number;
-  private realOrigin: number;
+  private epoch: number;            // real-time ms when the clock was last anchored
+  private virtualAtEpoch: number;   // virtual time at that real moment
+  private multiplier: number;
+  private paused: boolean;
 
   constructor(opts: { origin?: number; speed?: number } = {}) {
-    this.origin = opts.origin ?? 0;
-    this.speed = opts.speed ?? 1;
-    this.current = this.origin;
-    this.realOrigin = Date.now();
+    this.epoch = Date.now();
+    this.virtualAtEpoch = opts.origin ?? this.epoch;
+    this.multiplier = opts.speed ?? 1;
+    this.paused = false;
   }
 
   now(): number {
-    if (this.speed === 0) return this.current;
-    const realElapsed = Date.now() - this.realOrigin;
-    this.current = this.origin + Math.floor(realElapsed * this.speed);
-    return this.current;
+    if (this.paused) return this.virtualAtEpoch;
+    return this.virtualAtEpoch + (Date.now() - this.epoch) * this.multiplier;
   }
 
-  /** Manually advance the clock (for testing). */
-  advance(ms: number): void {
-    this.current += ms;
+  speed(): number {
+    return this.multiplier;
+  }
+
+  pause(): void {
+    if (this.paused) return;
+    this.virtualAtEpoch = this.now();
+    this.paused = true;
+  }
+
+  resume(): void {
+    if (!this.paused) return;
+    this.epoch = Date.now();
+    this.paused = false;
+  }
+
+  seekTo(ts: number): void {
+    this.virtualAtEpoch = ts;
+    this.epoch = Date.now();
+  }
+
+  branch(fromTs?: number): RuntimeClock {
+    return new VirtualClock({ origin: fromTs ?? this.now(), speed: this.multiplier });
   }
 }

@@ -11,8 +11,3 @@ export async function GET() {
     headers: { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' },
   });
 }
-
-/** GET /api/ops/metrics?format=json — JSON snapshot */
-export async function POST() {
-  return NextResponse.json(metricsRegistry.json());
-}

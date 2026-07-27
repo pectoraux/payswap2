@@ -1,309 +1,185 @@
 /**
- * PaySwap Protocol — Production Connectors v2 — Stellar Horizon Connector.
+ * PaySwap Protocol — Production Connectors v2 — Stellar Horizon.
  *
- * Real-shape simulated Stellar Horizon REST connector. Operations:
- *   - getAccount({ address })              → account sequence, balances[], signers[]
- *   - getTransaction({ txHash })            → envelope_xdr, result_xdr, success
- *   - getLedger({ sequence })               → ledger header (hash, sequence, close_time)
- *   - submitTransaction({ xdr })             → hash, ledger, success (or error)
- *   - getEffects({ txHash })                 → effects[] (account credited/debited)
+ * Simulated Stellar Horizon API connector. Real implementations call
+ * Horizon's REST endpoints (accounts, transactions, submit); this
+ * in-process simulation mirrors that surface area.
  *
- * NOTE: This connector is for the "read-only observation" path (horizon
- * ingestion) — used by the LP proof / settlement observer subsystem. The
- * heavy Stellar transaction-building logic is in `src/protocol/chains/stellar/adapter.ts`
- * (Task 3-A). This connector is drop-in replaceable with a real
- * `fetch('https://horizon.stellar.org/...')` call.
+ * Operations:
+ *   - getAccount({ address })        — fetch account balances
+ *   - getTransaction({ txHash })     — fetch transaction details
+ *   - submitTransaction({ xdr })     — submit a signed envelope
  *
- * Auth: public Horizon (no auth) OR Friendbot for testnet. API key optional.
- *
- * Response shapes mirror Horizon's REST API: `_links`, `id`, `paging_token`,
- * `account_id`, `sequence`, `balances[]`, `signers[]`, `created_at`.
- *
- * Evidence: source='on_chain_state', verificationLevel='cryptographic',
- *           reputation=1.0. On-chain Stellar state is permanent.
+ * Evidence: source='on_chain_state', verificationLevel='cryptographic', reputation=1.0.
  */
 import type { Evidence } from '@/kernel/evidence';
-import type {
-  ConnectorConfig,
-  ConnectorError,
-  ConnectorRequest,
-} from './types';
-import { ProductionConnector, buildAttestationEvidence } from './base';
+import { createEvidence } from '@/kernel/evidence';
+import { uid } from '@/kernel/support';
+import type { ConnectorConfig, ConnectorRequest } from './types';
 import { invalidResponse } from './errors';
-import { deterministicHash } from './open-banking';
+import { HealthMonitor } from './health';
+import { MetricsCollector } from './metrics';
+import { IdempotencyStore } from './idempotency';
+import { ProductionConnector, type DoQueryResult } from './base';
 
-const DEFAULT_CONFIG: ConnectorConfig = {
+/** Default config — Horizon public-node characteristics. */
+export const DEFAULT_STELLAR_HORIZON_CONFIG: ConnectorConfig = {
   id: 'stellar_horizon',
-  type: 'blockchain_rpc',
-  name: 'Stellar Horizon API',
-  endpoint: 'https://horizon-testnet.stellar.org',
-  apiKeyRef: 'vault://payswap/stellar-horizon/prod/api-key',
-  secretRef: 'vault://payswap/stellar-horizon/prod/hmac-secret',
+  type: 'stellar_horizon',
+  name: 'Stellar Horizon',
+  endpoint: 'sim://stellar/horizon/v1',
   timeout: 10_000,
   retryCount: 3,
-  retryBackoffMs: 400,
-  rateLimitRps: 10,
-  rateLimitBurst: 30,
-  idempotencyTtlMs: 600_000,
+  retryBackoffMs: 300,
+  rateLimitRps: 20,
+  rateLimitBurst: 40,
+  idempotencyTtlMs: 60_000,
 };
 
+interface StellarAccountRecord {
+  address: string;
+  balances: Array<{ asset: string; balance: number; issuer?: string }>;
+  sequence: number;
+  subentryCount: number;
+  createdAt: number;
+}
+
+interface StellarTxRecord {
+  hash: string;
+  sourceAccount: string;
+  successful: boolean;
+  ledger: number;
+  feePaid: number;
+  operationCount: number;
+  createdAt: number;
+  envelopeXdr: string;
+  resultXdr: string;
+}
+
+/** Deterministic pseudo-balance for a previously unfunded account. */
+function pseudoNativeBalance(address: string): number {
+  let h = 0;
+  for (let i = 0; i < address.length; i++) h = (h * 31 + address.charCodeAt(i)) | 0;
+  return Math.abs(h % 1_000_000) / 1_000_000; // 0..1 XLM (above the 1 XLM reserve)
+}
+
 export class StellarHorizonConnector extends ProductionConnector {
-  constructor(config?: Partial<ConnectorConfig>) {
-    super({ ...DEFAULT_CONFIG, ...config });
+  private accounts = new Map<string, StellarAccountRecord>();
+  private transactions = new Map<string, StellarTxRecord>();
+
+  constructor(
+    healthMonitor: HealthMonitor,
+    metricsCollector: MetricsCollector,
+    config?: Partial<ConnectorConfig>,
+    idempotency?: IdempotencyStore,
+  ) {
+    super(
+      { ...DEFAULT_STELLAR_HORIZON_CONFIG, ...config },
+      healthMonitor,
+      metricsCollector,
+      idempotency,
+    );
   }
 
-  protected authHeaders(): Record<string, string> {
-    const headers: Record<string, string> = { Accept: 'application/hal+json' };
-    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
-    return headers;
-  }
-
-  async doQuery(
-    request: ConnectorRequest,
-  ): Promise<{ result: Record<string, unknown>; error?: ConnectorError }> {
-    // In production:
-    //   const res = await fetch(`${this.config.endpoint}/${path}`, {
-    //     headers: this.authHeaders(),
-    //     method: request.operation === 'submitTransaction' ? 'POST' : 'GET',
-    //     body: request.operation === 'submitTransaction' ? `tx=${encodeURIComponent(request.params.xdr)}` : undefined,
-    //   });
-    //   const body = await res.json();
-    //   if (!res.ok) return { result: {}, error: fromHttpError(res.status, body) };
-    //   return { result: body };
+  protected async doQuery(request: ConnectorRequest): Promise<DoQueryResult> {
     switch (request.operation) {
       case 'getAccount':
-        return this.simGetAccount(request);
+        return this.getAccount(request.params);
       case 'getTransaction':
-        return this.simGetTransaction(request);
-      case 'getLedger':
-        return this.simGetLedger(request);
+        return this.getTransaction(request.params);
       case 'submitTransaction':
-        return this.simSubmitTransaction(request);
-      case 'getEffects':
-        return this.simGetEffects(request);
+        return this.submitTransaction(request.params);
       default:
-        return { result: {}, error: invalidResponse(`Unknown operation: ${request.operation}`) };
+        return { ok: false, error: invalidResponse(`unknown_operation:${request.operation}`) };
     }
   }
 
-  private simGetAccount(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const address = request.params.address as string | undefined;
-    if (!address) {
-      return { result: {}, error: invalidResponse('address required') };
-    }
-    // Horizon /accounts/{address} response shape.
-    const sequence = deterministicSequence(address);
-    return {
-      result: {
-        id: address,
-        account_id: address,
-        sequence,
-        subentry_count: 0,
-        last_modified_ledger: 18000000 + (parseInt(deterministicHash(address).slice(0, 6), 16) % 100000),
-        thresholds: { low_threshold: 0, med_threshold: 0, high_threshold: 0 },
-        flags: { auth_required: false, auth_revocable: false, auth_immutable: false, auth_clawback_enabled: false },
-        balances: [
-          {
-            balance: '1000.0000000',
-            limit: '922337203685.4775807',
-            asset_type: 'native',
-            asset_code: 'XLM',
-            asset_issuer: '',
-          },
-        ],
-        signers: [
-          {
-            key: address,
-            weight: 1,
-            type: 'ed25519_public_key',
-          },
-        ],
-        _links: {
-          self: { href: `${this.config.endpoint}/accounts/${address}` },
-          transactions: { href: `${this.config.endpoint}/accounts/${address}/transactions{?cursor,limit,order}`, templated: true },
-        },
-      },
-    };
-  }
-
-  private simGetTransaction(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const txHash = request.params.txHash as string | undefined;
-    if (!txHash) {
-      return { result: {}, error: invalidResponse('txHash required') };
-    }
-    // Horizon /transactions/{txHash} response shape.
-    const success = !txHash.includes('fail');
-    return {
-      result: {
-        id: txHash,
-        paging_token: deterministicHash(txHash).padStart(16, '0'),
-        hash: txHash,
-        ledger: 18000000 + (parseInt(deterministicHash(txHash).slice(0, 6), 16) % 100000),
-        created_at: new Date().toISOString(),
-        source_account: `G${deterministicHash(txHash + 'src').padEnd(55, 'A').slice(0, 55)}`,
-        successful: success,
-        envelope_xdr: `AAAAAG${deterministicHash(txHash + 'env').slice(0, 60).toUpperCase()}==`,
-        result_xdr: success ? 'AAAAAAAAAGQAAAAAAAAAAQAAAAAAAAAB' : 'AAAAAAAAAGT/////AAAAAQ==',
-        fee_meta_xdr: `AAAAAM${deterministicHash(txHash + 'fee').slice(0, 60).toUpperCase()}==`,
-        fee_charged: 100,
-        max_fee: 100,
-        operation_count: 1,
-        _links: {
-          self: { href: `${this.config.endpoint}/transactions/${txHash}` },
-        },
-      },
-    };
-  }
-
-  private simGetLedger(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const sequence = request.params.sequence as number | undefined;
-    if (sequence == null) {
-      return { result: {}, error: invalidResponse('sequence required') };
-    }
-    // Horizon /ledgers/{sequence} response shape.
-    return {
-      result: {
-        id: `${deterministicHash(String(sequence)).padStart(64, '0')}`,
-        paging_token: String(sequence),
-        hash: `${deterministicHash(`ledger${sequence}`).padStart(64, '0')}`,
-        sequence,
-        successful_transaction_count: 10,
-        failed_transaction_count: 0,
-        operation_count: 10,
-        closed_at: new Date().toISOString(),
-        total_coins: '105000000000.0000000',
-        fee_pool: '100.0000000',
-        base_fee_in_stroops: 100,
-        base_reserve_in_stroops: '5000000',
-        max_tx_set_size: 1000,
-        protocol_version: 20,
-        header_xdr: `AAAAAM${deterministicHash(`hdr${sequence}`).slice(0, 60).toUpperCase()}==`,
-      },
-    };
-  }
-
-  private simSubmitTransaction(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const xdr = request.params.xdr as string | undefined;
-    if (!xdr) {
-      return { result: {}, error: invalidResponse('xdr required') };
-    }
-    // Horizon /transactions POST response shape (success).
-    // On failure, real Horizon returns { type: 'transaction_failed', status: 400, extras: { result_codes: {...} } }.
-    const txHash = `${deterministicHash(xdr + request.id).padEnd(64, '0').slice(0, 64)}`;
-    return {
-      result: {
-        hash: txHash,
-        ledger: 18000001,
-        envelope_xdr: xdr,
-        result_xdr: 'AAAAAAAAAGQAAAAAAAAAAQAAAAAAAAAB',
-        successful: true,
-        created_at: new Date().toISOString(),
-      },
-    };
-  }
-
-  private simGetEffects(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const txHash = request.params.txHash as string | undefined;
-    if (!txHash) {
-      return { result: {}, error: invalidResponse('txHash required') };
-    }
-    // Horizon /transactions/{txHash}/effects response shape.
-    return {
-      result: {
-        _embedded: {
-          records: [
-            {
-              id: `${txHash}-1`,
-              account: `G${deterministicHash(txHash + 'src').padEnd(55, 'A').slice(0, 55)}`,
-              type: 'account_credited',
-              amount: '100.0000000',
-              asset_type: 'native',
-              asset_code: 'XLM',
-            },
-            {
-              id: `${txHash}-2`,
-              account: `G${deterministicHash(txHash + 'dst').padEnd(55, 'A').slice(0, 55)}`,
-              type: 'account_debited',
-              amount: '100.0000000',
-              asset_type: 'native',
-              asset_code: 'XLM',
-            },
-          ],
-        },
-        _links: {
-          self: { href: `${this.config.endpoint}/transactions/${txHash}/effects` },
-        },
-      },
-    };
-  }
-
-  buildEvidence(request: ConnectorRequest, result: Record<string, unknown>): Evidence {
-    const address = request.params.address as string | undefined;
-    const txHash =
-      (request.params.txHash as string | undefined) ??
-      (result.hash as string | undefined);
-    const sequence =
-      (request.params.sequence as number | undefined) ??
-      (result.sequence as number | undefined);
-
-    let attestedAmount: number | undefined;
-    let attestedValue = '';
-
-    if (request.operation === 'getAccount' && address) {
-      const balances = result.balances as Array<{ balance: string; asset_code: string }> | undefined;
-      if (balances && balances.length > 0) {
-        attestedAmount = parseFloat(balances[0].balance);
-        attestedValue = `${attestedAmount} ${balances[0].asset_code} on ${address.slice(0, 12)}…`;
-      }
-    } else if (request.operation === 'getTransaction' && txHash) {
-      attestedValue = `Stellar tx ${txHash.slice(0, 12)}… success=${result.successful}`;
-    } else if (request.operation === 'submitTransaction') {
-      attestedValue = `Submitted Stellar tx ${result.hash}`;
-    } else if (request.operation === 'getLedger' && sequence != null) {
-      attestedValue = `Stellar ledger ${sequence}`;
-    } else if (request.operation === 'getEffects' && txHash) {
-      attestedValue = `Effects for Stellar tx ${txHash.slice(0, 12)}…`;
-    }
-
-    const entityId = address
-      ? `stellar-account:${address}`
-      : txHash
-      ? `stellar-tx:${txHash}`
-      : sequence != null
-      ? `stellar-ledger:${sequence}`
-      : 'stellar';
-
-    return buildAttestationEvidence({
+  protected buildEvidence(request: ConnectorRequest, result: unknown): Evidence {
+    const params = request.params;
+    const entityId =
+      (params['address'] as string | undefined) ??
+      (params['txHash'] as string | undefined) ??
+      request.id;
+    return createEvidence({
+      type: 'observation',
       source: 'on_chain_state',
       verificationLevel: 'cryptographic',
       entityId,
-      attester: this.config.id,
-      attestedAmount,
-      currency: 'XLM',
+      attester: 'stellar-horizon-connector-v2',
       reputation: 1.0,
-      ttlMs: 999_999_999,
-      payload: {
-        connector: this.config.id,
-        connectorType: this.config.type,
-        operation: request.operation,
-        attestedValue,
-        address,
-        txHash,
-        ledger: sequence,
-        horizonEndpoint: this.config.endpoint,
-      },
+      payload: { operation: request.operation, requestId: request.id, result },
     });
   }
 
   async healthCheck(): Promise<{ healthy: boolean; latencyMs: number }> {
     const start = Date.now();
-    return { healthy: true, latencyMs: Math.floor(Math.random() * 100) + 30 };
+    return { healthy: true, latencyMs: Date.now() - start };
   }
-}
 
-/** Deterministic account sequence (string-encoded bigint). */
-function deterministicSequence(address: string): string {
-  const h = deterministicHash(address + 'sequence');
-  const n = BigInt('0x' + h + deterministicHash(address).padStart(16, '0'));
-  return n.toString();
+  // ----------------------------------------------------------------- getAccount
+  private getAccount(params: Record<string, unknown>): DoQueryResult {
+    const address = params['address'] as string | undefined;
+    if (!address) {
+      return { ok: false, error: invalidResponse('address_required') };
+    }
+    let account = this.accounts.get(address);
+    if (!account) {
+      // Lazily create a stub account so callers can fetch any address.
+      account = {
+        address,
+        balances: [
+          { asset: 'native', balance: pseudoNativeBalance(address) },
+        ],
+        sequence: 1,
+        subentryCount: 0,
+        createdAt: Date.now(),
+      };
+      this.accounts.set(address, account);
+    }
+    return { ok: true, data: account };
+  }
+
+  // -------------------------------------------------------------- getTransaction
+  private getTransaction(params: Record<string, unknown>): DoQueryResult {
+    const txHash = params['txHash'] as string | undefined;
+    if (!txHash) {
+      return { ok: false, error: invalidResponse('txHash_required') };
+    }
+    const tx = this.transactions.get(txHash);
+    if (!tx) {
+      return { ok: false, error: invalidResponse(`transaction_not_found:${txHash}`) };
+    }
+    return { ok: true, data: tx };
+  }
+
+  // ----------------------------------------------------------- submitTransaction
+  private submitTransaction(params: Record<string, unknown>): DoQueryResult {
+    const xdr = params['xdr'] as string | undefined;
+    if (!xdr) {
+      return { ok: false, error: invalidResponse('xdr_required') };
+    }
+    const hash = uid('stellartx');
+    const tx: StellarTxRecord = {
+      hash,
+      sourceAccount: 'simulated-source',
+      successful: true,
+      ledger: Math.floor(Math.random() * 1_000_000) + 1,
+      feePaid: 100,
+      operationCount: 1,
+      createdAt: Date.now(),
+      envelopeXdr: xdr,
+      resultXdr: 'AAAAAAAAAGQAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAA=',
+    };
+    this.transactions.set(hash, tx);
+    return {
+      ok: true,
+      data: {
+        hash,
+        successful: tx.successful,
+        ledger: tx.ledger,
+        feePaid: tx.feePaid,
+        createdAt: tx.createdAt,
+      },
+    };
+  }
 }

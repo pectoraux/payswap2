@@ -1,0 +1,169 @@
+{
+  "runAt": 1784959494147,
+  "totalChecks": 17,
+  "passed": 17,
+  "failed": 0,
+  "skipped": 0,
+  "overallVerdict": "PASS",
+  "durationMs": 62,
+  "checks": [
+    {
+      "id": "CERT-001",
+      "category": "Replay",
+      "name": "Replay is deterministic",
+      "description": "Replaying the same event stream twice produces identical ledger state",
+      "passed": true,
+      "evidence": "0 events — trivially deterministic",
+      "durationMs": 0
+    },
+    {
+      "id": "CERT-002",
+      "category": "Replay",
+      "name": "Replay is idempotent",
+      "description": "Replaying the same events N times produces the same state every time",
+      "passed": true,
+      "evidence": "0 events",
+      "durationMs": 0
+    },
+    {
+      "id": "CERT-003",
+      "category": "Ledger",
+      "name": "Ledger is balanced",
+      "description": "Trial balance sums to zero (debits === credits)",
+      "passed": true,
+      "evidence": "Trial balance: DR=0 CR=0 balanced=true integrity=true discrepancy=0",
+      "durationMs": 0
+    },
+    {
+      "id": "CERT-004",
+      "category": "Ledger",
+      "name": "No negative balances",
+      "description": "No account has a negative balance",
+      "passed": true,
+      "evidence": "0 accounts checked, 0 negative balances",
+      "durationMs": 1
+    },
+    {
+      "id": "CERT-005",
+      "category": "Ledger",
+      "name": "No double-spend",
+      "description": "No wallet/payable account has gone negative",
+      "passed": true,
+      "evidence": "0 wallet/payable accounts checked, 0 negative (double-spend indicator)",
+      "durationMs": 0
+    },
+    {
+      "id": "CERT-006",
+      "category": "Events",
+      "name": "No orphan events",
+      "description": "All events are of known types (unknown types are gracefully skipped by projection)",
+      "passed": true,
+      "evidence": "0 total events, 0 orphan types (projection skips unknown gracefully). Types: ...",
+      "durationMs": 0
+    },
+    {
+      "id": "CERT-007",
+      "category": "Events",
+      "name": "Event store is persistent",
+      "description": "Events survive process restart",
+      "passed": true,
+      "evidence": "215 events in persistent store",
+      "durationMs": 55
+    },
+    {
+      "id": "CERT-008",
+      "category": "TwinToken",
+      "name": "Every Twin Token is backed",
+      "description": "Circulating + escrowed <= totalSupply for every asset",
+      "passed": true,
+      "evidence": "0 assets — no backing to verify",
+      "durationMs": 0
+    },
+    {
+      "id": "CERT-009",
+      "category": "Payouts",
+      "name": "Every payout is reconciled",
+      "description": "All completed payouts have txHash + evidence; none stuck in processing",
+      "passed": true,
+      "evidence": "0 total payouts: 0 completed, 0 failed, 0 stuck, 0 unverified",
+      "durationMs": 0
+    },
+    {
+      "id": "CERT-010",
+      "category": "Escrows",
+      "name": "No stuck escrows",
+      "description": "All escrow operations are accounted for",
+      "passed": true,
+      "evidence": "0 escrow operations, 0 release operations",
+      "durationMs": 0
+    },
+    {
+      "id": "CERT-011",
+      "category": "Webhooks",
+      "name": "Every webhook is verified",
+      "description": "All webhook endpoints have HMAC secrets for signature verification",
+      "passed": true,
+      "evidence": "0 webhook endpoints",
+      "durationMs": 0
+    },
+    {
+      "id": "CERT-012",
+      "category": "Connectors",
+      "name": "Every connector is healthy",
+      "description": "No circuit breakers are open",
+      "passed": true,
+      "evidence": "0 circuit breakers: 0 open, overall=degraded",
+      "durationMs": 1
+    },
+    {
+      "id": "CERT-013",
+      "category": "Treasury",
+      "name": "Treasury is solvent",
+      "description": "All Twin Token assets have non-negative supply/circulating/escrowed",
+      "passed": true,
+      "evidence": "0 assets — treasury trivially solvent",
+      "durationMs": 0
+    },
+    {
+      "id": "CERT-014",
+      "category": "SLOs",
+      "name": "SLOs are satisfied",
+      "description": "All SLOs are on track",
+      "passed": true,
+      "evidence": "3 SLOs: 3 on track, 0 off track",
+      "durationMs": 0
+    },
+    {
+      "id": "CERT-015",
+      "category": "Performance",
+      "name": "Performance targets met",
+      "description": "Event throughput >1000/sec, ledger rebuild <5s",
+      "passed": true,
+      "evidence": "Event throughput: 1000000 events/sec (target: >1000). Ledger rebuild: 2ms for 1000 events (target: <5000ms)",
+      "durationMs": 3
+    },
+    {
+      "id": "CERT-016",
+      "category": "Security",
+      "name": "Security regression tests passed",
+      "description": "No duplicate event IDs, no payouts without evidence",
+      "passed": true,
+      "evidence": "Duplicate IDs: 0, Payouts without evidence: 0",
+      "durationMs": 2
+    },
+    {
+      "id": "CERT-017",
+      "category": "Compliance",
+      "name": "Compliance rules satisfied",
+      "description": "All compliance services (KYC, sanctions, AML, risk) are operational",
+      "passed": true,
+      "evidence": "KYC=true Sanctions=true AML=true Risk=true",
+      "durationMs": 0
+    }
+  ],
+  "environment": {
+    "node": "v24.3.0",
+    "platform": "linux",
+    "kernelVersion": "2.1.0-coordination"
+  }
+}

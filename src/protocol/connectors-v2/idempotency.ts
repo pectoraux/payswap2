@@ -1,81 +1,74 @@
 /**
  * PaySwap Protocol — Production Connectors v2 — Idempotency Store.
  *
- * In-memory Map keyed by idempotency key → cached response. Each entry has
- * a TTL; expired entries are lazily evicted on read.
+ * Every connector request carries an `id` that doubles as the idempotency
+ * key. When a retry (or a duplicate client request) re-sends the same key,
+ * the store returns the cached response instead of hitting the upstream
+ * again. This is critical for rails like M-Pesa STK Push where a retry
+ * could otherwise double-charge a customer.
  *
- * Contract:
- *   - A request with the same key within the TTL window returns the cached
- *     response WITHOUT calling doQuery.
- *   - Cache hits report `attempts: 0` (the upstream was never touched).
- *   - On cache hit, the requestId is re-stamped by the caller (see base.ts).
- *
- * In production this would be Redis with a TTL index. The Map shape is the
- * same — drop-in replaceable.
+ * The store is in-memory and TTL-bounded — entries older than
+ * `idempotencyTtlMs` (default 24h) are evicted on access. This is enough
+ * for a single-process runtime; a multi-replica deployment would swap this
+ * for a Redis-backed implementation behind the same interface.
  */
 import type { ConnectorResponse } from './types';
 
-interface CacheEntry {
+interface CachedEntry {
   response: ConnectorResponse;
   expiresAt: number;
 }
 
 export class IdempotencyStore {
-  private cache: Map<string, CacheEntry> = new Map();
+  private store = new Map<string, CachedEntry>();
 
-  /** Get a cached response. Returns undefined if absent or expired. */
+  /** Look up a cached response. Returns undefined if missing or expired. */
   get(key: string): ConnectorResponse | undefined {
-    const entry = this.cache.get(key);
+    const entry = this.store.get(key);
     if (!entry) return undefined;
     if (Date.now() >= entry.expiresAt) {
-      // Lazy eviction.
-      this.cache.delete(key);
+      this.store.delete(key);
       return undefined;
     }
-    return entry.response;
+    // Return a shallow copy with the original requestId preserved so callers
+    // can see this came from the cache.
+    return { ...entry.response };
   }
 
-  /** Cache a response with the given TTL. */
+  /** Cache a response under `key` with the given TTL. */
   set(key: string, response: ConnectorResponse, ttlMs: number): void {
-    // Don't cache error responses — only successes. A failed request can be
-    // retried by the caller with the same key (e.g. transient NETWORK).
-    if (!response.success) return;
-    this.cache.set(key, {
+    if (ttlMs <= 0) return;
+    this.store.set(key, {
       response,
       expiresAt: Date.now() + ttlMs,
     });
   }
 
-  /** Whether the key is present and unexpired. */
+  /** True if a non-expired entry exists for `key`. */
   has(key: string): boolean {
     return this.get(key) !== undefined;
   }
 
-  /** Drop a single key. */
-  delete(key: string): void {
-    this.cache.delete(key);
-  }
-
-  /** Clear all cached entries. */
+  /** Remove all entries. */
   clear(): void {
-    this.cache.clear();
+    this.store.clear();
   }
 
-  /** Sweep all expired entries. Returns the count evicted. */
-  sweep(): number {
+  /** Drop expired entries. Called opportunistically; cheap to run often. */
+  prune(): number {
     const now = Date.now();
-    let evicted = 0;
-    for (const [key, entry] of this.cache) {
+    let removed = 0;
+    for (const [key, entry] of this.store) {
       if (now >= entry.expiresAt) {
-        this.cache.delete(key);
-        evicted += 1;
+        this.store.delete(key);
+        removed++;
       }
     }
-    return evicted;
+    return removed;
   }
 
-  /** Current entry count (including expired-but-not-yet-evicted). */
+  /** Number of entries currently cached (including possibly-expired ones). */
   size(): number {
-    return this.cache.size;
+    return this.store.size;
   }
 }

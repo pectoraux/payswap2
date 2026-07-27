@@ -1,0 +1,99 @@
+# =============================================================================
+# PaySwap — Development / CI Docker Compose
+# =============================================================================
+# Brings up the Next.js app + a production-like Postgres + Redis so the
+# full stack can be tested locally or in CI without external services.
+#
+# Usage:
+#   docker compose -f deploy/docker/docker-compose.yml up --build
+#   docker compose -f deploy/docker/docker-compose.yml run app bun run lint
+#   docker compose -f deploy/docker/docker-compose.yml run app bun run test
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Postgres — production-like database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: payswap-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: payswap
+      POSTGRES_PASSWORD: payswap_dev_password
+      POSTGRES_DB: payswap
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payswap -d payswap"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Redis — caching / rate-limit / pub-sub backing store
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: payswap-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # App — Next.js (PaySwap API + UI)
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: payswap-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      # Database (Prisma) — points at the postgres service.
+      DATABASE_URL: "postgresql://payswap:payswap_dev_password@postgres:5432/payswap?schema=public"
+      # Redis — points at the redis service.
+      REDIS_URL: "redis://redis:6379"
+      # Feature flags — production-safe defaults (everything simulation
+      # mode, compliance + treasury gates on, analytics on).
+      FEATURE_FLAG_LIVE_STELLAR: "false"
+      FEATURE_FLAG_REAL_CONNECTORS: "false"
+      FEATURE_FLAG_MULTI_REGION: "false"
+      FEATURE_FLAG_COMPLIANCE_ENFORCEMENT: "true"
+      FEATURE_FLAG_TREASURY_GATES: "true"
+      FEATURE_FLAG_ADVANCED_ANALYTICS: "true"
+      # Secret management — env provider in dev, Vault in prod.
+      SECRET_PROVIDER: "env"
+      # VAULT_ADDRESS: ""
+      # VAULT_TOKEN: ""
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "bun -e \"fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  postgres_data:
+  redis_data:

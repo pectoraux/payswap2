@@ -1,450 +1,413 @@
 /**
- * Treasury v2 — High-level facade.
+ * PaySwap Protocol — Treasury Operations Center (v2) — Treasury Engine.
  *
- * The TreasuryEngine wires together every treasury subsystem (reserve monitor,
- * limit engines, backing verifier, freeze engine, alert engine, yield engine,
- * corridor balancer) and exposes a single entry point for the rest of the
- * protocol.
+ * High-level facade that binds every treasury sub-service together.
+ * This is the single entry point the protocol layer (settlement
+ * engine, mint/burn service, etc.) uses to interact with the
+ * treasury.
  *
- * Responsibilities:
- *   - `init(opts)`: bind the twin-token engine + stellar adapter + liquidity
- *     network, start periodic background checks (reserve sync, backing verify,
- *     alert checks, corridor balancing, freeze sweep). Returns an object with
- *     a `stopAll()` function and individual stop callbacks.
- *   - `preMintHook(assetCode, amount)`: called by the twin-token engine before
- *     minting. Checks (in order): asset freeze, mint limit, backing sufficiency.
- *     Returns `{ allowed: boolean; reason? }`.
- *   - `preBurnHook(assetCode, amount)`: same for burns. Checks: asset freeze,
- *     burn limit. (Backing is always improved by burning — no check needed.)
- *   - `preTransferHook(assetCode, amount, from, to)`: checks asset freeze and
- *     account freeze.
- *   - `status()`: a full treasury snapshot (alias to generateDailyTreasuryReport).
- *   - `dailyReport()`: same as status(), explicit name for the daily report.
+ * Public contract:
+ *   - `init(opts)`             — wire up dependencies, start periodic
+ *                                 checks (reserve refresh + forecast
+ *                                 refresh). Returns `stop` functions.
+ *   - `preMintHook(asset, amt)` — the GATE every mint goes through.
+ *                                 Checks (in order): freeze status,
+ *                                 daily limit, per-tx limit, cooldown,
+ *                                 backing sufficiency. Returns
+ *                                 `{allowed, reason?}` — `allowed: false`
+ *                                 blocks the mint.
+ *   - `preBurnHook(asset, amt)` — the GATE every burn goes through.
+ *                                 Checks: freeze status, daily limit,
+ *                                 per-tx limit. Returns `{allowed, reason?}`.
+ *   - `status()`                — the live `TreasuryReport` snapshot.
+ *   - `dailyReport()`           — alias for `treasuryReports.generateDailyTreasuryReport()`.
+ *   - `runStressTests()`        — runs all stress test scenarios.
  *
- * Invariants enforced by the facade:
- *  1. No mint can exceed the daily limit or per-tx limit (checked by
- *     `mintLimitEngine.checkMint`).
- *  2. No mint can occur if backing is insufficient (checked by
- *     `backingVerifier.onMint`).
- *  3. No mint/burn/transfer can occur if the asset is emergency-frozen
- *     (checked by `emergencyFreezeEngine.isFrozen`).
- *  4. Backing ratio is always ≥ 1.0 after a successful backing verification OR
- *     an alert is raised (the alert engine raises `backing_mismatch` alerts on
- *     the periodic check + on the pre-mint hook denial).
- *  5. Emergency freezes are auditable (every freeze / lift emits an event with
- *     initiator + reason — enforced by `EmergencyFreezeEngine`).
+ * Events emitted on the kernel `eventEngine`:
+ *  - `treasury.pre_mint_blocked`  — when preMintHook blocks a mint.
+ *  - `treasury.pre_mint_approved` — when preMintHook approves a mint.
+ *  - `treasury.pre_burn_blocked`  — when preBurnHook blocks a burn.
+ *  - `treasury.pre_burn_approved` — when preBurnHook approves a burn.
+ *  - `treasury.periodic_check`    — after each periodic reserve check.
+ *
+ * The kernel is FROZEN — this module imports only `nowTs` from
+ * `@/kernel/support` and `eventEngine` from `@/kernel/event`. No
+ * kernel files are modified.
  */
-import { round } from '@/kernel/support';
+import { nowTs } from '@/kernel/support';
 import { eventEngine } from '@/kernel/event';
-import type { TwinTokenEngine } from '@/protocol/twin-token/engine';
-import type { StellarAdapter } from '@/protocol/blockchains/stellar/adapter';
-import type { LiquidityNetwork } from '@/protocol/liquidity-network';
+import type {
+  LimitCheckResult,
+  TreasuryReport,
+  TreasuryEngineOptions,
+} from './types';
+import { reserveMonitor } from './reserve-monitor';
+import { mintLimitEngine, burnLimitEngine } from './limits';
+import { backingVerifier } from './backing';
+import { liquidityForecaster } from './forecasting';
+import { corridorFundingService } from './corridor-funding';
+import { lpProfitabilityService } from './lp-profitability';
+import { stressTestService } from './stress-test';
+import { treasuryReports } from './reports';
 
-import type { HookResult, TreasuryReport } from './types';
-import { reserveMonitor, type ReserveMonitor } from './reserve';
-import { mintLimitEngine, burnLimitEngine, type MintLimitEngine, type BurnLimitEngine } from './limits';
-import { backingVerifier, type BackingVerifier } from './backing';
-import { corridorBalancer, type CorridorBalancer } from './balancing';
-import { emergencyFreezeEngine, type EmergencyFreezeEngine } from './freezes';
-import { alertEngine, type AlertEngine } from './alerts';
-import { yieldEngine, type YieldEngine } from './yield';
-import {
-  generateDailyTreasuryReport,
-  generateSettlementReport,
-  generateCapitalReport,
-  type ReportDeps,
-  type SettlementReport,
-  type CapitalReport,
-} from './reports';
-import type { TreasuryCorridor } from './types';
-
-/** Options for `TreasuryEngine.init()`. */
-export interface TreasuryInitOpts {
-  twinTokenEngine: TwinTokenEngine;
-  stellarAdapter?: StellarAdapter;
-  liquidityNetwork?: LiquidityNetwork;
-  /** Periodic check intervals (ms). Defaults: 60s reserve sync, 30s backing verify, 30s alerts, 60s corridor balancing, 60s freeze sweep. */
-  intervals?: {
-    reserveSyncMs?: number;
-    backingVerifyMs?: number;
-    alertCheckMs?: number;
-    corridorBalanceMs?: number;
-    freezeSweepMs?: number;
-  };
-  /** Low-reserve thresholds per currency (for the alert check). */
-  lowReserveThresholds?: Record<string, number>;
-}
-
-/** Result of `TreasuryEngine.init()` — holds the stop callbacks. */
-export interface TreasuryInitResult {
-  /** Stop all periodic checks. */
-  stopAll: () => void;
-  /** Individual stop functions (one per periodic check). */
-  stops: Array<() => void>;
+/** Outcome of a pre-mint / pre-burn hook. */
+export interface HookResult extends LimitCheckResult {
+  /** The checks that were performed + their outcomes. */
+  checks: Array<{ name: string; passed: boolean; reason?: string }>;
 }
 
 /**
- * TreasuryEngine — high-level facade tying together all treasury subsystems.
+ * Treasury engine — the financial control tower facade.
  */
 export class TreasuryEngine {
-  /** Bound twin-token engine (set on init). */
-  private twinTokenEngine: TwinTokenEngine | null = null;
-  /** Bound stellar adapter (optional — set on init if supplied). */
-  private stellarAdapter: StellarAdapter | null = null;
-  /** Bound liquidity network (optional — set on init if supplied). */
-  private liquidityNetwork: LiquidityNetwork | null = null;
-  /** Low-reserve thresholds for the periodic alert check. */
-  private lowReserveThresholds: Record<string, number> = {};
-  /** Stop callbacks from the last init() call. */
-  private stops: Array<() => void> = [];
+  private initialised = false;
+  private opts: Required<TreasuryEngineOptions>;
+  private timers: Array<() => void> = [];
 
-  /**
-   * Initialize the treasury engine: bind dependencies, start periodic checks.
-   * Returns an object with `stopAll()` and individual `stops`.
-   *
-   * Calling `init()` multiple times will stop the previous periodic checks
-   * before starting new ones (idempotent re-init).
-   */
-  init(opts: TreasuryInitOpts): TreasuryInitResult {
-    // Stop any previously-started periodic checks.
-    this.stopAll();
-
-    this.twinTokenEngine = opts.twinTokenEngine;
-    this.stellarAdapter = opts.stellarAdapter ?? null;
-    this.liquidityNetwork = opts.liquidityNetwork ?? null;
-    this.lowReserveThresholds = opts.lowReserveThresholds ?? {};
-
-    // Bind the twin-token engine to the reserve monitor so backing ratios are
-    // computed from live circulating / escrowed numbers.
-    reserveMonitor.bindTwinTokenEngine(opts.twinTokenEngine);
-
-    const intervals = opts.intervals ?? {};
-    const reserveSyncMs = intervals.reserveSyncMs ?? 60_000;
-    const backingVerifyMs = intervals.backingVerifyMs ?? 30_000;
-    const alertCheckMs = intervals.alertCheckMs ?? 30_000;
-    const corridorBalanceMs = intervals.corridorBalanceMs ?? 60_000;
-    const freezeSweepMs = intervals.freezeSweepMs ?? 60_000;
-
-    const stops: Array<() => void> = [];
-
-    // 1. Periodic reserve sync (async — fire and forget).
-    if (this.stellarAdapter) {
-      const handle = setInterval(() => {
-        void reserveMonitor.syncFromChain(this.stellarAdapter!);
-      }, reserveSyncMs);
-      stops.push(() => clearInterval(handle));
-    }
-
-    // 2. Periodic backing verification.
-    {
-      const handle = setInterval(() => {
-        if (!this.twinTokenEngine) return;
-        const { allVerified, results } = backingVerifier.verifyAll(
-          this.twinTokenEngine,
-          reserveMonitor,
-        );
-        if (!allVerified) {
-          for (const r of results) {
-            if (!r.verified) {
-              alertEngine.raise({
-                severity: 'critical',
-                type: 'backing_mismatch',
-                assetCode: r.assetCode,
-                target: r.assetCode,
-                message: `Backing mismatch for ${r.assetCode}: ratio=${r.backingRatio}, discrepancy=${r.discrepancy}`,
-              });
-            }
-          }
-        }
-      }, backingVerifyMs);
-      stops.push(() => clearInterval(handle));
-    }
-
-    // 3. Periodic alert checks (reserves + corridors).
-    {
-      const handle = setInterval(() => {
-        alertEngine.checkReserves(reserveMonitor, this.lowReserveThresholds);
-        if (this.twinTokenEngine) {
-          alertEngine.checkBacking(backingVerifier, this.twinTokenEngine, reserveMonitor);
-        }
-        alertEngine.checkCorridors(corridorBalancer, reserveMonitor);
-      }, alertCheckMs);
-      stops.push(() => clearInterval(handle));
-    }
-
-    // 4. Periodic corridor balancing.
-    if (this.liquidityNetwork) {
-      const handle = setInterval(() => {
-        corridorBalancer.rebalanceAll(this.liquidityNetwork!, reserveMonitor);
-      }, corridorBalanceMs);
-      stops.push(() => clearInterval(handle));
-    }
-
-    // 5. Periodic freeze sweep (lift expired freezes).
-    {
-      const handle = setInterval(() => {
-        emergencyFreezeEngine.sweepExpired();
-      }, freezeSweepMs);
-      stops.push(() => clearInterval(handle));
-    }
-
-    this.stops = stops;
-
-    eventEngine.emit('treasury.initialized', {
-      intervals: { reserveSyncMs, backingVerifyMs, alertCheckMs, corridorBalanceMs, freezeSweepMs },
-      hasStellarAdapter: this.stellarAdapter !== null,
-      hasLiquidityNetwork: this.liquidityNetwork !== null,
-    }, 0);
-
-    return {
-      stops,
-      stopAll: () => this.stopAll(),
+  constructor(opts?: TreasuryEngineOptions) {
+    this.opts = {
+      checkIntervalMs: opts?.checkIntervalMs ?? 60_000,
+      forecastIntervalMs: opts?.forecastIntervalMs ?? 300_000,
+      defaultReserveAlertThreshold: opts?.defaultReserveAlertThreshold ?? 0.20,
+      costOfCapitalApr: opts?.costOfCapitalApr ?? 0.08,
+      opexPerSettlement: opts?.opexPerSettlement ?? 0.10,
     };
   }
 
-  /** Stop all periodic checks started by `init()`. */
-  stopAll(): void {
-    for (const stop of this.stops) {
-      try { stop(); } catch { /* ignore */ }
+  /**
+   * Initialise the treasury engine — wire up cross-service
+   * dependencies and start periodic checks.
+   *
+   * Returns an array of `stop` functions (one per periodic task).
+   * Call each to stop the corresponding periodic check.
+   */
+  init(initOpts?: TreasuryEngineOptions): Array<() => void> {
+    if (initOpts) {
+      this.opts = {
+        checkIntervalMs: initOpts.checkIntervalMs ?? this.opts.checkIntervalMs,
+        forecastIntervalMs: initOpts.forecastIntervalMs ?? this.opts.forecastIntervalMs,
+        defaultReserveAlertThreshold: initOpts.defaultReserveAlertThreshold ?? this.opts.defaultReserveAlertThreshold,
+        costOfCapitalApr: initOpts.costOfCapitalApr ?? this.opts.costOfCapitalApr,
+        opexPerSettlement: initOpts.opexPerSettlement ?? this.opts.opexPerSettlement,
+      };
     }
-    this.stops = [];
+
+    // Wire up the reserve monitor's threshold default.
+    reserveMonitor.setDefaultThreshold(this.opts.defaultReserveAlertThreshold);
+
+    // Wire up the backing verifier's reserve resolver: for an asset
+    // code like `TWINGHS`, the reserve is the available GHS balance.
+    backingVerifier.setReserveResolver((assetCode) => {
+      const currency = assetCode.startsWith('TWIN') ? assetCode.slice(4) : assetCode;
+      return reserveMonitor.available(currency);
+    });
+
+    // Wire up LP profitability cost parameters.
+    lpProfitabilityService.setCostOfCapitalApr(this.opts.costOfCapitalApr);
+    lpProfitabilityService.setOpexPerSettlement(this.opts.opexPerSettlement);
+
+    // Start periodic tasks.
+    const stopCheck = this.startPeriodicCheck();
+    const stopForecast = this.startPeriodicForecast();
+    this.timers = [stopCheck, stopForecast];
+
+    this.initialised = true;
+    eventEngine.emit('treasury.initialised', {
+      checkIntervalMs: this.opts.checkIntervalMs,
+      forecastIntervalMs: this.opts.forecastIntervalMs,
+      ts: nowTs(),
+    });
+    return this.timers;
+  }
+
+  /** Stop all periodic tasks. */
+  shutdown(): void {
+    for (const stop of this.timers) stop();
+    this.timers = [];
+    this.initialised = false;
+    eventEngine.emit('treasury.shutdown', { ts: nowTs() });
+  }
+
+  /** Is the engine initialised? */
+  isInitialised(): boolean {
+    return this.initialised;
   }
 
   /**
-   * Pre-mint hook — called by the twin-token engine before minting. Checks:
-   *   1. Asset is not emergency-frozen.
-   *   2. Mint limit allows the amount (daily + per-tx + cooldown).
-   *   3. Reserve can back the new tokens.
+   * Pre-mint hook — the GATE every mint goes through.
    *
-   * Returns `{ allowed: true }` if all checks pass, otherwise
-   * `{ allowed: false, reason }`.
+   * Checks (in order):
+   *   1. asset is not frozen (compliance hold)
+   *   2. daily limit (24h rolling window)
+   *   3. per-tx limit
+   *   4. cooldown
+   *   5. backing sufficiency
+   *
+   * Returns `{allowed: true}` if all checks pass; otherwise
+   * `{allowed: false, reason}` with the first failing check's
+   * reason. Emits `treasury.pre_mint_approved` or
+   * `treasury.pre_mint_blocked` accordingly.
    */
   preMintHook(assetCode: string, amount: number): HookResult {
-    // 1. Asset freeze check.
-    if (emergencyFreezeEngine.isFrozen('asset', assetCode)) {
-      eventEngine.emit('treasury.mint_blocked', {
-        assetCode, amount, reason: 'asset_frozen',
-      }, 0);
-      return { allowed: false, reason: 'asset_frozen' };
+    const checks: HookResult['checks'] = [];
+
+    // 1. freeze status
+    const frozen = treasuryReports.isFrozen(assetCode);
+    checks.push({
+      name: 'freeze_status',
+      passed: !frozen,
+      reason: frozen ? 'asset_frozen' : undefined,
+    });
+    if (frozen) {
+      const result: HookResult = {
+        allowed: false,
+        reason: `asset_frozen:${assetCode}`,
+        checks,
+      };
+      this.emitMintBlocked(assetCode, amount, result);
+      return result;
     }
 
-    // 2. Mint limit check.
+    // 2-4. mint limit (daily + per-tx + cooldown in one call).
     const limitCheck = mintLimitEngine.checkMint(assetCode, amount);
+    checks.push({
+      name: 'mint_limit',
+      passed: limitCheck.allowed,
+      reason: limitCheck.reason,
+    });
     if (!limitCheck.allowed) {
-      alertEngine.raise({
-        severity: 'warning',
-        type: 'mint_limit_exceeded',
-        assetCode,
-        target: assetCode,
-        message: `Mint of ${amount} ${assetCode} blocked: ${limitCheck.reason}`,
-      });
-      eventEngine.emit('treasury.mint_blocked', {
-        assetCode, amount, reason: limitCheck.reason, remainingDaily: limitCheck.remainingDaily,
-      }, 0);
-      return { allowed: false, reason: limitCheck.reason };
+      const result: HookResult = {
+        allowed: false,
+        reason: limitCheck.reason,
+        remainingDaily: limitCheck.remainingDaily,
+        checks,
+      };
+      this.emitMintBlocked(assetCode, amount, result);
+      return result;
     }
 
-    // 3. Backing check.
-    if (this.twinTokenEngine) {
-      const canBack = backingVerifier.onMint(
-        assetCode, amount, this.twinTokenEngine, reserveMonitor,
-      );
-      if (!canBack) {
-        alertEngine.raise({
-          severity: 'critical',
-          type: 'backing_mismatch',
-          assetCode,
-          target: assetCode,
-          message: `Mint of ${amount} ${assetCode} blocked: insufficient reserve to back post-mint liabilities`,
-        });
-        eventEngine.emit('treasury.mint_blocked', {
-          assetCode, amount, reason: 'backing_insufficient',
-        }, 0);
-        return { allowed: false, reason: 'backing_insufficient' };
-      }
+    // 5. backing sufficiency.
+    const backingCheck = backingVerifier.onMint(assetCode, amount);
+    checks.push({
+      name: 'backing_sufficiency',
+      passed: backingCheck.allowed,
+      reason: backingCheck.reason,
+    });
+    if (!backingCheck.allowed) {
+      const result: HookResult = {
+        allowed: false,
+        reason: backingCheck.reason,
+        remainingDaily: limitCheck.remainingDaily,
+        checks,
+      };
+      this.emitMintBlocked(assetCode, amount, result);
+      return result;
     }
 
-    return { allowed: true };
+    const result: HookResult = {
+      allowed: true,
+      remainingDaily: limitCheck.remainingDaily,
+      checks,
+    };
+    eventEngine.emit('treasury.pre_mint_approved', {
+      assetCode, amount,
+      remainingDaily: limitCheck.remainingDaily,
+      ts: nowTs(),
+    });
+    return result;
   }
 
   /**
-   * Pre-burn hook — called by the twin-token engine before burning. Checks:
-   *   1. Asset is not emergency-frozen.
-   *   2. Burn limit allows the amount.
+   * Pre-burn hook — the GATE every burn goes through.
    *
-   * (Backing is always improved by burning — no check needed.)
+   * Checks (in order):
+   *   1. asset is not frozen
+   *   2. daily burn limit
+   *   3. per-tx burn limit
+   *
+   * Burns are less risky than mints (burning reduces supply which
+   * is always backed), so we skip the backing check.
    */
   preBurnHook(assetCode: string, amount: number): HookResult {
-    if (emergencyFreezeEngine.isFrozen('asset', assetCode)) {
-      eventEngine.emit('treasury.burn_blocked', {
-        assetCode, amount, reason: 'asset_frozen',
-      }, 0);
-      return { allowed: false, reason: 'asset_frozen' };
+    const checks: HookResult['checks'] = [];
+
+    const frozen = treasuryReports.isFrozen(assetCode);
+    checks.push({
+      name: 'freeze_status',
+      passed: !frozen,
+      reason: frozen ? 'asset_frozen' : undefined,
+    });
+    if (frozen) {
+      const result: HookResult = {
+        allowed: false,
+        reason: `asset_frozen:${assetCode}`,
+        checks,
+      };
+      this.emitBurnBlocked(assetCode, amount, result);
+      return result;
     }
 
     const limitCheck = burnLimitEngine.checkBurn(assetCode, amount);
+    checks.push({
+      name: 'burn_limit',
+      passed: limitCheck.allowed,
+      reason: limitCheck.reason,
+    });
     if (!limitCheck.allowed) {
-      eventEngine.emit('treasury.burn_blocked', {
-        assetCode, amount, reason: limitCheck.reason, remainingDaily: limitCheck.remainingDaily,
-      }, 0);
-      return { allowed: false, reason: limitCheck.reason };
+      const result: HookResult = {
+        allowed: false,
+        reason: limitCheck.reason,
+        remainingDaily: limitCheck.remainingDaily,
+        checks,
+      };
+      this.emitBurnBlocked(assetCode, amount, result);
+      return result;
     }
 
-    return { allowed: true };
-  }
-
-  /**
-   * Pre-transfer hook — called by the twin-token engine before a transfer.
-   * Checks:
-   *   1. Asset is not emergency-frozen.
-   *   2. Sender account is not emergency-frozen (in addition to the twin-token
-   *      engine's own compliance freeze).
-   */
-  preTransferHook(assetCode: string, _amount: number, from: string): HookResult {
-    if (emergencyFreezeEngine.isFrozen('asset', assetCode)) {
-      eventEngine.emit('treasury.transfer_blocked', {
-        assetCode, from, reason: 'asset_frozen',
-      }, 0);
-      return { allowed: false, reason: 'asset_frozen' };
-    }
-    if (emergencyFreezeEngine.isFrozen('account', from)) {
-      eventEngine.emit('treasury.transfer_blocked', {
-        assetCode, from, reason: 'account_frozen',
-      }, 0);
-      return { allowed: false, reason: 'account_frozen' };
-    }
-    return { allowed: true };
-  }
-
-  /**
-   * Record a successful mint — the twin-token engine calls this AFTER a mint
-   * is confirmed on-chain. Updates the mint limit engine's daily used counter
-   * and updates the reserve's `reserved` to reflect the new liability.
-   */
-  recordMint(assetCode: string, amount: number): void {
-    mintLimitEngine.recordMint(assetCode, amount);
-    // Increase the reserve's `reserved` to reflect the new liability.
-    const currency = assetCode.startsWith('TWIN') ? assetCode.slice(4) : assetCode;
-    const r = reserveMonitor.getReserve(currency);
-    if (r) {
-      reserveMonitor.setReserve(currency, r.balance, round(r.reserved + amount, 6));
-    }
-    reserveMonitor.refreshBackingRatios();
-  }
-
-  /**
-   * Record a successful burn — updates the burn limit engine's daily used
-   * counter and reduces the reserve's `reserved`.
-   */
-  recordBurn(assetCode: string, amount: number): void {
-    burnLimitEngine.recordBurn(assetCode, amount);
-    const currency = assetCode.startsWith('TWIN') ? assetCode.slice(4) : assetCode;
-    const r = reserveMonitor.getReserve(currency);
-    if (r) {
-      reserveMonitor.setReserve(currency, r.balance, round(Math.max(0, r.reserved - amount), 6));
-    }
-    reserveMonitor.refreshBackingRatios();
-  }
-
-  /** Build a ReportDeps object from the engine's bound subsystems. */
-  private deps(): ReportDeps {
-    if (!this.twinTokenEngine) {
-      throw new Error('TreasuryEngine not initialized — call init() first');
-    }
-    return {
-      reserveMonitor,
-      mintLimitEngine,
-      burnLimitEngine,
-      backingVerifier,
-      alertEngine,
-      yieldEngine,
-      twinTokenEngine: this.twinTokenEngine,
-      corridorBalancer,
-      emergencyFreezeEngine,
+    const result: HookResult = {
+      allowed: true,
+      remainingDaily: limitCheck.remainingDaily,
+      checks,
     };
-  }
-
-  /** Convenience accessor — the bound reserve monitor (or the singleton). */
-  getReserveMonitor(): ReserveMonitor { return reserveMonitor; }
-  /** Convenience accessor — the singleton mint limit engine. */
-  getMintLimitEngine(): MintLimitEngine { return mintLimitEngine; }
-  /** Convenience accessor — the singleton burn limit engine. */
-  getBurnLimitEngine(): BurnLimitEngine { return burnLimitEngine; }
-  /** Convenience accessor — the singleton backing verifier. */
-  getBackingVerifier(): BackingVerifier { return backingVerifier; }
-  /** Convenience accessor — the singleton alert engine. */
-  getAlertEngine(): AlertEngine { return alertEngine; }
-  /** Convenience accessor — the singleton yield engine. */
-  getYieldEngine(): YieldEngine { return yieldEngine; }
-  /** Convenience accessor — the singleton corridor balancer. */
-  getCorridorBalancer(): CorridorBalancer { return corridorBalancer; }
-  /** Convenience accessor — the singleton emergency freeze engine. */
-  getEmergencyFreezeEngine(): EmergencyFreezeEngine { return emergencyFreezeEngine; }
-
-  /** Full treasury snapshot — same as `dailyReport()`. */
-  status(now: number = Date.now()): TreasuryReport {
-    return generateDailyTreasuryReport(now, this.deps());
-  }
-
-  /** Daily treasury report. */
-  dailyReport(now: number = Date.now()): TreasuryReport {
-    return generateDailyTreasuryReport(now, this.deps());
-  }
-
-  /** Settlement report for a period. */
-  settlementReport(period: string, now: number = Date.now()): SettlementReport {
-    return generateSettlementReport(period, this.deps(), now);
-  }
-
-  /** Capital report. */
-  capitalReport(now: number = Date.now()): CapitalReport {
-    return generateCapitalReport(this.deps(), now);
+    eventEngine.emit('treasury.pre_burn_approved', {
+      assetCode, amount,
+      remainingDaily: limitCheck.remainingDaily,
+      ts: nowTs(),
+    });
+    return result;
   }
 
   /**
-   * Configure a corridor target envelope. Convenience wrapper around the
-   * singleton corridor balancer.
+   * Confirm a mint — call after the on-chain mint succeeds to
+   * update treasury state (limit usage, backing supply, reserve).
+   * Throws if the mint was not pre-approved (defence in depth).
    */
-  configureCorridor(
-    corridor: TreasuryCorridor,
-    targetReserve: number,
-    minReserve: number,
-    maxReserve: number,
-    rebalanceThreshold: number,
-  ): void {
-    corridorBalancer.configure({ corridor, targetReserve, minReserve, maxReserve, rebalanceThreshold });
+  confirmMint(assetCode: string, amount: number): void {
+    const pre = this.preMintHook(assetCode, amount);
+    if (!pre.allowed) {
+      throw new Error(`mint_not_approved:${pre.reason}`);
+    }
+    mintLimitEngine.recordMint(assetCode, amount);
+    backingVerifier.recordMint(assetCode, amount);
+    // Minting a TWIN token increases the reserve needed — but the
+    // actual fiat backing must already be in the reserve (the
+    // backing check verified it). So we don't credit the reserve
+    // here; the fiat was credited when the LP deposited it.
+    eventEngine.emit('treasury.mint_confirmed', { assetCode, amount, ts: nowTs() });
   }
 
   /**
-   * Emergency-freeze an asset. Convenience wrapper.
+   * Confirm a burn — call after the on-chain burn succeeds to
+   * update treasury state (limit usage, backing supply).
    */
-  freezeAsset(assetCode: string, reason: string, initiatedBy: string): void {
-    emergencyFreezeEngine.freezeAsset(assetCode, reason, initiatedBy);
+  confirmBurn(assetCode: string, amount: number): void {
+    const pre = this.preBurnHook(assetCode, amount);
+    if (!pre.allowed) {
+      throw new Error(`burn_not_approved:${pre.reason}`);
+    }
+    burnLimitEngine.recordBurn(assetCode, amount);
+    backingVerifier.recordBurn(assetCode, amount);
+    eventEngine.emit('treasury.burn_confirmed', { assetCode, amount, ts: nowTs() });
+  }
+
+  /** Live treasury status — the canonical `TreasuryReport` snapshot. */
+  status(): TreasuryReport {
+    return treasuryReports.generateDailyTreasuryReport();
+  }
+
+  /** Alias for `status()` — the daily report. */
+  dailyReport(): TreasuryReport {
+    return this.status();
+  }
+
+  /** Run all stress test scenarios + return the results. */
+  runStressTests() {
+    return stressTestService.runAllScenarios();
+  }
+
+  // --------------------------------------------------------------- internals
+
+  private emitMintBlocked(assetCode: string, amount: number, result: HookResult): void {
+    eventEngine.emit('treasury.pre_mint_blocked', {
+      assetCode, amount,
+      reason: result.reason,
+      checks: result.checks,
+      ts: nowTs(),
+    });
+  }
+
+  private emitBurnBlocked(assetCode: string, amount: number, result: HookResult): void {
+    eventEngine.emit('treasury.pre_burn_blocked', {
+      assetCode, amount,
+      reason: result.reason,
+      checks: result.checks,
+      ts: nowTs(),
+    });
   }
 
   /**
-   * Lift an emergency freeze. Convenience wrapper.
+   * Start the periodic reserve + alert check. Returns a `stop`
+   * function.
+   *
+   * Uses `setInterval` (server-side). Each tick:
+   *   1. Scans all reserves for low-reserve conditions.
+   *   2. Pushes any alerts into the report log.
+   *   3. Emits `treasury.periodic_check`.
    */
-  liftFreeze(freezeId: string): void {
-    emergencyFreezeEngine.lift(freezeId, this.twinTokenEngine ?? undefined);
+  private startPeriodicCheck(): () => void {
+    const interval = setInterval(() => {
+      const alerts = reserveMonitor.scanForLowReserves();
+      for (const a of alerts) treasuryReports.pushAlert(a);
+      const shortfallAlerts = liquidityForecaster.shortfallAlerts();
+      for (const sa of shortfallAlerts) {
+        treasuryReports.pushAlert({
+          id: sa.id,
+          level: 'warning',
+          category: 'forecast',
+          message: `Corridor ${sa.corridor.from}->${sa.corridor.to} projects shortfall of ${sa.projectedShortfallAmount.toFixed(2)} at ${new Date(sa.projectedShortfallTs).toISOString()}`,
+          ts: sa.ts,
+          subject: `${sa.corridor.from}->${sa.corridor.to}`,
+        });
+      }
+      eventEngine.emit('treasury.periodic_check', {
+        alerts: alerts.length + shortfallAlerts.length,
+        ts: nowTs(),
+      });
+    }, this.opts.checkIntervalMs);
+    // Don't keep the Node.js process alive just for this timer.
+    if (typeof interval === 'object' && interval && typeof interval.unref === 'function') {
+      interval.unref();
+    }
+    return () => clearInterval(interval);
   }
 
-  /** Reset all subsystem state (test helper). */
-  reset(): void {
-    this.stopAll();
-    this.twinTokenEngine = null;
-    this.stellarAdapter = null;
-    this.liquidityNetwork = null;
-    this.lowReserveThresholds = {};
-    reserveMonitor.reset();
-    mintLimitEngine.reset();
-    burnLimitEngine.reset();
-    corridorBalancer.reset();
-    emergencyFreezeEngine.reset();
-    alertEngine.reset();
-    yieldEngine.reset();
+  /**
+   * Start the periodic liquidity forecast refresh. Returns a `stop`
+   * function. Each tick scans for shortfall alerts (which auto-emit
+   * `treasury.shortfall_alert` events).
+   */
+  private startPeriodicForecast(): () => void {
+    const interval = setInterval(() => {
+      liquidityForecaster.shortfallAlerts();
+    }, this.opts.forecastIntervalMs);
+    if (typeof interval === 'object' && interval && typeof interval.unref === 'function') {
+      interval.unref();
+    }
+    return () => clearInterval(interval);
   }
 }
 
-/** Singleton treasury engine. */
-export const treasuryEngine = new TreasuryEngine();
+// ---------------------------------------------------------------------------
+// Singleton
+// ---------------------------------------------------------------------------
+
+declare global {
+  var __PAYSWAP_TREASURY_ENGINE: TreasuryEngine | undefined;
+}
+
+export const treasuryEngine: TreasuryEngine =
+  globalThis.__PAYSWAP_TREASURY_ENGINE ?? new TreasuryEngine();
+
+if (!globalThis.__PAYSWAP_TREASURY_ENGINE) {
+  globalThis.__PAYSWAP_TREASURY_ENGINE = treasuryEngine;
+}

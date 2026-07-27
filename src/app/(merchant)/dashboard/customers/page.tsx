@@ -1,156 +1,82 @@
-import { redirect } from 'next/navigation';
-import Link from 'next/link';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { db } from '@/lib/db';
-import { getEnvironment } from '@/lib/environment';
+import { Plus, Users as UsersIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/page-header';
+import { EmptyState } from '@/components/empty-state';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
-import { Users, ExternalLink } from 'lucide-react';
-import { CreateCustomerDialog } from '@/components/merchant/create-customer-dialog';
+import { requireMerchant } from '@/lib/auth-guards';
+import { db } from '@/lib/db';
+import { formatCurrency, formatDate, formatNumber } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
 export default async function CustomersPage() {
-  const session = await getServerSession(authOptions);
-  if (!session) redirect('/login');
-  const userId = (session?.user as any)?.id;
-  const userRole = await db.userRole.findFirst({
-    where: { userId, role: { in: ['MERCHANT', 'MERCHANT_STAFF'] } },
-  });
-  const merchantId = userRole?.merchantId;
-  if (!merchantId) redirect('/unauthorized');
+  const { merchant } = await requireMerchant();
 
-  const merchant = await db.merchant.findUnique({ where: { id: merchantId } });
-  const env = await getEnvironment();
   const customers = await db.customerRecord.findMany({
-    where: { merchantId, environment: env },
+    where: { merchantId: merchant.id, deletedAt: null },
     orderBy: { totalSpent: 'desc' },
-    take: 100,
+    take: 500,
   });
 
-  const fmt = (n: number, c: string = merchant?.currency || 'GHS') =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: c }).format(n);
-
-  const totalSpent = customers.reduce((s, c) => s + c.totalSpent, 0);
+  const currency = merchant.currency || 'USD';
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Customers</h1>
-          <p className="text-sm text-muted-foreground">
-            People who have paid you through PaySwap.
-          </p>
-        </div>
-        <CreateCustomerDialog />
-      </div>
+      <PageHeader
+        title="Customers"
+        description="People and businesses that have paid you."
+        actions={
+          <Button variant="outline">
+            <Plus className="h-4 w-4" /> Add Customer
+          </Button>
+        }
+      />
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      {customers.length === 0 ? (
         <Card>
-          <CardContent className="p-5">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Total customers
-            </span>
-            <div className="mt-2 text-2xl font-bold tabular-nums">
-              {customers.length}
-            </div>
-          </CardContent>
+          <EmptyState
+            icon={<UsersIcon className="h-5 w-5" />}
+            title="No customers yet"
+            description="Customer records are created automatically when someone pays you. They'll appear here with running totals and transaction counts."
+          />
         </Card>
-        <Card>
-          <CardContent className="p-5">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Lifetime value
-            </span>
-            <div className="mt-2 text-2xl font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-              {fmt(totalSpent)}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">All customers</CardTitle>
-          <CardDescription>
-            {customers.length} customer{customers.length === 1 ? '' : 's'} on record
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {customers.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <Users className="h-10 w-10 text-muted-foreground/50 mb-3" />
-              <p className="text-sm font-medium">No customers yet</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Click <span className="font-medium text-foreground">Add Customer</span> above, or
-                accept your first payment — customer records are created automatically.
-              </p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Phone</TableHead>
-                  <TableHead className="text-right">Total spent</TableHead>
-                  <TableHead className="text-right">Transactions</TableHead>
-                  <TableHead className="text-right">View</TableHead>
+      ) : (
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Email</TableHead>
+                <TableHead>Phone</TableHead>
+                <TableHead>Country</TableHead>
+                <TableHead className="text-right">Transactions</TableHead>
+                <TableHead className="text-right">Total spent</TableHead>
+                <TableHead className="text-right">Since</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {customers.map((c) => (
+                <TableRow key={c.id}>
+                  <TableCell className="font-medium">{c.name}</TableCell>
+                  <TableCell className="text-muted-foreground">{c.email}</TableCell>
+                  <TableCell className="text-muted-foreground">{c.phone ?? '—'}</TableCell>
+                  <TableCell className="text-muted-foreground">{c.country ?? '—'}</TableCell>
+                  <TableCell className="text-right">{formatNumber(c.transactionCount)}</TableCell>
+                  <TableCell className="text-right font-medium">
+                    {formatCurrency(c.totalSpent, currency)}
+                  </TableCell>
+                  <TableCell className="text-right text-muted-foreground">
+                    {formatDate(c.createdAt)}
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {customers.map((c) => (
-                  <TableRow key={c.id} className="cursor-pointer">
-                    <TableCell className="font-medium">
-                      <Link
-                        href={`/dashboard/customers/${encodeURIComponent(c.id)}`}
-                        className="hover:text-emerald-600 hover:underline dark:hover:text-emerald-400"
-                      >
-                        {c.name}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {c.email}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {c.phone || '—'}
-                    </TableCell>
-                    <TableCell className="text-right font-semibold tabular-nums">
-                      {fmt(c.totalSpent)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {c.transactionCount}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Link
-                        href={`/dashboard/customers/${encodeURIComponent(c.id)}`}
-                        className="inline-flex h-7 items-center gap-1 rounded-md border bg-background px-2.5 text-xs font-medium shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground"
-                        aria-label={`View customer ${c.name}`}
-                      >
-                        View
-                        <ExternalLink className="h-3 w-3" />
-                      </Link>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
     </div>
   );
 }

@@ -1,61 +1,74 @@
 /**
  * PaySwap Protocol — Production Connectors v2 — Token-Bucket Rate Limiter.
  *
- * Classic token bucket: bucket starts full (`burst` tokens); tokens refill
- * at `rps` per second up to `burst`. `acquire()` returns immediately with
- * `{ allowed: true }` if a token is available, or `{ allowed: false,
- * retryAfterMs }` if the bucket is empty.
+ * Each connector owns a `TokenBucketRateLimiter` initialised with the
+ * upstream's stated rate limit (sustained RPS + burst). `acquire()` is
+ * called before every attempt — if denied, the connector short-circuits
+ * with a RATE_LIMITED error rather than hitting the upstream and burning
+ * quota on a doomed request.
  *
- * One instance per connector. The base ProductionConnector consults this
- * BEFORE issuing the upstream call — a denied acquire short-circuits the
- * entire request as RATE_LIMITED, never touching doQuery.
+ * The bucket refills continuously based on elapsed wall-clock time, which
+ * means short bursts are absorbed by the bucket capacity and sustained
+ * traffic converges on exactly `rps` tokens per second.
  */
+
+/** Result of `acquire()`. */
+export interface AcquireResult {
+  allowed: boolean;
+  /** Milliseconds until the next token would be available (0 if allowed). */
+  retryAfterMs: number;
+}
+
 export class TokenBucketRateLimiter {
   private tokens: number;
-  private readonly rps: number;
-  private readonly burst: number;
   private lastRefillTs: number;
 
-  constructor(rps: number, burst: number) {
-    this.rps = Math.max(0.01, rps);
-    this.burst = Math.max(1, burst);
-    this.tokens = this.burst;
+  /**
+   * @param rps   sustained refill rate (tokens per second).
+   * @param burst max tokens the bucket can hold (= burst capacity).
+   */
+  constructor(
+    private readonly rps: number,
+    private readonly burst: number,
+  ) {
+    this.tokens = burst;
     this.lastRefillTs = Date.now();
   }
 
-  /** Refill the bucket based on elapsed wall-clock time. */
+  /** Refill the bucket based on elapsed time since the last call. */
   private refill(): void {
     const now = Date.now();
-    const elapsedMs = Math.max(0, now - this.lastRefillTs);
-    const refillTokens = (elapsedMs / 1000) * this.rps;
-    this.tokens = Math.min(this.burst, this.tokens + refillTokens);
+    const elapsedMs = now - this.lastRefillTs;
+    if (elapsedMs <= 0) return;
+    const refill = (elapsedMs / 1000) * this.rps;
+    this.tokens = Math.min(this.burst, this.tokens + refill);
     this.lastRefillTs = now;
   }
 
   /**
-   * Try to acquire one token.
-   * Returns `{ allowed: true }` on success (token consumed).
-   * Returns `{ allowed: false, retryAfterMs }` on empty bucket — the caller
-   * should back off for at least `retryAfterMs` before trying again.
+   * Attempt to consume one token.
+   * Returns `{ allowed: true }` if a token was available, otherwise
+   * `{ allowed: false, retryAfterMs }` with the wait until the next token.
    */
-  acquire(): { allowed: boolean; retryAfterMs: number } {
+  acquire(): AcquireResult {
     this.refill();
     if (this.tokens >= 1) {
       this.tokens -= 1;
       return { allowed: true, retryAfterMs: 0 };
     }
-    // Bucket empty. Compute how long until one token refills.
-    const retryAfterMs = Math.ceil((1 - this.tokens) / this.rps * 1000);
-    return { allowed: false, retryAfterMs: Math.max(1, retryAfterMs) };
+    // How long until 1 token accrues at `rps` tokens/sec.
+    const needed = 1 - this.tokens;
+    const retryAfterMs = this.rps > 0 ? Math.ceil((needed / this.rps) * 1000) : 1000;
+    return { allowed: false, retryAfterMs };
   }
 
-  /** Current token count (after refill). */
+  /** Current token count (after refilling). Useful for diagnostics. */
   availableTokens(): number {
     this.refill();
-    return this.tokens;
+    return Math.floor(this.tokens);
   }
 
-  /** Reset the bucket to full — e.g. after a manual override. */
+  /** Reset the bucket to full capacity (e.g. after a health check). */
   reset(): void {
     this.tokens = this.burst;
     this.lastRefillTs = Date.now();

@@ -1,0 +1,64 @@
+{
+  "name": "@payswap/sdk-typescript",
+  "version": "1.0.0",
+  "description": "Official TypeScript SDK for the PaySwap API — payments, payouts, webhooks, customers, products, invoices, ledger, treasury, compliance, and ops.",
+  "keywords": [
+    "payswap",
+    "payments",
+    "payouts",
+    "fintech",
+    "sdk",
+    "typescript",
+    "stellar",
+    "mpesa",
+    "africa"
+  ],
+  "license": "MIT",
+  "author": "PaySwap <developers@payswap.io>",
+  "homepage": "https://docs.payswap.io",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/payswap/payswap.git",
+    "directory": "developer/sdk/typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/payswap/payswap/issues"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node && tsc -p tsconfig.json",
+    "lint": "eslint src --ext .ts",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "bun run clean && bun run build"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "typescript": ">=4.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

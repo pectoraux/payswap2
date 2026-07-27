@@ -1,289 +1,273 @@
 /**
- * PaySwap Protocol — Twin Token Module.
+ * PaySwap Protocol — Twin Token Engine.
  *
- * Production Twin Tokens backed by Stellar (first chain).
- * The application never knows which blockchain is used — it goes through
- * the BlockchainAdapter interface.
+ * Twin Tokens are PaySwap's stablecoin-equivalent: each `TWIN<CCY>` is 1:1
+ * backed by fiat reserves held by an LP in the corridor's destination country.
+ * They are issued on Stellar via the registered adapter, escrowed during
+ * settlement, and burned on redemption.
  *
- * Support: mint, burn, transfer, escrow, freeze, reserve, metadata, compliance hooks.
+ * The engine is a thin domain layer over `stellarAdapter`:
+ *   - registerAsset(): define a TWIN<CCY> for a corridor + issuer
+ *   - mint():         issuer mints → credits `to` on-chain + locally
+ *   - burn():         holder burns → debits on-chain + locally
+ *   - transfer():     on-chain transfer between holders
+ *   - escrow():       local lock (available balance falls, balance unchanged)
+ *   - releaseEscrow():on-chain transfer from escrow holder to recipient
+ *   - freeze/unfreeze:compliance freeze — availableBalance = 0 while frozen
+ *
+ * All on-chain state lives in the adapter. The engine keeps a domain index of
+ * assets, balances, escrows, and operations so protocol modules can query
+ * without awaiting network calls.
  */
 import { uid, round } from '@/kernel/support';
 import { eventEngine } from '@/kernel/event';
-import { stellarAdapter } from '../blockchains/stellar/adapter';
-import { blockchainRegistry } from '../blockchains/adapter';
+import { stellarAdapter } from '@/protocol/blockchains/stellar/adapter';
+
+export type TwinTokenOperationType = 'mint' | 'burn' | 'transfer' | 'escrow' | 'release';
 
 export interface TwinTokenAsset {
-  code: string;       // e.g., "TWINGHS"
-  currency: string;   // e.g., "GHS"
-  issuer: string;     // Stellar issuer address
+  code: string;          // e.g. 'TWINGHS'
+  currency: string;      // e.g. 'GHS'
+  corridor: string;      // e.g. 'KENYA-GHANA'
+  issuer: string;        // Stellar issuing account address
   totalSupply: number;
-  circulating: number;
-  escrowed: number;
-  frozen: number;
-  metadata: {
-    peggedTo: string;
-    corridor: string;
-    createdAt: number;
-  };
+  registeredAt: number;
 }
 
 export interface TwinTokenBalance {
   holder: string;
   assetCode: string;
-  balance: number;
-  escrowed: number;
-  frozen: number;
-  available: number;
+  balance: number;       // total held
+  escrowed: number;      // locked in active escrows
+  frozen: boolean;       // compliance freeze
 }
 
 export interface TwinTokenOperation {
   id: string;
-  type: 'mint' | 'burn' | 'transfer' | 'escrow' | 'freeze' | 'unfreeze' | 'reserve' | 'release';
+  type: TwinTokenOperationType;
   assetCode: string;
   amount: number;
   from?: string;
   to?: string;
+  escrowId?: string;
   txHash?: string;
-  evidence?: { source: string; confidence: number };
-  status: 'pending' | 'confirmed' | 'failed';
-  timestamp: number;
-  memo?: string;
+  ts: number;
+}
+
+export interface TwinTokenEscrowRecord {
+  id: string;
+  assetCode: string;
+  amount: number;
+  holder: string;
+  createdAt: number;
+  released: boolean;
+  releasedTo?: string;
+}
+
+export interface TwinTokenOperationFilter {
+  type?: TwinTokenOperationType;
+  assetCode?: string;
+  holder?: string;
 }
 
 export class TwinTokenEngine {
-  private assets: Map<string, TwinTokenAsset> = new Map();
-  private balances: Map<string, TwinTokenBalance> = new Map(); // key: holder:assetCode
+  private assets = new Map<string, TwinTokenAsset>();
+  private balances = new Map<string, TwinTokenBalance>();           // `${assetCode}:${holder}`
+  private escrows = new Map<string, TwinTokenEscrowRecord>();
   private operations: TwinTokenOperation[] = [];
-  private frozenAccounts: Set<string> = new Set(); // compliance freezes
 
-  /** Register a new Twin Token asset for a currency corridor. */
-  async registerAsset(currency: string, corridor: string, issuer: string): Promise<TwinTokenAsset> {
+  // ------------------------------------------------------------- registerAsset
+  registerAsset(currency: string, corridor: string, issuer: string): TwinTokenAsset {
     const code = `TWIN${currency}`;
+    const existing = this.assets.get(code);
+    if (existing) return existing;
     const asset: TwinTokenAsset = {
-      code, currency, issuer,
-      totalSupply: 0, circulating: 0, escrowed: 0, frozen: 0,
-      metadata: { peggedTo: currency, corridor, createdAt: Date.now() },
+      code, currency, corridor, issuer,
+      totalSupply: 0, registeredAt: Date.now(),
     };
     this.assets.set(code, asset);
-    eventEngine.emit('twintoken.registered', { code, currency, corridor, issuer }, 0);
+    eventEngine.emit('twintoken.registered', { assetCode: code, currency, corridor, issuer }, 0);
     return asset;
   }
 
-  /** Mint Twin Tokens (backed by liquidity). */
-  async mint(assetCode: string, amount: number, to: string): Promise<TwinTokenOperation> {
+  // ---------------------------------------------------------------------- mint
+  async mint(assetCode: string, amount: number, to: string): Promise<{ success: boolean; txHash?: string; error?: string }> {
     const asset = this.assets.get(assetCode);
-    if (!asset) throw new Error(`Unknown asset: ${assetCode}`);
-
-    const op: TwinTokenOperation = {
-      id: uid('tt_op'), type: 'mint', assetCode, amount, to,
-      status: 'pending', timestamp: Date.now(),
-    };
-
-    try {
-      // Issue on Stellar to the issuer, then transfer to the recipient
-      const issueResult = await stellarAdapter.issueAsset({
-        assetCode, amount, issuer: asset.issuer,
-      });
-
-      if (issueResult.success && issueResult.evidence) {
-        // Transfer from issuer to recipient on Stellar
-        const transferResult = await stellarAdapter.transfer({
-          assetCode, amount, from: asset.issuer, to, memo: 'Twin Token mint',
-        });
-
-        if (transferResult.success) {
-          op.txHash = transferResult.txHash;
-          op.evidence = { source: transferResult.evidence?.source ?? 'on_chain_state', confidence: transferResult.evidence?.reputation ?? 1.0 };
-          op.status = 'confirmed';
-
-          // Update supply
-          asset.totalSupply = round(asset.totalSupply + amount, 6);
-          asset.circulating = round(asset.circulating + amount, 6);
-
-          // Update balance
-          this.creditBalance(to, assetCode, amount);
-        } else {
-          op.status = 'failed';
-        }
-      } else {
-        op.status = 'failed';
-      }
-    } catch (e) {
-      op.status = 'failed';
+    if (!asset) return { success: false, error: 'asset_not_registered' };
+    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+    // Issue to the issuer first (Stellar semantics), then transfer to recipient.
+    const issue = await stellarAdapter.issueAsset({ assetCode, amount, issuer: asset.issuer });
+    if (!issue.success || !issue.txHash) return { success: false, error: issue.error ?? 'issue_failed' };
+    let txHash = issue.txHash;
+    if (to !== asset.issuer) {
+      const xfer = await stellarAdapter.transfer({ assetCode, amount, from: asset.issuer, to, memo: 'twin-token-mint' });
+      if (!xfer.success || !xfer.txHash) return { success: false, error: xfer.error ?? 'transfer_failed' };
+      txHash = xfer.txHash;
     }
-
-    this.operations.push(op);
-    eventEngine.emit('twintoken.minted', { opId: op.id, assetCode, amount, to, txHash: op.txHash }, 0);
-    return op;
+    this.credit(to, assetCode, amount);
+    asset.totalSupply = round(asset.totalSupply + amount, 7);
+    this.recordOperation({ type: 'mint', assetCode, amount, to, txHash });
+    eventEngine.emit('twintoken.minted', { assetCode, amount, to, txHash, totalSupply: asset.totalSupply }, 0);
+    return { success: true, txHash };
   }
 
-  /** Burn Twin Tokens (settlement complete). */
-  async burn(assetCode: string, amount: number, from: string): Promise<TwinTokenOperation> {
+  // ---------------------------------------------------------------------- burn
+  async burn(assetCode: string, amount: number, from: string): Promise<{ success: boolean; txHash?: string; error?: string }> {
     const asset = this.assets.get(assetCode);
-    if (!asset) throw new Error(`Unknown asset: ${assetCode}`);
-    if (this.getAvailableBalance(from, assetCode) < amount) throw new Error('Insufficient balance');
-
-    const op: TwinTokenOperation = {
-      id: uid('tt_op'), type: 'burn', assetCode, amount, from,
-      status: 'pending', timestamp: Date.now(),
-    };
-
-    try {
-      const result = await stellarAdapter.burnAsset({ assetCode, amount, from });
-      if (result.success && result.evidence) {
-        op.txHash = result.txHash;
-        op.evidence = { source: result.evidence.source, confidence: result.evidence.reputation ?? 1.0 };
-        op.status = 'confirmed';
-        asset.totalSupply = round(asset.totalSupply - amount, 6);
-        asset.circulating = round(asset.circulating - amount, 6);
-        this.debitBalance(from, assetCode, amount);
-      } else {
-        op.status = 'failed';
-      }
-    } catch (e) {
-      op.status = 'failed';
-    }
-
-    this.operations.push(op);
-    eventEngine.emit('twintoken.burned', { opId: op.id, assetCode, amount, from, txHash: op.txHash }, 0);
-    return op;
+    if (!asset) return { success: false, error: 'asset_not_registered' };
+    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+    const bal = this.getBalanceRecord(from, assetCode);
+    if (bal.frozen) return { success: false, error: 'account_frozen' };
+    const available = bal.balance - bal.escrowed;
+    if (available < amount) return { success: false, error: 'insufficient_available_balance' };
+    const res = await stellarAdapter.burnAsset({ assetCode, amount, from });
+    if (!res.success || !res.txHash) return { success: false, error: res.error ?? 'burn_failed' };
+    this.debit(from, assetCode, amount);
+    asset.totalSupply = round(asset.totalSupply - amount, 7);
+    this.recordOperation({ type: 'burn', assetCode, amount, from, txHash: res.txHash });
+    eventEngine.emit('twintoken.burned', { assetCode, amount, from, txHash: res.txHash, totalSupply: asset.totalSupply }, 0);
+    return { success: true, txHash: res.txHash };
   }
 
-  /** Transfer Twin Tokens between accounts. */
-  async transfer(assetCode: string, amount: number, from: string, to: string, memo?: string): Promise<TwinTokenOperation> {
-    if (this.getAvailableBalance(from, assetCode) < amount) throw new Error('Insufficient balance');
-    if (this.frozenAccounts.has(from)) throw new Error('Account is compliance-frozen');
-
-    const op: TwinTokenOperation = {
-      id: uid('tt_op'), type: 'transfer', assetCode, amount, from, to, memo,
-      status: 'pending', timestamp: Date.now(),
-    };
-
-    try {
-      const result = await stellarAdapter.transfer({ assetCode, amount, from, to, memo });
-      if (result.success && result.evidence) {
-        op.txHash = result.txHash;
-        op.evidence = { source: result.evidence.source, confidence: result.evidence.reputation ?? 1.0 };
-        op.status = 'confirmed';
-        this.debitBalance(from, assetCode, amount);
-        this.creditBalance(to, assetCode, amount);
-      } else {
-        op.status = 'failed';
-      }
-    } catch (e) {
-      op.status = 'failed';
-    }
-
-    this.operations.push(op);
-    eventEngine.emit('twintoken.transferred', { opId: op.id, assetCode, amount, from, to, txHash: op.txHash }, 0);
-    return op;
-  }
-
-  /** Escrow Twin Tokens (freeze for settlement). */
-  async escrow(assetCode: string, amount: number, from: string, escrowId: string): Promise<TwinTokenOperation> {
-    if (this.getAvailableBalance(from, assetCode) < amount) throw new Error('Insufficient balance');
-
-    const op: TwinTokenOperation = {
-      id: uid('tt_op'), type: 'escrow', assetCode, amount, from, to: escrowId,
-      status: 'pending', timestamp: Date.now(),
-    };
-
-    // Lock locally (on-chain: create escrow account)
+  // ------------------------------------------------------------------ transfer
+  async transfer(assetCode: string, amount: number, from: string, to: string, memo?: string): Promise<{ success: boolean; txHash?: string; error?: string }> {
     const asset = this.assets.get(assetCode);
-    if (asset) {
-      asset.circulating = round(asset.circulating - amount, 6);
-      asset.escrowed = round(asset.escrowed + amount, 6);
-    }
-    const balance = this.getOrCreateBalance(from, assetCode);
-    balance.balance = round(balance.balance - amount, 6);
-    balance.escrowed = round(balance.escrowed + amount, 6);
-
-    op.status = 'confirmed';
-    this.operations.push(op);
-    eventEngine.emit('twintoken.escrowed', { opId: op.id, assetCode, amount, from, escrowId }, 0);
-    return op;
+    if (!asset) return { success: false, error: 'asset_not_registered' };
+    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+    const bal = this.getBalanceRecord(from, assetCode);
+    if (bal.frozen) return { success: false, error: 'account_frozen' };
+    const available = bal.balance - bal.escrowed;
+    if (available < amount) return { success: false, error: 'insufficient_available_balance' };
+    const res = await stellarAdapter.transfer({ assetCode, amount, from, to, memo });
+    if (!res.success || !res.txHash) return { success: false, error: res.error ?? 'transfer_failed' };
+    this.debit(from, assetCode, amount);
+    this.credit(to, assetCode, amount);
+    this.recordOperation({ type: 'transfer', assetCode, amount, from, to, txHash: res.txHash });
+    eventEngine.emit('twintoken.transferred', { assetCode, amount, from, to, memo, txHash: res.txHash }, 0);
+    return { success: true, txHash: res.txHash };
   }
 
-  /** Release escrowed Twin Tokens (settlement complete → release to LP). */
-  async releaseEscrow(assetCode: string, amount: number, escrowId: string, to: string): Promise<TwinTokenOperation> {
-    const op: TwinTokenOperation = {
-      id: uid('tt_op'), type: 'release', assetCode, amount, from: escrowId, to,
-      status: 'pending', timestamp: Date.now(),
-    };
-
+  // ------------------------------------------------------------------- escrow
+  /** Lock `amount` from `from`'s available balance against `escrowId`. */
+  async escrow(assetCode: string, amount: number, from: string, escrowId: string): Promise<{ success: boolean; error?: string }> {
     const asset = this.assets.get(assetCode);
-    if (asset) {
-      asset.escrowed = round(asset.escrowed - amount, 6);
-      asset.circulating = round(asset.circulating + amount, 6);
-    }
-    this.creditBalance(to, assetCode, amount);
-
-    op.status = 'confirmed';
-    this.operations.push(op);
-    eventEngine.emit('twintoken.released', { opId: op.id, assetCode, amount, escrowId, to }, 0);
-    return op;
+    if (!asset) return { success: false, error: 'asset_not_registered' };
+    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+    if (this.escrows.has(escrowId)) return { success: false, error: 'escrow_id_taken' };
+    const bal = this.getBalanceRecord(from, assetCode);
+    if (bal.frozen) return { success: false, error: 'account_frozen' };
+    const available = bal.balance - bal.escrowed;
+    if (available < amount) return { success: false, error: 'insufficient_available_balance' };
+    bal.escrowed = round(bal.escrowed + amount, 7);
+    const record: TwinTokenEscrowRecord = {
+      id: escrowId, assetCode, amount, holder: from,
+      createdAt: Date.now(), released: false,
+    };
+    this.escrows.set(escrowId, record);
+    this.recordOperation({ type: 'escrow', assetCode, amount, from, escrowId });
+    eventEngine.emit('twintoken.escrowed', { assetCode, amount, from, escrowId }, 0);
+    return { success: true };
   }
 
-  /** Freeze an account (compliance). */
+  // -------------------------------------------------------------- releaseEscrow
+  /** Release escrowed tokens to `to` via on-chain transfer from escrow holder. */
+  async releaseEscrow(assetCode: string, amount: number, escrowId: string, to: string): Promise<{ success: boolean; txHash?: string; error?: string }> {
+    const escrow = this.escrows.get(escrowId);
+    if (!escrow) return { success: false, error: 'escrow_not_found' };
+    if (escrow.assetCode !== assetCode) return { success: false, error: 'asset_mismatch' };
+    if (escrow.released) return { success: false, error: 'escrow_already_released' };
+    if (escrow.amount < amount) return { success: false, error: 'insufficient_escrow_amount' };
+    const res = await stellarAdapter.transfer({
+      assetCode, amount, from: escrow.holder, to,
+      memo: `escrow-release:${escrowId}`,
+    });
+    if (!res.success || !res.txHash) return { success: false, error: res.error ?? 'release_failed' };
+    // Update balances: debit holder (balance + escrowed), credit recipient.
+    const holderBal = this.getBalanceRecord(escrow.holder, assetCode);
+    holderBal.balance = round(holderBal.balance - amount, 7);
+    holderBal.escrowed = round(holderBal.escrowed - amount, 7);
+    this.credit(to, assetCode, amount);
+    if (escrow.amount === amount) {
+      escrow.released = true;
+      escrow.releasedTo = to;
+    } else {
+      escrow.amount = round(escrow.amount - amount, 7);
+    }
+    this.recordOperation({ type: 'release', assetCode, amount, from: escrow.holder, to, escrowId, txHash: res.txHash });
+    eventEngine.emit('twintoken.released', { assetCode, amount, from: escrow.holder, to, escrowId, txHash: res.txHash }, 0);
+    return { success: true, txHash: res.txHash };
+  }
+
+  // ------------------------------------------------------- freeze / unfreeze
+  /** Compliance freeze — available balance for this holder becomes 0 across all assets. */
   freezeAccount(holder: string): void {
-    this.frozenAccounts.add(holder);
-    eventEngine.emit('twintoken.account_frozen', { holder }, 0);
+    for (const b of this.balances.values()) {
+      if (b.holder === holder) b.frozen = true;
+    }
   }
 
-  /** Unfreeze an account. */
   unfreezeAccount(holder: string): void {
-    this.frozenAccounts.delete(holder);
-    eventEngine.emit('twintoken.account_unfrozen', { holder }, 0);
+    for (const b of this.balances.values()) {
+      if (b.holder === holder) b.frozen = false;
+    }
   }
 
-  /** Get balance for a holder. */
-  getBalance(holder: string, assetCode: string): TwinTokenBalance | undefined {
-    return this.balances.get(`${holder}:${assetCode}`);
+  // ----------------------------------------------------------------- queries
+  getBalance(holder: string, assetCode: string): number {
+    return this.getBalanceRecord(holder, assetCode).balance;
   }
 
-  /** Get available (non-escrowed, non-frozen) balance. */
+  /** Available = balance − escrowed. If frozen, available = 0. */
   getAvailableBalance(holder: string, assetCode: string): number {
-    if (this.frozenAccounts.has(holder)) return 0;
-    const bal = this.balances.get(`${holder}:${assetCode}`);
-    return bal ? bal.available : 0;
+    const b = this.getBalanceRecord(holder, assetCode);
+    if (b.frozen) return 0;
+    return round(b.balance - b.escrowed, 7);
   }
 
-  /** Get all operations. */
-  getOperations(filter?: { assetCode?: string; holder?: string }): TwinTokenOperation[] {
-    let ops = [...this.operations];
-    if (filter?.assetCode) ops = ops.filter((o) => o.assetCode === filter.assetCode);
-    if (filter?.holder) ops = ops.filter((o) => o.from === filter.holder || o.to === filter.holder);
-    return ops.sort((a, b) => b.timestamp - a.timestamp);
+  getBalanceRecord(holder: string, assetCode: string): TwinTokenBalance {
+    const k = this.bkey(assetCode, holder);
+    let b = this.balances.get(k);
+    if (!b) {
+      b = { holder, assetCode, balance: 0, escrowed: 0, frozen: false };
+      this.balances.set(k, b);
+    }
+    return b;
   }
 
-  /** Get asset info. */
   getAsset(assetCode: string): TwinTokenAsset | undefined { return this.assets.get(assetCode); }
   allAssets(): TwinTokenAsset[] { return [...this.assets.values()]; }
+  getEscrow(escrowId: string): TwinTokenEscrowRecord | undefined { return this.escrows.get(escrowId); }
+  allEscrows(): TwinTokenEscrowRecord[] { return [...this.escrows.values()]; }
 
-  reset(): void {
-    this.assets.clear(); this.balances.clear(); this.operations = []; this.frozenAccounts.clear();
+  getOperations(filter?: TwinTokenOperationFilter): TwinTokenOperation[] {
+    if (!filter) return [...this.operations];
+    return this.operations.filter((op) => {
+      if (filter.type && op.type !== filter.type) return false;
+      if (filter.assetCode && op.assetCode !== filter.assetCode) return false;
+      if (filter.holder && op.from !== filter.holder && op.to !== filter.holder) return false;
+      return true;
+    });
   }
 
-  private creditBalance(holder: string, assetCode: string, amount: number): void {
-    const bal = this.getOrCreateBalance(holder, assetCode);
-    bal.balance = round(bal.balance + amount, 6);
-    bal.available = round(bal.balance - bal.escrowed - bal.frozen, 6);
+  // ----------------------------------------------------------------- helpers
+  private bkey(assetCode: string, holder: string): string {
+    return `${assetCode}:${holder}`;
   }
 
-  private debitBalance(holder: string, assetCode: string, amount: number): void {
-    const bal = this.getOrCreateBalance(holder, assetCode);
-    bal.balance = round(bal.balance - amount, 6);
-    bal.available = round(bal.balance - bal.escrowed - bal.frozen, 6);
+  private credit(holder: string, assetCode: string, amount: number): void {
+    const b = this.getBalanceRecord(holder, assetCode);
+    b.balance = round(b.balance + amount, 7);
   }
 
-  private getOrCreateBalance(holder: string, assetCode: string): TwinTokenBalance {
-    const key = `${holder}:${assetCode}`;
-    let bal = this.balances.get(key);
-    if (!bal) {
-      bal = { holder, assetCode, balance: 0, escrowed: 0, frozen: 0, available: 0 };
-      this.balances.set(key, bal);
-    }
-    return bal;
+  private debit(holder: string, assetCode: string, amount: number): void {
+    const b = this.getBalanceRecord(holder, assetCode);
+    b.balance = round(b.balance - amount, 7);
+  }
+
+  private recordOperation(op: Omit<TwinTokenOperation, 'id' | 'ts'>): TwinTokenOperation {
+    const full: TwinTokenOperation = { ...op, id: uid('ttop'), ts: Date.now() };
+    this.operations.push(full);
+    return full;
   }
 }
 

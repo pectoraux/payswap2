@@ -1,0 +1,25 @@
+# =============================================================================
+# PaySwap — Kubernetes Service (ClusterIP)
+# =============================================================================
+# Exposes the PaySwap API inside the cluster. The Ingress routes external
+# traffic to this service.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: payswap-api
+  namespace: payswap
+  labels:
+    app.kubernetes.io/name: payswap
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: payswap
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+      appProtocol: http

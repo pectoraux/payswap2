@@ -1,9 +1,13 @@
 /**
- * Runtime Events — Domain vs Runtime. (M-RT-1 foundation.)
+ * Runtime Events — Domain vs Runtime. (Vocabulary: Event.)
  *
  * Domain Events affect business state and are replayed to rebuild aggregates
  * and read models. Runtime Events are operational side-effects, retained for
  * inspection/ops but NOT replayed to rebuild business state.
+ *
+ * Two logical streams per aggregate: domain:<id> (source of truth) and
+ * runtime:<id> (operational, independently prunable). The global log
+ * preserves total order.
  */
 
 import type { Environment } from '../types';
@@ -34,7 +38,7 @@ export interface StoredEvent {
     correlationId: string;
     actor: string;
     environment: Environment;
-    timestamp: number;
+    timestamp: number;        // Runtime Clock time
   };
 }
 
@@ -48,9 +52,13 @@ export interface AppendMetadata {
 }
 
 export interface AppendResult {
+  /** First global position written. */
   fromPosition: number;
+  /** Last global position written. */
   toPosition: number;
+  /** Versions of the streams after append (streamId → new version). */
   streamVersions: Map<string, number>;
+  /** The stored events. */
   events: StoredEvent[];
 }
 

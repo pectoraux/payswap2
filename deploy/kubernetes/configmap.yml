@@ -1,0 +1,54 @@
+# =============================================================================
+# PaySwap — Kubernetes ConfigMap (non-secret configuration)
+# =============================================================================
+# Holds non-secret configuration that varies per environment. Secret
+# values (DATABASE_URL with password, API keys) live in the companion
+# Secret (`secret.yml`).
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payswap-config
+  namespace: payswap
+  labels:
+    app.kubernetes.io/name: payswap
+data:
+  # Runtime
+  NODE_ENV: "production"
+  PORT: "3000"
+  HOSTNAME: "0.0.0.0"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+  # Feature flags — production-safe defaults. Live Stellar / real
+  # connectors / multi-region are OFF by default; compliance + treasury
+  # gates + advanced analytics are ON.
+  FEATURE_FLAG_LIVE_STELLAR: "false"
+  FEATURE_FLAG_REAL_CONNECTORS: "false"
+  FEATURE_FLAG_MULTI_REGION: "false"
+  FEATURE_FLAG_COMPLIANCE_ENFORCEMENT: "true"
+  FEATURE_FLAG_TREASURY_GATES: "true"
+  FEATURE_FLAG_ADVANCED_ANALYTICS: "true"
+
+  # Secret management — Vault in production.
+  SECRET_PROVIDER: "vault"
+  VAULT_ADDRESS: "https://vault.payswap.internal:8200"
+  VAULT_MOUNT_PATH: "secret"
+
+  # Database (host only — password is in the Secret).
+  POSTGRES_HOST: "payswap-rds.cluster-xxxxxxxx.us-east-1.rds.amazonaws.com"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "payswap"
+  POSTGRES_USER: "payswap_app"
+
+  # Redis (host only — password is in the Secret).
+  REDIS_HOST: "payswap-redis.xxxxxxxx.0001.use1.cache.amazonaws.com"
+  REDIS_PORT: "6379"
+
+  # Observability
+  PROMETHEUS_ENDPOINT: "/metrics"
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+
+  # DR / multi-region
+  PRIMARY_REGION: "us-east-1"
+  REPLICATION_ENABLED: "false"
