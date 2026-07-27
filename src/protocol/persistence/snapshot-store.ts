@@ -35,7 +35,7 @@ class SnapshotStore {
     await db.ledgerSnapshotRecord.create({
       data: {
         snapshotId: snap.snapshotId,
-        asOfTs: BigInt(snap.asOfTs),
+        asOfTs: snap.asOfTs, // SQLite: stored as Int (schema changed from BigInt in task 2-prisma-fix)
         asOfSeq: snap.asOfSeq,
         accounts: JSON.stringify(snap.accounts),
         trialBalance: JSON.stringify(snap.trialBalance),

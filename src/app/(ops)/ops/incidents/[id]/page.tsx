@@ -105,7 +105,7 @@ export default async function IncidentDetailPage({
     where: {
       OR: [
         { resourceId: id },
-        { details: { contains: id, mode: 'insensitive' } },
+        { details: { contains: id } },
       ],
     },
     orderBy: { createdAt: 'desc' },
@@ -201,7 +201,7 @@ export default async function IncidentDetailPage({
         <DetailRow icon={<Clock className="h-4 w-4" />} label="Created">
           <div className="font-medium">{fmtDate(incident.createdAt)}</div>
           <div className="text-[10px] text-muted-foreground">
-            by {incident.createdBy.slice(0, 10)}
+            by {(incident.createdBy ?? 'system').slice(0, 10)}
           </div>
         </DetailRow>
         <DetailRow icon={<Shield className="h-4 w-4" />} label="Acknowledged">
@@ -271,13 +271,13 @@ export default async function IncidentDetailPage({
                       <Badge
                         variant="secondary"
                         className={`text-[10px] font-medium capitalize ${
-                          STATUS_CLASS[u.status] ?? ''
+                          STATUS_CLASS[u.status ?? ''] ?? ''
                         }`}
                       >
                         {u.status}
                       </Badge>
                       <span className="text-[10px] text-muted-foreground">
-                        {fmtDate(u.createdAt)} · by {u.authorId.slice(0, 10)}
+                        {fmtDate(u.createdAt)} · by {(u.authorId ?? 'system').slice(0, 10)}
                       </span>
                     </div>
                     <p className="mt-1 whitespace-pre-wrap text-sm">{u.message}</p>

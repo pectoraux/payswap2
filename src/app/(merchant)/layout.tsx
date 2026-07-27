@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
-import { AppShell } from '@/components/app-shell';
+import { RoleShell } from '@/components/role-shell';
+import { merchantNav } from '@/lib/nav-config';
 import { requireMerchant } from '@/lib/auth-guards';
 
 export const dynamic = 'force-dynamic';
@@ -11,8 +12,12 @@ export const dynamic = 'force-dynamic';
  * - No session     → /login
  * - No merchant role → /unauthorized
  *
- * The AppShell (client component) handles navigation + sidebar.
- * SessionProvider is already wired in the root layout.
+ * Defensive: a closed or suspended merchant cannot access the dashboard.
+ *
+ * Uses the UnifiedShell (via RoleShell) so the header renders the role
+ * switcher, environment switcher, and command palette (Cmd+K) — matching
+ * the other 8 role layouts. SessionProvider is already wired in the root
+ * layout.
  */
 export default async function MerchantLayout({ children }: { children: React.ReactNode }) {
   const { merchant } = await requireMerchant();
@@ -22,5 +27,15 @@ export default async function MerchantLayout({ children }: { children: React.Rea
     redirect('/unauthorized');
   }
 
-  return <AppShell role="merchant">{children}</AppShell>;
+  return (
+    <RoleShell
+      roleLabel="Merchant"
+      navGroups={merchantNav}
+      basePath="/dashboard"
+      currentRole="MERCHANT"
+      settingsHref="/dashboard/settings"
+    >
+      {children}
+    </RoleShell>
+  );
 }

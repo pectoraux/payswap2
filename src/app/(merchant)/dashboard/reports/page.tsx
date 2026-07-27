@@ -52,7 +52,8 @@ export default async function ReportsPage() {
   // Validates session + merchant role.
   const ctx = await requireMerchant().catch(() => null);
   if (!ctx) redirect('/unauthorized');
-  const { merchantId, merchant } = ctx;
+  const { merchant } = ctx;
+  const merchantId = merchant.id;
 
   const env = await getEnvironment();
   const merchantCurrency = merchant?.currency || 'GHS';
@@ -71,6 +72,7 @@ export default async function ReportsPage() {
       currency: true,
       fee: true,
       netAmount: true,
+      status: true,
       method: true,
       description: true,
       createdAt: true,

@@ -41,7 +41,7 @@ export async function PATCH(
   let session: any;
   try {
     const ctx = await requireMerchant();
-    merchantId = ctx.merchantId;
+    merchantId = ctx.merchant.id;
     session = ctx.session;
   } catch (err) {
     const code = err instanceof Error ? err.message : 'UNAUTHORIZED';
@@ -199,7 +199,7 @@ export async function DELETE(
   let session: any;
   try {
     const ctx = await requireMerchant();
-    merchantId = ctx.merchantId;
+    merchantId = ctx.merchant.id;
     session = ctx.session;
   } catch (err) {
     const code = err instanceof Error ? err.message : 'UNAUTHORIZED';

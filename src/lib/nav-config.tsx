@@ -41,6 +41,9 @@ import {
   AlertTriangle,
   Terminal,
   Building2,
+  Cpu,
+  ScrollText,
+  Gauge,
 } from 'lucide-react';
 
 /**
@@ -308,17 +311,31 @@ export const developerNav: NavGroup[] = [
   {
     label: 'Overview',
     items: [
-      { label: 'Overview', href: '/developers', icon: <LayoutDashboard className="h-4 w-4" /> },
+      { label: 'Console', href: '/developers', icon: <LayoutDashboard className="h-4 w-4" /> },
     ],
   },
   {
     label: 'Build',
     items: [
+      { label: 'Sandbox', href: '/developers/sandbox', icon: <FlaskConical className="h-4 w-4" /> },
+      { label: 'API Keys', href: '/developers/api-keys', icon: <KeyRound className="h-4 w-4" /> },
+      { label: 'Webhooks', href: '/developers/webhooks', icon: <Webhook className="h-4 w-4" /> },
+      { label: 'Simulator', href: '/developers/simulator', icon: <Cpu className="h-4 w-4" /> },
+      { label: 'Extensions', href: '/developers/extensions', icon: <Boxes className="h-4 w-4" /> },
+    ],
+  },
+  {
+    label: 'Observe',
+    items: [
+      { label: 'Logs', href: '/developers/logs', icon: <ScrollText className="h-4 w-4" /> },
+      { label: 'Metrics', href: '/developers/metrics', icon: <Gauge className="h-4 w-4" /> },
+    ],
+  },
+  {
+    label: 'Reference',
+    items: [
       { label: 'API Docs', href: '/developers/docs', icon: <BookOpen className="h-4 w-4" /> },
       { label: 'API Explorer', href: '/developers/explorer', icon: <Compass className="h-4 w-4" /> },
-      { label: 'Extension Builder', href: '/developers/extensions', icon: <Boxes className="h-4 w-4" /> },
-      { label: 'Webhook Tester', href: '/developers/webhooks', icon: <Webhook className="h-4 w-4" /> },
-      { label: 'Sandbox', href: '/developers/sandbox', icon: <FlaskConical className="h-4 w-4" /> },
     ],
   },
 ];

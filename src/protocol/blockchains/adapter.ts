@@ -35,6 +35,8 @@ export class BlockchainAdapterRegistry {
   register(a: BlockchainAdapter) { this.adapters.set(a.chain, a); }
   get(chain: string) { return this.adapters.get(chain); }
   all() { return [...this.adapters.values()]; }
+  /** List of registered chain identifiers. */
+  chains() { return [...this.adapters.keys()]; }
 }
 
 export const blockchainRegistry = new BlockchainAdapterRegistry();

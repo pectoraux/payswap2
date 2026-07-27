@@ -194,12 +194,12 @@ export default async function TreasuryOverviewPage() {
   const treasuryLogs = await db.auditLog.findMany({
     where: {
       OR: [
-        { action: { contains: 'treasury', mode: 'insensitive' } },
-        { action: { contains: 'reserve', mode: 'insensitive' } },
-        { action: { contains: 'freeze', mode: 'insensitive' } },
-        { action: { contains: 'rebalance', mode: 'insensitive' } },
-        { action: { contains: 'corridor', mode: 'insensitive' } },
-        { resourceType: { equals: 'treasury', mode: 'insensitive' } },
+        { action: { contains: 'treasury' } },
+        { action: { contains: 'reserve' } },
+        { action: { contains: 'freeze' } },
+        { action: { contains: 'rebalance' } },
+        { action: { contains: 'corridor' } },
+        { resourceType: { equals: 'treasury' } },
       ],
     },
     orderBy: { createdAt: 'desc' },

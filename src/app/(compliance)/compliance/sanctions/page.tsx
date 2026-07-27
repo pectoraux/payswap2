@@ -32,7 +32,7 @@ export default async function ComplianceSanctionsPage() {
 
   // Sanctions-related alerts (alertType contains "SANCTION")
   const sanctions = await db.aMLAlert.findMany({
-    where: { alertType: { contains: 'SANCTION', mode: 'insensitive' } },
+    where: { alertType: { contains: 'SANCTION' } },
     orderBy: { createdAt: 'desc' },
     take: 100,
   });

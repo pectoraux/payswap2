@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useState, useSyncExternalStore } from 'react';
 import { Beaker, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -87,22 +87,53 @@ export function EnvSwitcher() {
   // useSyncExternalStore handles SSR/hydration: the server snapshot is always
   // 'sandbox', and after hydration the client reads the real stored value.
   const mode = useEnvMode();
+  const [switching, setSwitching] = useState(false);
 
-  const toggle = useCallback(() => {
+  const toggle = useCallback(async () => {
+    if (switching) return;
     const next: EnvMode = mode === 'sandbox' ? 'live' : 'sandbox';
-    writeStoredMode(next);
-    toast.success(
-      next === 'live' ? 'Switched to Live mode' : 'Switched to Sandbox mode',
-      {
-        description:
-          next === 'live'
-            ? 'Real transactions will be processed.'
-            : 'No real funds will move in this mode.',
-      },
-    );
-    // Reload to refresh server-rendered data with the new environment
-    setTimeout(() => window.location.reload(), 500);
-  }, [mode]);
+    setSwitching(true);
+    try {
+      // 1. Switch the in-memory RuntimeHost's active environment so all
+      //    runtime calls (sandbox/live) follow the user's choice. Without
+      //    this the badge is cosmetic — runtime queries still hit the old
+      //    environment.
+      const res = await fetch('/api/runtime/host', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ environment: next }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error || `HTTP ${res.status}`);
+      }
+      // 2. Persist locally (localStorage + cookie) so server-rendered routes
+      //    that read the `payswap-env-mode` cookie also see the new env.
+      writeStoredMode(next);
+      toast.success(
+        next === 'live' ? 'Switched to Live mode' : 'Switched to Sandbox mode',
+        {
+          description:
+            next === 'live'
+              ? 'Real transactions will be processed.'
+              : 'No real funds will move in this mode.',
+        },
+      );
+      // 3. Reload to refresh server-rendered data with the new environment.
+      setTimeout(() => window.location.reload(), 500);
+    } catch (err) {
+      // 4. On failure, the stored mode was never updated so the badge
+      //    naturally reverts. Surface the error and re-dispatch the change
+      //    event so any optimistic subscribers re-sync to the unchanged
+      //    store value.
+      toast.error('Failed to switch environment', {
+        description: err instanceof Error ? err.message : 'Please try again.',
+      });
+      window.dispatchEvent(new Event(CHANGE_EVENT));
+    } finally {
+      setSwitching(false);
+    }
+  }, [mode, switching]);
 
   const isLive = mode === 'live';
 
@@ -111,17 +142,21 @@ export function EnvSwitcher() {
       type="button"
       variant="ghost"
       onClick={toggle}
+      disabled={switching}
       aria-label={`Environment: ${isLive ? 'Live' : 'Sandbox'}. Click to switch.`}
       title={
-        isLive
-          ? 'Live mode — click to switch to Sandbox'
-          : 'Sandbox mode — click to switch to Live'
+        switching
+          ? 'Switching environment…'
+          : isLive
+            ? 'Live mode — click to switch to Sandbox'
+            : 'Sandbox mode — click to switch to Live'
       }
       className={cn(
         'h-9 shrink-0 gap-1.5 rounded-md border px-2.5 text-xs font-semibold',
         isLive
           ? 'border-sky-500/30 bg-sky-500/10 text-sky-600 hover:bg-sky-500/15 dark:text-sky-300'
           : 'border-violet-500/30 bg-violet-500/10 text-violet-600 hover:bg-violet-500/15 dark:text-violet-300',
+        switching && 'opacity-60',
       )}
     >
       {isLive ? <Zap className="h-3.5 w-3.5" /> : <Beaker className="h-3.5 w-3.5" />}

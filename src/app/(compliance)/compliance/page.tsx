@@ -61,7 +61,7 @@ export default async function ComplianceOverviewPage() {
       where: { status: 'PENDING', type: 'KYC' },
     }),
     db.aMLAlert.count({
-      where: { alertType: { contains: 'SANCTION', mode: 'insensitive' } },
+      where: { alertType: { contains: 'SANCTION' } },
     }),
     db.sAR.count({ where: { status: { in: ['DRAFT', 'FILED'] } } }),
     db.aMLAlert.findMany({

@@ -26,7 +26,8 @@ export const dynamic = 'force-dynamic';
 export default async function SubscriptionsPage() {
   const ctx = await requireMerchant().catch(() => null);
   if (!ctx) redirect('/unauthorized');
-  const { merchantId, merchant } = ctx;
+  const { merchant } = ctx;
+  const merchantId = merchant.id;
 
   const subscriptions = await db.subscription.findMany({
     where: { merchantId },

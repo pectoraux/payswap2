@@ -1,31 +1,72 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { sandboxService } from '@/protocol/developer';
+import { requireSession, unauthorized } from '@/lib/api-auth';
+import {
+  resolveDeveloperMerchantId,
+} from '@/lib/developer-context';
+import { getOrCreateDeveloperSandbox } from '@/lib/developer-sandbox';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** POST /api/developer/sandbox — create or reset a sandbox */
-export async function POST(req: NextRequest) {
-  const body = await req.json();
-  const { action } = body;
-  if (action === 'create') {
-    const sandbox = sandboxService.create(body.merchantId ?? 'demo-merchant');
-    return NextResponse.json({ sandbox });
+/**
+ * GET /api/developer/sandbox
+ *
+ * Returns the developer's personal sandbox state. Creates one on first call.
+ */
+export async function GET() {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+  const userId = (session.user as any)?.id as string | undefined;
+  if (!userId) {
+    return NextResponse.json({ ok: false, error: 'No user id in session' }, { status: 400 });
   }
-  if (action === 'reset') {
-    sandboxService.reset(body.sandboxId);
-    return NextResponse.json({ ok: true });
+  try {
+    const merchantId = await resolveDeveloperMerchantId(userId);
+    const sandbox = getOrCreateDeveloperSandbox(userId, merchantId);
+    return NextResponse.json({ ok: true, sandbox });
+  } catch (err) {
+    console.error('[api/developer/sandbox GET] error:', err);
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },
+      { status: 500 },
+    );
   }
-  if (action === 'seed') {
-    sandboxService.seedTestData(body.sandboxId);
-    return NextResponse.json({ ok: true });
-  }
-  return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
 }
 
-/** GET /api/developer/sandbox — list sandboxes */
-export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const merchantId = url.searchParams.get('merchantId') ?? undefined;
-  return NextResponse.json({ sandboxes: sandboxService.listSandboxes(merchantId ?? '') });
+/**
+ * POST /api/developer/sandbox — seed additional test data into the sandbox.
+ *
+ * Body: { customers?: number, products?: number, payments?: number, invoices?: number }
+ */
+export async function POST(req: NextRequest) {
+  const session = await requireSession();
+  if (!session) return unauthorized();
+  const userId = (session.user as any)?.id as string | undefined;
+  if (!userId) {
+    return NextResponse.json({ ok: false, error: 'No user id in session' }, { status: 400 });
+  }
+  try {
+    const merchantId = await resolveDeveloperMerchantId(userId);
+    const sandbox = getOrCreateDeveloperSandbox(userId, merchantId);
+    let body: any = {};
+    try {
+      body = await req.json();
+    } catch {
+      body = {};
+    }
+    const { sandboxService } = await import('@/protocol/developer');
+    const result = (sandboxService as any).seedTestData(sandbox.id, {
+      customers: typeof body.customers === 'number' ? body.customers : 5,
+      products: typeof body.products === 'number' ? body.products : 8,
+      payments: typeof body.payments === 'number' ? body.payments : 10,
+      invoices: typeof body.invoices === 'number' ? body.invoices : 4,
+    });
+    return NextResponse.json({ ok: true, seeded: result });
+  } catch (err) {
+    console.error('[api/developer/sandbox POST] error:', err);
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },
+      { status: 500 },
+    );
+  }
 }

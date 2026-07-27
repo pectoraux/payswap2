@@ -46,7 +46,8 @@ interface PageProps {
 export default async function DisputesPage({ searchParams }: PageProps) {
   const ctx = await requireMerchant().catch(() => null);
   if (!ctx) redirect('/unauthorized');
-  const { merchantId, merchant } = ctx;
+  const { merchant } = ctx;
+  const merchantId = merchant.id;
 
   const env = await getEnvironment();
   const sp = await searchParams;

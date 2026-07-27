@@ -81,7 +81,7 @@ export async function GET() {
   let merchant: any;
   try {
     const ctx = await requireMerchant();
-    merchantId = ctx.merchantId;
+    merchantId = ctx.merchant.id;
     merchant = ctx.merchant;
   } catch (err) {
     const code = err instanceof Error ? err.message : 'UNAUTHORIZED';
@@ -119,7 +119,7 @@ export async function PATCH(req: NextRequest) {
   let session: any;
   try {
     const ctx = await requireMerchant();
-    merchantId = ctx.merchantId;
+    merchantId = ctx.merchant.id;
     merchant = ctx.merchant;
     session = ctx.session;
   } catch (err) {

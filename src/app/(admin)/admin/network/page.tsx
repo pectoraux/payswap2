@@ -407,8 +407,8 @@ export default async function AdminNetworkPage() {
             ) : (
               <div className="space-y-2">
                 {corridorAgg.map((c, idx) => {
-                  const maxVolume = corridorAgg[0]?._sum.amount ?? 1;
-                  const pct = maxVolume > 0 ? (c._sum.amount / maxVolume) * 100 : 0;
+                  const maxVolume = corridorAgg[0]?._sum?.amount ?? 1;
+                  const pct = maxVolume > 0 ? ((c._sum?.amount ?? 0) / maxVolume) * 100 : 0;
                   return (
                     <div key={`${c.corridor}-${idx}`} className="space-y-1">
                       <div className="flex items-center justify-between text-xs">
@@ -417,7 +417,7 @@ export default async function AdminNetworkPage() {
                           <span className="font-medium">{c.corridor || '—'}</span>
                           <Badge variant="outline" className="text-[9px]">{c._count} txns</Badge>
                         </div>
-                        <span className="font-mono tabular-nums">{fmtCurrency(c._sum.amount)} GHS</span>
+                        <span className="font-mono tabular-nums">{fmtCurrency(c._sum?.amount ?? 0)} GHS</span>
                       </div>
                       <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                         <div
@@ -470,7 +470,7 @@ export default async function AdminNetworkPage() {
                         </TableCell>
                         <TableCell className="text-right tabular-nums text-xs">{m._count.toLocaleString()}</TableCell>
                         <TableCell className="text-right tabular-nums text-xs font-semibold">
-                          {fmtCurrency(m._sum.amount)} GHS
+                          {fmtCurrency(m._sum?.amount ?? 0)} GHS
                         </TableCell>
                       </TableRow>
                     );

@@ -60,7 +60,7 @@ export default async function OpsHealthPage() {
   const memPct = Math.min(100, (memUsedMb / 1024) * 100);
   const heapPct = heapTotalMb > 0 ? (heapUsedMb / heapTotalMb) * 100 : 0;
 
-  const healthReport = productionConnectorRegistry.healthReport();
+  const healthReport = await productionConnectorRegistry.healthReport();
   const healthyCount = healthReport.filter((h) => h.healthy).length;
   const degradedCount = healthReport.length - healthyCount;
 

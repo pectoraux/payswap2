@@ -1,20 +1,12 @@
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
+import { safeJson } from '@/lib/extension-catalog';
+import { getFeaturedIds } from '@/lib/extension-featured';
 import { Boxes } from 'lucide-react';
-import { AdminExtensionsManager } from './extensions-manager';
-import type { AdminExtension, AdminDeveloper } from './extensions-manager';
+import { AdminExtensionsManager, type AdminExtension, type AdminDeveloper } from './extensions-manager';
 
 export const dynamic = 'force-dynamic';
-
-function safeJson<T = unknown>(raw: string | null): T | null {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
 
 export default async function AdminExtensionsPage() {
   const session = await getServerSession(authOptions);
@@ -28,12 +20,23 @@ export default async function AdminExtensionsPage() {
 
   // Resolve the developer users for the extensions we loaded.
   const devIds = Array.from(new Set(rows.map((r) => r.developerId)));
-  const devUsers = await db.user.findMany({
-    where: { id: { in: devIds } },
-    select: { id: true, name: true, email: true },
-  });
+  const [devUsers, installAgg, featuredSet] = await Promise.all([
+    db.user.findMany({
+      where: { id: { in: devIds } },
+      select: { id: true, name: true, email: true },
+    }),
+    db.extensionInstall.groupBy({
+      by: ['extensionId'],
+      _count: { _all: true },
+      where: { extensionId: { in: rows.map((r) => r.id) } },
+    }),
+    getFeaturedIds(),
+  ]);
   const devMap = new Map<string, AdminDeveloper>(
     devUsers.map((u) => [u.id, { id: u.id, name: u.name ?? '—', email: u.email }]),
+  );
+  const installCountMap = new Map(
+    installAgg.map((i) => [i.extensionId, i._count._all]),
   );
 
   const extensions: AdminExtension[] = rows.map((e) => ({
@@ -59,36 +62,48 @@ export default async function AdminExtensionsPage() {
       safeJson<Array<{ version: string; date: string; changes: string }>>(e.changelog) ??
       [],
     installCount: e.installCount,
+    activeInstallCount: installCountMap.get(e.id) ?? 0,
     rating: e.rating,
     reviewCount: e.reviewCount,
+    featured: featuredSet.has(e.id),
     submittedAt: e.submittedAt ? e.submittedAt.toISOString() : null,
     reviewedAt: e.reviewedAt ? e.reviewedAt.toISOString() : null,
+    reviewedBy: e.reviewedBy,
     reviewNotes: e.reviewNotes,
     publishedAt: e.publishedAt ? e.publishedAt.toISOString() : null,
     createdAt: e.createdAt.toISOString(),
     updatedAt: e.updatedAt.toISOString(),
   }));
 
+  // Marketplace-review tab: anything in the submission/security/review pipeline.
   const inReview = extensions.filter((e) =>
-    ['submitted', 'review', 'approved'].includes(e.status),
+    ['submitted', 'static_analysis', 'security_scan', 'review', 'approved', 'suspended'].includes(
+      e.status,
+    ),
   );
-  const published = extensions.filter((e) => e.status === 'published');
-  const suspended = extensions.filter((e) => e.status === 'suspended');
+
+  // All-extensions tab: every extension regardless of status.
+  const all = extensions;
 
   const stats = {
     inReview: inReview.length,
-    published: published.length,
-    suspended: suspended.length,
+    published: extensions.filter((e) => e.status === 'published').length,
+    suspended: extensions.filter((e) => e.status === 'suspended').length,
+    deprecated: extensions.filter((e) => e.status === 'deprecated').length,
+    archived: extensions.filter((e) => e.status === 'archived').length,
+    featured: extensions.filter((e) => e.featured).length,
     totalInstalls: extensions.reduce((s, e) => s + e.installCount, 0),
+    total: extensions.length,
   };
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Extension review</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Extension marketplace</h1>
           <p className="text-sm text-muted-foreground">
-            Review submissions, approve new extensions, and suspend abusive ones.
+            Review submissions, drive the lifecycle, feature or deprecate
+            extensions, and moderate the catalog.
           </p>
         </div>
         <div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2">
@@ -103,10 +118,8 @@ export default async function AdminExtensionsPage() {
       </div>
 
       <AdminExtensionsManager
-        extensions={extensions}
+        extensions={all}
         inReview={inReview}
-        published={published}
-        suspended={suspended}
         stats={stats}
         isAdmin={isAdmin}
       />

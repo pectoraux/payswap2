@@ -132,7 +132,7 @@ function computeUptimeBars(
       if (i.component !== componentId) return false;
       const start = i.createdAt.getTime();
       const end = i.resolvedAt ? i.resolvedAt.getTime() : dayEnd.getTime();
-      return start < dayEnd && end > day.getTime();
+      return start < dayEnd.getTime() && end > day.getTime();
     });
 
     if (overlapping.some((i) => i.severity === 'P1' && i.status !== 'resolved')) {

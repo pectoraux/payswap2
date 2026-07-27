@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
   const where: {
     status: string;
     category?: string;
-    OR?: Array<{ name?: { contains: string; mode: 'insensitive' }; description?: { contains: string; mode: 'insensitive' } }>;
+    OR?: Array<{ name?: { contains: string }; description?: { contains: string } }>;
   } = { status: 'published' };
 
   if (category && VALID_CATEGORIES.has(category.toLowerCase())) {
@@ -54,9 +54,10 @@ export async function GET(req: NextRequest) {
   }
 
   if (q) {
+    // SQLite is case-insensitive by default for ASCII text in `contains`.
     where.OR = [
-      { name: { contains: q, mode: 'insensitive' } },
-      { description: { contains: q, mode: 'insensitive' } },
+      { name: { contains: q } },
+      { description: { contains: q } },
     ];
   }
 

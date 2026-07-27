@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
   let session: any;
   try {
     const ctx = await requireMerchant();
-    merchantId = ctx.merchantId;
+    merchantId = ctx.merchant.id;
     session = ctx.session;
   } catch (err) {
     const code = err instanceof Error ? err.message : 'UNAUTHORIZED';

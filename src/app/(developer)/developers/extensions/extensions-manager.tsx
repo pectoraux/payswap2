@@ -1,7 +1,8 @@
 'use client';
 
 import * as React from 'react';
-import { Loader2, Pencil, Plus, Send, Star } from 'lucide-react';
+import Link from 'next/link';
+import { Loader2, Pencil, Plus, Send, Star, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -233,8 +234,8 @@ function ExtensionFormDialog({
     try {
       const url =
         mode === 'create'
-          ? '/api/extensions/create'
-          : `/api/extensions/${extension?.id}`;
+          ? '/api/developer/extensions'
+          : `/api/developer/extensions/${extension?.id}`;
       const method = mode === 'create' ? 'POST' : 'PATCH';
       const body: Record<string, unknown> = {
         name: form.name.trim(),
@@ -258,7 +259,7 @@ function ExtensionFormDialog({
         body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (!res.ok) {
+      if (!res.ok || !data.ok) {
         throw new Error(data?.error || 'Failed to save extension');
       }
       toast.success(
@@ -494,12 +495,12 @@ function ExtensionCard({
   async function handleSubmitForReview() {
     setSubmitting(true);
     try {
-      const res = await fetch(`/api/extensions/${ext.id}/submit`, {
+      const res = await fetch(`/api/developer/extensions/${ext.id}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
       const data = await res.json();
-      if (!res.ok) {
+      if (!res.ok || !data.ok) {
         throw new Error(data?.error || 'Failed to submit');
       }
       toast.success('Extension submitted for review');
@@ -644,9 +645,16 @@ function ExtensionCard({
             </Badge>
           )}
           {ext.status === 'published' && ext.publishedAt && (
-            <div className="text-[11px] text-muted-foreground">
-              Published {new Date(ext.publishedAt).toLocaleDateString()}
-            </div>
+            <>
+              <Button asChild variant="outline" size="sm" className="h-8">
+                <Link href={`/dashboard/extensions?slug=${ext.slug}`} target="_blank">
+                  <ExternalLink className="mr-1.5 h-3.5 w-3.5" /> View listing
+                </Link>
+              </Button>
+              <div className="text-[11px] text-muted-foreground">
+                Published {new Date(ext.publishedAt).toLocaleDateString()}
+              </div>
+            </>
           )}
         </div>
       </CardContent>

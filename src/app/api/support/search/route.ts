@@ -51,10 +51,10 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // Use contains (case-insensitive on PostgreSQL by default for citext-like
-  // comparisons on string columns). We add `mode: 'insensitive'` explicitly
-  // to make the intent clear and resilient to future migrations.
-  const insensitive = { contains: q, mode: 'insensitive' as const };
+  // SQLite is case-insensitive by default for ASCII text in `contains` filters.
+  // (Originally we passed `mode: 'insensitive'` for PostgreSQL parity; that
+  // argument is rejected by the SQLite Prisma engine, so we drop it here.)
+  const insensitive = { contains: q };
 
   const [payments, payouts, merchants, customers] = await Promise.all([
     db.payment.findMany({

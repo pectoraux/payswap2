@@ -96,7 +96,7 @@ export async function GET(req: NextRequest) {
       _count: { _all: true },
     }),
     db.aMLAlert.count({
-      where: { alertType: { contains: 'SANCTION', mode: 'insensitive' } },
+      where: { alertType: { contains: 'SANCTION' } },
     }),
     db.aMLAlert.findMany({
       where: { status: 'OPEN' },

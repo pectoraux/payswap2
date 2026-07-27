@@ -34,7 +34,7 @@ export default async function OpsConnectorsPage() {
   const session = await getServerSession(authOptions);
 
   const connectors = productionConnectorRegistry.all();
-  const healthReport = productionConnectorRegistry.healthReport();
+  const healthReport = await productionConnectorRegistry.healthReport();
   const metricsReport = productionConnectorRegistry.metricsReport();
   const pausedMap = getConnectorRuntimeState();
 
@@ -115,7 +115,7 @@ export default async function OpsConnectorsPage() {
               </TableHeader>
               <TableBody>
                 {connectors.map((c) => {
-                  const cfg = c.getConfig();
+                  const cfg = c.config;
                   const health = healthReport.find((h) => h.id === cfg.id);
                   const isPaused = pausedMap[cfg.id] === true;
                   const status = isPaused
@@ -214,7 +214,7 @@ export default async function OpsConnectorsPage() {
                       <TableCell className="text-right tabular-nums text-rose-600 dark:text-rose-400">
                         {m.requestsFailed}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{m.requestsRetried}</TableCell>
+                      <TableCell className="text-right tabular-nums">{m.avgLatencyMs.toFixed(0)}</TableCell>
                       <TableCell className="text-right font-semibold tabular-nums">
                         {fmtNumber(rate, 2)}%
                       </TableCell>

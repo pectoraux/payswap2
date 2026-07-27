@@ -35,7 +35,8 @@ export default async function RefundsPage({
 }) {
   const ctx = await requireMerchant().catch(() => null);
   if (!ctx) redirect('/unauthorized');
-  const { merchantId, merchant } = ctx;
+  const { merchant } = ctx;
+  const merchantId = merchant.id;
 
   const env = await getEnvironment();
 

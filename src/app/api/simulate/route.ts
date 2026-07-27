@@ -172,10 +172,11 @@ async function persistRun(result: SimulationResult): Promise<void> {
   if (result.audit.entries.length > 0) {
     await db.auditLog.createMany({
       data: result.audit.entries.map((a) => ({
-        runId: result.runId,
-        actor: a.actor,
         action: a.action,
-        detail: a.detail,
+        resourceType: 'SimulationRun',
+        resourceId: result.runId,
+        result: 'SUCCESS',
+        details: JSON.stringify({ runId: result.runId, actor: a.actor, detail: a.detail }),
       })),
     });
   }

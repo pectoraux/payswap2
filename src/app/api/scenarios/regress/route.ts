@@ -17,7 +17,7 @@ export async function POST() {
     return ScenarioLibrary.save(scenario, {
       resultHash: r.baselineHash,
       plan: { metrics: { costPercent: r.baselineCost, settlementTimeMs: r.baselineTime, riskScore: r.baselineRisk, confidence: r.baselineConf } },
-    } as SimulationResult, r.category);
+    } as SimulationResult, r.category ?? undefined);
   });
 
   const results = new Map<string, SimulationResult>();

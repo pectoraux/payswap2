@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
   let merchant: { currency: string; name: string };
   try {
     const result = await requireMerchant();
-    merchantId = result.merchantId;
+    merchantId = result.merchant.id;
     merchant = result.merchant;
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

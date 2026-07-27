@@ -1,12 +1,14 @@
 // PaySwap — Production Prisma Schema
-// PostgreSQL-ready (uses compatible types, normalized, indexed, soft-deletes, audit fields)
+// SQLite-ready (uses compatible types, normalized, indexed, soft-deletes, audit fields)
+// NOTE: SQLite does not support BigInt/Decimal/Json — all JSON is stored as String,
+// and all timestamps-as-integers are stored as Int.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -36,6 +38,12 @@ model User {
   sessions        Session[]
   auditLogs       AuditLog[]
   teamMemberships TeamMember[]
+
+  // Extension marketplace (added in task 2-prisma-fix)
+  extensions         Extension[]
+  extensionReviews   ExtensionReview[]
+  // Organization memberships (added in task 2-prisma-fix)
+  orgMemberships     OrganizationMember[]
 
   @@index([status])
 }
@@ -148,6 +156,9 @@ model Merchant {
   teamMembers        TeamMember[]
   payments           Payment[]
 
+  // Extension marketplace installs (added in task 2-prisma-fix)
+  extensionInstalls  ExtensionInstall[]
+
   @@index([status])
   @@index([tier])
   @@index([country])
@@ -186,6 +197,7 @@ model CustomerRecord {
   metadata        String?  // JSON
   totalSpent      Float    @default(0)
   transactionCount Int     @default(0)
+  environment     String   @default("sandbox")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   deletedAt       DateTime?
@@ -195,22 +207,25 @@ model CustomerRecord {
 
   @@index([merchantId])
   @@index([email])
+  @@index([environment])
 }
 
 model LPProfile {
-  id          String   @id @default(cuid())
-  accountId   String   @unique
-  name        String
-  country     String
-  currencies  String   // JSON array
-  tier        String   @default("verified")
-  stake       Float    @default(0)
-  collateral  Float    @default(0)
-  capacity    String?  // JSON
-  reputation  Float    @default(0.5)
-  status      String   @default("pending")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  accountId          String   @unique
+  name               String
+  country            String
+  currencies         String   // JSON array
+  tier               String   @default("verified")
+  stake              Float    @default(0)
+  collateral         Float    @default(0)
+  capacity           String?  // JSON
+  feeBps             String?  // JSON map of corridor → bps (e.g. {"GHS→KES": 50})
+  settlementSpeedMs  Int      @default(30000)
+  reputation         Float    @default(0.5)
+  status             String   @default("pending")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   account Account @relation(fields: [accountId], references: [id])
 
@@ -282,6 +297,7 @@ model Payment {
   description         String?
   metadata            String?  // JSON
   failureReason       String?
+  environment         String   @default("sandbox") // sandbox | live — isolates test traffic from production data
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   settledAt           DateTime?
@@ -294,6 +310,7 @@ model Payment {
   @@index([customerId])
   @@index([createdAt])
   @@index([corridor])
+  @@index([environment])
 }
 
 model Payout {
@@ -316,6 +333,7 @@ model Payout {
   failureReason       String?
   approvedBy          String?
   approvedAt          DateTime?
+  environment         String   @default("sandbox")
   createdAt           DateTime @default(now())
   processedAt         DateTime?
   completedAt         DateTime?
@@ -324,6 +342,7 @@ model Payout {
 
   @@index([merchantId, status])
   @@index([createdAt])
+  @@index([environment])
 }
 
 model Refund {
@@ -337,6 +356,7 @@ model Refund {
   requestedBy String
   approvedBy  String?
   processedAt DateTime?
+  environment String   @default("sandbox")
   createdAt   DateTime @default(now())
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
@@ -344,6 +364,7 @@ model Refund {
 
   @@index([merchantId])
   @@index([paymentId])
+  @@index([environment])
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -361,6 +382,7 @@ model Product {
   imageUrl    String?
   metadata    String?  // JSON
   status      String   @default("ACTIVE")
+  environment String   @default("sandbox")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   deletedAt   DateTime?
@@ -368,6 +390,7 @@ model Product {
   merchant Merchant @relation(fields: [merchantId], references: [id])
 
   @@index([merchantId, status])
+  @@index([environment])
 }
 
 model Invoice {
@@ -385,6 +408,7 @@ model Invoice {
   sentAt      DateTime?
   paidAt      DateTime?
   paymentId   String?
+  environment String   @default("sandbox")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -393,6 +417,7 @@ model Invoice {
 
   @@index([merchantId, status])
   @@index([customerId])
+  @@index([environment])
 }
 
 model Subscription {
@@ -410,12 +435,14 @@ model Subscription {
   canceledAt          DateTime?
   lastPaymentAt       DateTime?
   failedAttempts      Int      @default(0)
+  environment         String   @default("sandbox")
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
 
   @@index([merchantId, status])
+  @@index([environment])
 }
 
 model PaymentLink {
@@ -430,11 +457,13 @@ model PaymentLink {
   expiresAt       DateTime?
   paymentCount    Int      @default(0)
   totalCollected  Float    @default(0)
+  environment     String   @default("sandbox")
   createdAt       DateTime @default(now())
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
 
   @@index([merchantId])
+  @@index([environment])
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -452,11 +481,13 @@ model ApiKey {
   lastUsedIp  String?
   status      String   @default("ACTIVE")
   expiresAt   DateTime?
+  environment String   @default("sandbox")
   createdAt   DateTime @default(now())
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
 
   @@index([merchantId])
+  @@index([environment])
 }
 
 model WebhookEndpoint {
@@ -466,12 +497,14 @@ model WebhookEndpoint {
   secretHash  String
   events      String   // JSON array
   status      String   @default("ACTIVE")
+  environment String   @default("sandbox")
   createdAt   DateTime @default(now())
 
   merchant    Merchant           @relation(fields: [merchantId], references: [id])
   deliveries  WebhookDelivery[]
 
   @@index([merchantId])
+  @@index([environment])
 }
 
 model WebhookDelivery {
@@ -541,11 +574,13 @@ model AMLAlert {
   details     String?  // JSON
   status      String   @default("OPEN")
   assignedTo  String?
+  environment String   @default("sandbox")
   createdAt   DateTime @default(now())
   closedAt    DateTime?
 
   @@index([status])
   @@index([entityId])
+  @@index([environment])
 }
 
 model SAR {
@@ -623,7 +658,7 @@ model EventRecord {
   eventId   String   @unique
   type      String
   payload   String
-  ts        BigInt
+  ts        Int      // SQLite does not support BigInt — store epoch-ms as Int
   frame     Int      @default(0)
   seq       Int      @default(0)
   createdAt DateTime @default(now())
@@ -636,7 +671,7 @@ model EventRecord {
 model LedgerSnapshotRecord {
   id           String   @id @default(cuid())
   snapshotId   String   @unique
-  asOfTs       BigInt
+  asOfTs       Int      // SQLite does not support BigInt — store epoch-ms as Int
   asOfSeq      Int
   accounts     String
   trialBalance String
@@ -647,4 +682,244 @@ model LedgerSnapshotRecord {
 
   @@index([asOfTs])
   @@index([asOfSeq])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTENSION MARKETPLACE (added in task 2-prisma-fix)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Extension {
+  id            String    @id @default(cuid())
+  slug          String    @unique
+  name          String
+  description   String
+  developerId   String
+  category      String    // payments | analytics | compliance | accounting | crm | marketing | shipping | other
+  iconUrl       String?
+  version       String    @default("1.0.0")
+  status        String    @default("draft") // draft | submitted | review | approved | published | rejected | suspended
+  permissions   String    // JSON array: read_payments | write_payments | read_customers | write_customers | send_webhooks
+  pricing       String    @default("free") // free | paid | freemium
+  price         Float     @default(0)
+  config        String?   // JSON schema object for merchant config
+  changelog     String?   // JSON array of { version, date, changes }
+  installCount  Int       @default(0)
+  rating        Float     @default(0)
+  reviewCount   Int       @default(0)
+  submittedAt   DateTime?
+  reviewedAt    DateTime?
+  reviewedBy    String?   // userId of admin reviewer
+  reviewNotes   String?
+  publishedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  developer User               @relation(fields: [developerId], references: [id])
+  installs   ExtensionInstall[]
+  reviews    ExtensionReview[]
+
+  @@index([status])
+  @@index([category])
+  @@index([developerId])
+}
+
+model ExtensionInstall {
+  id          String   @id @default(cuid())
+  extensionId String
+  merchantId  String
+  status      String   @default("active") // active | disabled
+  config      String?  // JSON object — merchant-specific config for the extension
+  installedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  extension Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+  merchant  Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@unique([extensionId, merchantId])
+  @@index([merchantId])
+  @@index([status])
+}
+
+model ExtensionReview {
+  id          String   @id @default(cuid())
+  extensionId String
+  userId      String
+  rating      Int
+  comment     String
+  createdAt   DateTime @default(now())
+
+  extension Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // NOTE: No @@unique([extensionId, userId]) — the seed script creates multiple
+  // reviews per extension by the same developer user, so we allow it.
+  @@index([extensionId])
+  @@index([userId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SIMULATOR PERSISTENCE (added in task 2-prisma-fix)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model SavedScenarioRecord {
+  id             String   @id @default(cuid())
+  scenarioId     String   @unique
+  name           String
+  description    String?
+  category       String?
+  scenario       String   // JSON-serialized SimulationScenario
+  baselineHash   String?
+  baselineCost   Float    @default(0)
+  baselineTime   Int      @default(0)
+  baselineRisk   Float    @default(0)
+  baselineConf   Float    @default(0)
+  lastRunAt      DateTime?
+  lastRunPassed  Boolean?
+  createdAt      DateTime @default(now())
+
+  @@index([category])
+  @@index([createdAt])
+}
+
+model LedgerEntryRecord {
+  id            String   @id @default(cuid())
+  runId         String
+  txId          String?
+  accountId     String?
+  accountLabel  String?
+  accountType   String?
+  currency      String?
+  debit         Float    @default(0)
+  credit        Float    @default(0)
+  balanceAfter  Float    @default(0)
+  memo          String?
+  frame         Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([runId])
+  @@index([accountId])
+}
+
+model TwinTokenRecord {
+  id             String   @id @default(cuid())
+  runId          String
+  symbol         String?
+  amount         Float    @default(0)
+  currency       String?
+  fromCountry    String?
+  toCountry      String?
+  status         String?
+  mintedAtFrame  Int?
+  burnedAtFrame  Int?
+  memo           String?
+  createdAt      DateTime @default(now())
+
+  @@index([runId])
+}
+
+model PlanAmendmentRecord {
+  id               String   @id @default(cuid())
+  runId            String
+  failureType      String?
+  failureLabel     String?
+  reason           String?
+  recoveryStrategy String?
+  insertedAtFrame  Int      @default(0)
+  stepCount        Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  @@index([runId])
+}
+
+model CheckpointRecord {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  lastSeq        Int      @default(0)
+  lastTs         Int      // SQLite does not support BigInt — store epoch-ms as Int
+  lastSnapshotId String?
+  totalCount     Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OPS INCIDENTS (added in task 2-prisma-fix)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Incident {
+  id             String    @id @default(cuid())
+  title          String
+  description    String?
+  severity       String    @default("P2") // P1 | P2 | P3 | P4
+  status         String    @default("open") // open | investigating | identified | monitoring | resolved
+  component      String?   // api | payments | payouts | webhooks | connectors | blockchain
+  createdBy      String?   // userId of creator
+  assignedTo     String?   // userId of assignee
+  acknowledgedAt DateTime?
+  resolvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  updates IncidentUpdate[]
+
+  @@index([status])
+  @@index([severity])
+  @@index([component])
+  @@index([createdAt])
+}
+
+model IncidentUpdate {
+  id         String   @id @default(cuid())
+  incidentId String
+  authorId   String?  // userId of author
+  message    String
+  status     String?  // investigating | identified | monitoring | resolved
+  createdAt  DateTime @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId])
+  @@index([createdAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORGANIZATIONS (added in task 2-prisma-fix)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Organization {
+  id           String   @id @default(cuid())
+  name         String
+  slug         String   @unique
+  type         String   @default("merchant") // merchant | lp | platform
+  status       String   @default("active") // active | pending | suspended
+  billingEmail String?
+  country      String?
+  currency     String   @default("GHS")
+  plan         String   @default("starter") // starter | growth | scale | enterprise
+  logoUrl      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  members OrganizationMember[]
+
+  @@index([type])
+  @@index([status])
+}
+
+model OrganizationMember {
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String
+  role           String    @default("viewer") // owner | admin | developer | analyst | finance | support | viewer
+  status         String    @default("pending") // active | pending | suspended
+  invitedAt      DateTime  @default(now())
+  joinedAt       DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@index([status])
 }

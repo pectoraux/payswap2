@@ -54,7 +54,7 @@ export async function GET(
     where: {
       OR: [
         { resourceId: id },
-        { details: { contains: id, mode: 'insensitive' } },
+        { details: { contains: id } },
       ],
     },
     orderBy: { createdAt: 'desc' },

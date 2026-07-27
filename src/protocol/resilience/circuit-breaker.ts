@@ -76,7 +76,7 @@ export interface CircuitBreakerMetrics {
  * half-open success counter does not need atomic primitives.
  */
 export class CircuitBreaker {
-  private state: CircuitState = 'closed';
+  private _state: CircuitState = 'closed';
   private readonly failureTimestamps: number[] = [];
   private openedAt: number | null = null;
   private lastFailureTs: number | null = null;
@@ -103,7 +103,7 @@ export class CircuitBreaker {
    */
   async execute<T>(fn: () => Promise<T>): Promise<T> {
     // If OPEN, either fail fast or transition to HALF_OPEN if cooled down.
-    if (this.state === 'open') {
+    if (this._state === 'open') {
       if (this.cooledDown()) {
         this.transitionTo('half_open');
       } else {
@@ -125,11 +125,11 @@ export class CircuitBreaker {
   // ------------------------------------------------------------------- state
   /** Current breaker state. Transitions to HALF_OPEN if cooldown elapsed. */
   state(): CircuitState {
-    if (this.state === 'open' && this.cooledDown()) {
+    if (this._state === 'open' && this.cooledDown()) {
       // Lazy transition so a state read between executes still reflects reality.
       this.transitionTo('half_open');
     }
-    return this.state;
+    return this._state;
   }
 
   /** Snapshot of runtime metrics. */
@@ -159,12 +159,12 @@ export class CircuitBreaker {
   // --------------------------------------------------------------- internals
   private onSuccess(): void {
     this.totalSuccesses += 1;
-    if (this.state === 'half_open') {
+    if (this._state === 'half_open') {
       this.consecutiveHalfOpenSuccesses += 1;
       if (this.consecutiveHalfOpenSuccesses >= this.options.successThresholdToClose) {
         this.transitionTo('closed');
       }
-    } else if (this.state === 'closed') {
+    } else if (this._state === 'closed') {
       // A success in CLOSED clears the half-open counter for the next trip.
       this.consecutiveHalfOpenSuccesses = 0;
     }
@@ -177,14 +177,14 @@ export class CircuitBreaker {
     this.failureTimestamps.push(ts);
     this.trimFailuresToWindow(ts);
 
-    if (this.state === 'half_open') {
+    if (this._state === 'half_open') {
       // A single failure during a trial re-trips the breaker.
       this.consecutiveHalfOpenSuccesses = 0;
       this.transitionTo('open');
       return;
     }
 
-    if (this.state === 'closed' && this.recentFailuresInWindow() >= this.options.failureThreshold) {
+    if (this._state === 'closed' && this.recentFailuresInWindow() >= this.options.failureThreshold) {
       this.transitionTo('open');
     }
   }
@@ -210,9 +210,9 @@ export class CircuitBreaker {
   }
 
   private transitionTo(next: CircuitState): void {
-    if (this.state === next) return;
-    const previous = this.state;
-    this.state = next;
+    if (this._state === next) return;
+    const previous = this._state;
+    this._state = next;
 
     if (next === 'open') {
       this.openedAt = nowTs();

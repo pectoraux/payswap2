@@ -68,7 +68,7 @@ export default async function OpsOverviewPage() {
 
   // Connector status
   const connectors = productionConnectorRegistry.all();
-  const healthReport = productionConnectorRegistry.healthReport();
+  const healthReport = await productionConnectorRegistry.healthReport();
   const healthyCount = healthReport.filter((h) => h.healthy).length;
 
   // SLO evaluation
@@ -249,7 +249,7 @@ export default async function OpsOverviewPage() {
             ) : (
               <div className="space-y-2">
                 {connectors.map((c) => {
-                  const cfg = c.getConfig();
+                  const cfg = c.config;
                   const health = healthReport.find((h) => h.id === cfg.id);
                   const healthy = health?.healthy ?? false;
                   return (
@@ -364,7 +364,7 @@ export default async function OpsOverviewPage() {
             ) : (
               <div className="space-y-3">
                 {sloStatuses.map((s) => {
-                  const successPct = s.successRate * 100;
+                  const successPct = s.currentValue * 100;
                   const tone =
                     s.onTrack
                       ? 'bg-emerald-500'
@@ -386,7 +386,7 @@ export default async function OpsOverviewPage() {
                       <div className="flex items-center justify-between text-[10px] text-muted-foreground">
                         <span>target {fmtNumber(s.slo.target * 100, 2)}%</span>
                         <span>
-                          {s.goodCount}/{s.totalCount} good
+                          {fmtNumber(s.currentValue, 0)}/{fmtNumber(s.target, 0)} good
                         </span>
                       </div>
                     </div>

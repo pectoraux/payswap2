@@ -45,7 +45,8 @@ interface PageProps {
 export default async function PaymentDetailPage({ params }: PageProps) {
   const ctx = await requireMerchant().catch(() => null);
   if (!ctx) redirect('/unauthorized');
-  const { merchantId, merchant } = ctx;
+  const { merchant } = ctx;
+  const merchantId = merchant.id;
 
   const env = await getEnvironment();
   const { id } = await params;

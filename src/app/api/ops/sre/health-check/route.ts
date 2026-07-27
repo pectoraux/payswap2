@@ -56,7 +56,7 @@ export async function GET() {
 
   const resilience = healthCheck();
   const connectors = productionConnectorRegistry.all();
-  const healthReport = productionConnectorRegistry.healthReport();
+  const healthReport = await productionConnectorRegistry.healthReport();
   const healthyCount = healthReport.filter((h) => h.healthy).length;
 
   const [eventCount, paymentCount, auditCount, failedDeliveries] =

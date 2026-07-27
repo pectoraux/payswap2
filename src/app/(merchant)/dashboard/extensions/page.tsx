@@ -1,29 +1,22 @@
 import { redirect } from 'next/navigation';
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
+import { safeJson, normalizeInstallStatus } from '@/lib/extension-catalog';
+import { getFeaturedIds } from '@/lib/extension-featured';
 import { Badge } from '@/components/ui/badge';
 import { Boxes } from 'lucide-react';
-import { MerchantExtensionsGrid, type MerchantExtension } from './extensions-grid';
+import { MerchantMarketplace, type MerchantExtension } from './extensions-grid';
 
 export const dynamic = 'force-dynamic';
-
-function safeJson<T = unknown>(raw: string | null): T | null {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
 
 export default async function ExtensionsPage() {
   // Validates session + merchant role.
   const ctx = await requireMerchant().catch(() => null);
   if (!ctx) redirect('/unauthorized');
-  const { merchantId } = ctx;
+  const merchantId = ctx.merchant.id;
 
   // Fetch published extensions directly from the DB (server-side) — same
-  // shape as the public /api/extensions/list endpoint.
+  // shape as the public /api/extensions endpoint.
   const rows = await db.extension.findMany({
     where: { status: 'published' },
     orderBy: [{ installCount: 'desc' }, { publishedAt: 'desc' }],
@@ -42,12 +35,14 @@ export default async function ExtensionsPage() {
         i.extensionId,
         {
           installId: i.id,
-          status: i.status,
+          status: normalizeInstallStatus(i.status),
           config: safeJson<Record<string, unknown>>(i.config),
           installedAt: i.installedAt.toISOString(),
         },
       ]),
   );
+
+  const featuredSet = await getFeaturedIds();
 
   const extensions: MerchantExtension[] = rows.map((e) => {
     const install = installMap.get(e.id);
@@ -63,17 +58,22 @@ export default async function ExtensionsPage() {
       pricing: e.pricing,
       price: e.price,
       config: safeJson<Record<string, unknown>>(e.config),
+      changelog:
+        safeJson<Array<{ version: string; date: string; changes: string }>>(e.changelog) ??
+        [],
       installCount: e.installCount,
       rating: e.rating,
       reviewCount: e.reviewCount,
       developerId: e.developerId,
       publishedAt: e.publishedAt ? e.publishedAt.toISOString() : null,
+      featured: featuredSet.has(e.id),
       install: install ?? null,
     };
   });
 
-  const categories = Array.from(new Set(extensions.map((e) => e.category)));
   const installedCount = extensions.filter((e) => e.install).length;
+  const featuredCount = extensions.filter((e) => e.featured).length;
+  const popularCount = extensions.filter((e) => e.installCount >= 500).length;
 
   return (
     <div className="space-y-6">
@@ -81,7 +81,8 @@ export default async function ExtensionsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Extensions</h1>
           <p className="text-sm text-muted-foreground">
-            Connect PaySwap to the tools your business already uses.
+            Connect PaySwap to the tools your business already uses. Browse,
+            install, and manage integrations across your merchant account.
           </p>
         </div>
         <Badge
@@ -93,10 +94,11 @@ export default async function ExtensionsPage() {
         </Badge>
       </div>
 
-      <MerchantExtensionsGrid
+      <MerchantMarketplace
         extensions={extensions}
-        categories={categories}
         installedCount={installedCount}
+        featuredCount={featuredCount}
+        popularCount={popularCount}
       />
     </div>
   );

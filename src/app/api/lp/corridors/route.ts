@@ -190,7 +190,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const updated = await db.lpProfile.update({
+  const updated = await db.lPProfile.update({
     where: { id: lp.id },
     data: {
       currencies: JSON.stringify(currencies),

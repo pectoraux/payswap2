@@ -92,7 +92,7 @@ export async function PATCH(
         result: 'SUCCESS',
         details: JSON.stringify({
           connectorId: id,
-          connectorName: connector.getConfig().name,
+          connectorName: connector.config.name,
           previousStatus: previous ? 'PAUSED' : 'ACTIVE',
           nextStatus: next ? 'PAUSED' : 'ACTIVE',
         }),
@@ -104,7 +104,7 @@ export async function PATCH(
 
   return NextResponse.json({
     connectorId: id,
-    connectorName: connector.getConfig().name,
+    connectorName: connector.config.name,
     status: next ? 'PAUSED' : 'ACTIVE',
     paused: next,
   });

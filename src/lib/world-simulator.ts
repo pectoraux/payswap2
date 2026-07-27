@@ -441,33 +441,40 @@ export async function runWorldSimulation(params: SimulationParams): Promise<Simu
       if (success && Math.random() < probs.complianceAlert) {
         const alertTypes = ['STRUCTURING', 'VELOCITY', 'HIGH_RISK_CORRIDOR', 'UNUSUAL_PATTERN'];
         const severities = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
-        const alertResult = await protocolCreateAMLAlert({
-          entityType: 'CUSTOMER',
-          entityId: customer.id,
-          alertType: alertTypes[Math.floor(Math.random() * alertTypes.length)],
-          severity: severities[Math.floor(Math.random() * severities.length)],
-          score: Math.random() * 100,
-          details: {
-            paymentId: paymentResult.id,
-            amount: roundedAmount,
-            customer: customer.name,
-            merchant: merchant.name,
-            customerType: customer.type,
-          },
-          timestamp: ts,
-        });
+        const alertType = alertTypes[Math.floor(Math.random() * alertTypes.length)];
+        const severity = severities[Math.floor(Math.random() * severities.length)];
+        const score = Math.random() * 100;
+        try {
+          const alert = await db.aMLAlert.create({
+            data: {
+              entityType: 'CUSTOMER',
+              entityId: customer.id,
+              alertType,
+              severity,
+              score,
+              details: JSON.stringify({
+                paymentId: paymentResult.id,
+                amount: roundedAmount,
+                customer: customer.name,
+                merchant: merchant.name,
+                customerType: customer.type,
+              }),
+              status: 'OPEN',
+              environment: env,
+              createdAt: ts,
+            },
+          });
 
-        if (!alertResult.error) {
           complianceAlerts++;
           events.push({
             ts: ts.getTime(),
             actor: 'Compliance System',
             action: 'aml_alert',
-            description: `AML alert: ${alertTypes[0]} detected for ${customer.name} (${severities[1]})`,
+            description: `AML alert: ${alertType} detected for ${customer.name} (${severity})`,
             resourceType: 'AMLAlert',
-            resourceId: alertResult.alert?.id,
+            resourceId: alert.id,
           });
-        }
+        } catch { /* alert creation failed, continue */ }
       }
 
       // 4. Merchant creates invoice (occasionally)

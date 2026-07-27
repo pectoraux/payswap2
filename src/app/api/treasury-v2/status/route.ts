@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
 import { treasuryEngine } from '@/protocol/treasury-v2';
-import { twinTokenEngine } from '@/protocol/twin-token/engine';
-import { stellarChainAdapter } from '@/protocol/chains/stellar/adapter';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -10,10 +8,7 @@ let initialized = false;
 function ensureInit() {
   if (initialized) return;
   try {
-    treasuryEngine.init({
-      twinTokenEngine,
-      stellarAdapter: stellarChainAdapter as any,
-    });
+    treasuryEngine.init();
   } catch { /* idempotent */ }
   initialized = true;
 }

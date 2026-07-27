@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
   // Run the stake/collateral update and the wallet journal entry in a
   // transaction so we never have a ledger mismatch.
   const updated = await db.$transaction(async (tx) => {
-    const next = await tx.lpProfile.update({
+    const next = await tx.lPProfile.update({
       where: { id: lp.id },
       data: {
         stake: { increment: delta },

@@ -174,7 +174,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
   }
 
-  const updated = await db.lpProfile.update({
+  const updated = await db.lPProfile.update({
     where: { id: lp.id },
     data: patch,
   });

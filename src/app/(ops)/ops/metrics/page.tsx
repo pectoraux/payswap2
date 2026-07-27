@@ -197,10 +197,10 @@ export default async function OpsMetricsPage() {
                     <TableCell className="text-right tabular-nums">
                       {(s.slo.target * 100).toFixed(2)}%
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{s.goodCount}</TableCell>
-                    <TableCell className="text-right tabular-nums">{s.totalCount}</TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtNumber(s.currentValue, 0)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtNumber(s.target, 0)}</TableCell>
                     <TableCell className="text-right font-semibold tabular-nums">
-                      {fmtNumber(s.successRate * 100, 2)}%
+                      {fmtNumber(s.currentValue * 100, 2)}%
                     </TableCell>
                     <TableCell>
                       <span
