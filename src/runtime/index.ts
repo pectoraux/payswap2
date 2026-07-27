@@ -94,6 +94,8 @@ import {
   SettlementOrchestrator, TimerEngine, RetryEngine, CompensationEngine,
   TreasuryDirector, LPIntelligenceEngine,
 } from './settlement-orchestrator';
+// M-ECO-34.5: Economic Control Plane (constitution + digital twin + capital allocation):
+import { EconomicControlPlane } from './control-plane';
 
 // Re-export the public surface.
 export * from './types';
@@ -235,6 +237,18 @@ export type {
   TreasuryRiskAssessment,
   LPReputation, LPIncentive, LPLearningUpdate,
 } from './settlement-orchestrator';
+// M-ECO-34.5: Economic Control Plane (explicit re-exports to avoid conflicts):
+export { EconomicControlPlane } from './control-plane';
+export type {
+  ConstitutionConfig, ConstitutionResult, ConstitutionContext,
+  ConstitutionalRule, LiquidityDigitalTwin, CountryDigitalTwin,
+  ReserveMaturity, Scenario, ScenarioResult, ScenarioType,
+  CapitalAllocation as EcoCapitalAllocation, CapitalAction,
+  InventoryState, InventoryRecommendation,
+  ReserveEvolutionPlan, NetworkOptimization,
+  GovernanceDecision, ApprovalClass,
+  EconomicExplanation, ControlPlaneReport,
+} from './control-plane';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -344,6 +358,8 @@ export interface Runtime {
   treasuryDirector: TreasuryDirector;
   // M-ECO-34: LP Intelligence & Incentive Engine.
   lpIntelligence: LPIntelligenceEngine;
+  // M-ECO-34.5: Economic Control Plane (constitution + digital twin + capital allocation).
+  controlPlane: EconomicControlPlane;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -655,6 +671,25 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   // ── M-ECO-34: LP Intelligence & Incentive Engine ───────────────────────
   const lpIntelligence = new LPIntelligenceEngine();
 
+  // ── M-ECO-34.5: Economic Control Plane ─────────────────────────────────
+  const controlPlane = new EconomicControlPlane({
+    getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
+      id: a.id, kind: a.kind, ownerId: a.ownerId, currency: a.currency,
+      availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
+    })),
+    getBandwidthPositions: () => bandwidth.list().map((b) => ({
+      owner: b.owner, country: b.country, assetType: b.assetType,
+      capacity: b.capacity, available: b.available, status: b.status,
+    })),
+    getLPs: () => lpRuntime.listLPs().map((lp) => ({
+      lpId: lp.lpId, confidence: lp.confidence, riskScore: lp.riskScore, totalCapacity: lp.totalCapacity,
+    })),
+    getTwinTokenPositions: () => twinTokens.list().map((t) => ({
+      accountId: t.accountId, tokenType: t.tokenType, currency: t.currency, balance: t.balance,
+    })),
+    getIntelligenceDashboard: () => intelligence.getDashboard(),
+  });
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -724,6 +759,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     timerEngine,
     treasuryDirector,
     lpIntelligence,
+    controlPlane,
     health,
     migrations,
     invariants,
