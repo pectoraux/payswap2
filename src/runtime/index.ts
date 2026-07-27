@@ -19,7 +19,8 @@ import { InMemoryEventStore, type EventStore } from './events';
 import { ProjectionRunner } from './read-models';
 import { PaymentsService, PaymentBackfillService } from './engines/payments';
 import { RefundsService, RefundBackfillService } from './engines/refunds';
-import { ProjectionHealthRegistry } from './migration';
+import { ProjectionHealthRegistry, MigrationManager } from './migration';
+import { LiquidityComposer } from './engines/liquidity-composer';
 import type { Environment } from './types';
 
 // Re-export the public surface.
@@ -31,6 +32,7 @@ export * from './engines/payments';
 export * from './engines/refunds';
 export * from './migration';
 export * from './read-models/v2';
+export * from './engines/liquidity-composer';
 
 /** The Runtime container — holds every component. */
 export interface Runtime {
@@ -45,6 +47,10 @@ export interface Runtime {
   refundBackfill: RefundBackfillService;
   /** M-RT-19: Projection health registry (aggregates health from all projections). */
   health: ProjectionHealthRegistry;
+  /** M-RT-19: Migration manager (owns all capability backfills; inverts _onFirstRead ownership). */
+  migrations: MigrationManager;
+  /** M-RT-16: Liquidity Composer (multi-hop + split routing). Pure — never executes. */
+  composer: LiquidityComposer;
 }
 
 export interface CreateRuntimeOptions {
@@ -71,15 +77,6 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     actorId: 'system:backfill',
     correlationPrefix: 'backfill:payment',
   });
-  // Lazy backfill on first read.
-  let paymentBackfillTriggered = false;
-  payments._onFirstRead = () => {
-    if (paymentBackfillTriggered) return;
-    paymentBackfillTriggered = true;
-    paymentBackfill.run().catch((err) => {
-      console.warn('[runtime] payment backfill failed (non-fatal):', err instanceof Error ? err.message : err);
-    });
-  };
 
   // ── Refunds capability (M-RT-19 — uses BackfillEngine<T>) ────────────────
   const refunds = new RefundsService({ eventStore, clock });
@@ -89,15 +86,28 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     environment: opts.environment ?? 'live',
     correlationPrefix: 'backfill:refund',
   });
-  // Lazy backfill on first read.
-  let refundBackfillTriggered = false;
-  refunds._onFirstRead = () => {
-    if (refundBackfillTriggered) return;
-    refundBackfillTriggered = true;
-    refundBackfill.run().catch((err) => {
-      console.warn('[runtime] refund backfill failed (non-fatal):', err instanceof Error ? err.message : err);
-    });
-  };
+
+  // ── Migration Manager (M-RT-19 feedback: invert backfill ownership) ─────
+  // The manager OWNS all capability backfills. Capabilities don't trigger
+  // their own backfills — the manager does it centrally. This separates
+  // migration (a deployment concern) from domain logic.
+  const migrations = new MigrationManager();
+  migrations.register(
+    'payments',
+    1,
+    () => paymentBackfill.run(),
+    () => paymentBackfill.status(),
+    () => paymentBackfill.status().then((s) => payments.health(s.prismaCount)),
+  );
+  migrations.register(
+    'refunds',
+    1,
+    () => refundBackfill.run(),
+    () => refundBackfill.status(),
+    () => refundBackfill.status().then((s) => refunds.health(s.prismaCount)),
+  );
+  // Trigger all backfills on startup (non-blocking; idempotent).
+  migrations.triggerAll();
 
   // ── Projection health registry (M-RT-19) ────────────────────────────────
   const health = new ProjectionHealthRegistry();
@@ -110,6 +120,9 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     return refunds.health(status.prismaCount);
   });
 
+  // ── Liquidity Composer (M-RT-16) ────────────────────────────────────────
+  const composer = new LiquidityComposer();
+
   return {
     clock,
     eventStore,
@@ -119,6 +132,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     refunds,
     refundBackfill,
     health,
+    migrations,
+    composer,
   };
 }
 

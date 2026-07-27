@@ -2694,3 +2694,61 @@ Stage Summary:
 - ProjectionHealthRegistry + 3 API endpoints give ops visibility: /api/runtime/projections (list all), /api/runtime/projections/payments, /api/runtime/projections/refunds. Each returns eventsApplied, rows, lag, healthy, lastReplayMs, checkpoint, canonicalRows.
 - The merchant refunds page now reads through the refundReadModel façade (projection-backed, not Prisma). Zero page changes needed when the internals were swapped — the frozen interface held.
 - NEXT: migrate remaining capabilities (payouts → invoices → wallets → treasury → LPs) using the same framework. Each is now ~100 lines of capability-specific code (types + projection + service + backfill wrapper). The framework handles everything else.
+
+---
+Task ID: M-RT-16 (Multi-hop Liquidity Composition) + M-RT-19 feedback (MigrationManager + MigrationRecord)
+Agent: main (Z.ai Code)
+Task: Implement M-RT-16 — the runtime should compose multiple liquidity paths into a single execution plan (multi-hop + split routing). Also address M-RT-19 feedback: invert backfill ownership (MigrationManager, not capabilities, triggers backfills) and formalize migration state (MigrationRecord metadata). Per user direction: "I would do it before migrating any more capabilities because it's part of the core runtime rather than an application concern."
+
+Work Log:
+M-RT-16 — MULTI-HOP LIQUIDITY COMPOSITION (6 files in src/runtime/engines/liquidity-composer/):
+- types.ts: GraphNode, LiquidityEdge (with full cost decomposition: fxBps + feeBps + reserveOppCostBps + latencyMs + riskScore + failureProb), LiquidityGraph, LiquidityPath (hops, minCapacity, totalCostBps, totalLatencyMs, compoundedRisk, failureProb), CostDecomposition, ScoringWeights, PathAllocation, SplitPlan, ExecutionLeg (hopIndex, from, to, lpId, amount, costBps, splitGroup, percentage), ComposedExecutionPlan (plan, legs, cost, candidates, alternatives, maxHops, isMultiHop, isSplit), CompositionRequest, ComposerOptions.
+- graph.ts: buildGraph(offers, bridges) — pure function. Nodes = currencies; edges = LP offers + reserve bridges. Adjacency list with deterministic edge ordering (sorted by edge ID). Helpers: outgoingEdges, allCurrencies, edgeCount.
+- pathfinder.ts: findPaths(graph, from, to, maxHops=4) — bounded DFS. No cycles (visited set per path). Max 4 hops (configurable). Deterministic: paths sorted by (hops, totalCostBps, id). buildPath() computes hops, minCapacity (bottleneck), totalCostBps (compounded FX + summed fees), totalLatencyMs (sum), compoundedRisk (1 - product of (1 - risk)), failureProb (1 - product of (1 - failureProb)).
+- optimizer.ts: decomposeCost() — reuses existing cost model (fxBps + feeBps + reserveOppCostBps + latencyBps + riskBps = totalBps). scorePath() — normalized [0,1] weighted sum (cost + latency + risk + reliability). rankPaths() — deterministic sort by (score, path.id).
+- splitter.ts: optimizeSplit() — greedy allocation. Case 1: best path can handle full amount → check if splitting reduces cost (≥ minSplitBenefitBps) or failure prob (≥ 10%). Case 2: capacity-constrained → fill paths in score order up to capacity. Returns SplitPlan with allocations sorted by amount descending.
+- composer.ts: LiquidityComposer — the orchestrator. compose(request, graph) → ComposedExecutionPlan. Pipeline: findPaths → rankPaths → optimizeSplit → flattenLegs → aggregateCost. Pure: same inputs → same plan. Never executes, never emits events, never mutates state.
+- index.ts: barrel.
+
+M-RT-16 API + RUNTIME WIRING:
+- /api/runtime/composer: GET (sample composition) + POST (compose from request body). Returns ComposedExecutionPlan with summary (isMultiHop, isSplit, maxHops, candidates, legs, totalCostBps, rationale).
+- runtime/index.ts: added `composer: LiquidityComposer` to the Runtime container. Re-exported the liquidity-composer public surface.
+
+M-RT-19 FEEDBACK — INVERT BACKFILL OWNERSHIP:
+- migration/migration-manager.ts: MigrationManager — the SINGLE owner of all capability backfills. register(capability, version, backfillFn, statusFn, healthFn). triggerBackfill(capability) — non-blocking. triggerAll() — called once at startup. verify(capability) — idempotent backfill + health check. Tracks MigrationRecord per capability: { capability, version, startedAt, completedAt, checkpoint, eventsImported, canonicalRows, verified, status, error, lastBackfill }.
+- REPLACED the lazy `_onFirstRead` pattern (M-RT-18/19) with centralized MigrationManager.triggerAll() at runtime startup. Capabilities no longer trigger their own backfills — the manager owns migration as a deployment concern.
+- /api/runtime/migrations: GET (list all migration records) + POST (trigger/verify actions). Operators can answer: "Has Payments been migrated?", "Is Refunds partially migrated?", "Can Wallets resume after interruption?" — all without inspecting projections.
+
+M-RT-16 VERIFICATION (scripts/test-m-rt-16.ts — 8 checks):
+- Check 1: Single-hop routing (backward compat) — PASS ✓ (allocations=1, hops=1, multiHop=false)
+- Check 2: Multi-hop discovery (no direct corridor) — PASS ✓ (found 2-hop path USD→EUR→KES when no direct USD→KES edge exists)
+- Check 3: Split routing lowers cost — PASS ✓ (capacity-constrained split across 2 paths; failure prob reduced from 15.0% to 2.3%)
+- Check 4: No cycles generated — PASS ✓ (pathfinder skips visited currencies; verified no path revisits a node)
+- Check 5: Maximum hop depth enforced (4) — PASS ✓ (maxHops=4 → no 5-hop path found; maxHops=5 → 5-hop path found)
+- Check 6: Deterministic ordering — PASS ✓ (same inputs → identical plans, JSON-equal)
+- Check 7: Replay produces identical plans — PASS ✓ (fresh composer + graph → identical plan)
+- Check 8: Compiler API unchanged (additive) — PASS ✓ (LiquidityComposer is standalone; runtime.composer present)
+- OVERALL: PASS ✓ (8/8 checks)
+
+M-RT-19 RE-VERIFICATION (scripts/test-m-rt-19.ts — 6 checks per capability):
+- Payments: 6/6 PASS (row-count=271=271, deterministic, idempotent, sample-row, event-count)
+- Refunds: 6/6 PASS (row-count=9=9, deterministic, idempotent, sample-row, event-count)
+- Projection health: 2/2 HEALTHY
+- OVERALL: PASS ✓ (unchanged from M-RT-19)
+
+API ENDPOINT VERIFICATION (via curl):
+- GET /api/runtime/composer → 200. Sample: USD→KES, found 2-hop path (USD→EUR→KES) as winner over direct 1-hop (cost 145 bps vs 160 bps). isMultiHop=true, maxHops=2, candidates=2.
+- GET /api/runtime/migrations → 200. Shows both capabilities with MigrationRecord (capability, version, startedAt, status, etc.).
+
+LINT + TYPECHECK:
+- bun run lint → 0 errors, 84 warnings (db.payment in non-migrated pages — incremental M-RT-18 re-migration work).
+- bunx tsc --noEmit → 0 errors in src/runtime/.
+
+Stage Summary:
+- M-RT-16 (Multi-hop Liquidity Composition) COMPLETE. All 8 verification checks pass.
+- The LiquidityComposer is PURE: it never executes, never emits events, never mutates state. It only RECOMMENDS a ComposedExecutionPlan. The Financial Compiler's API is UNCHANGED — the composer is additive (the compiler can call composer.compose() to get candidate plans).
+- Multi-hop: the pathfinder discovers paths up to 4 hops deep, never revisiting a currency (no cycles). When no direct corridor exists (USD→KES with only USD→EUR + EUR→KES edges), it finds the 2-hop path.
+- Split routing: the greedy splitter allocates across multiple paths when (a) the best path can't handle the full amount (capacity-constrained) or (b) splitting reduces cost by ≥ 5 bps or failure prob by ≥ 10% (beneficial). In the test, split reduced failure prob from 15% to 2.3%.
+- Cost decomposition REUSES the existing model (fxBps + feeBps + reserveOppCostBps + latencyBps + riskBps) — no second cost model invented.
+- M-RT-19 feedback addressed: MigrationManager inverts backfill ownership (capabilities don't trigger their own backfills anymore). MigrationRecord formalizes migration state with persistent metadata (capability, version, startedAt, completedAt, checkpoint, eventsImported, canonicalRows, verified, status). /api/runtime/migrations endpoint gives ops visibility.
+- NEXT: migrate remaining capabilities (payouts → invoices → wallets → treasury → LPs) using the migration framework. Wallets will be particularly useful (exercises balance projections rather than transaction lists). The composer automatically benefits every migrated capability — richer routing without per-capability routing logic.

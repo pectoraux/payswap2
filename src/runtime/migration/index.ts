@@ -28,3 +28,5 @@ export { ProjectionMigrationRunner } from './projection-migration-runner';
 export type { MigrationReport } from './projection-migration-runner';
 export { ProjectionHealthRegistry } from './health-registry';
 export type { HealthProvider } from './health-registry';
+export { MigrationManager } from './migration-manager';
+export type { MigrationRecord } from './migration-manager';
