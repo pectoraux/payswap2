@@ -68,6 +68,8 @@ import { PaymentsService, PaymentBackfillService } from './engines/payments';
 import { RefundsService, RefundBackfillService } from './engines/refunds';
 import { ProjectionHealthRegistry, MigrationManager } from './migration';
 import { LiquidityComposer } from './engines/liquidity-composer';
+// M-RT-20: Economic Integrity Hardening (Invariant Engine):
+import { InvariantEngine, BUILTIN_INVARIANTS } from './invariants';
 
 // Re-export the public surface.
 export * from './types';
@@ -156,6 +158,8 @@ export * from './migration';
 export { LiquidityComposer, buildGraph, findPaths, optimizeSplit, rankPaths, decomposeCost } from './engines/liquidity-composer';
 export type { CompositionRequest, ComposedExecutionPlan, ExecutionLeg, SplitPlan, PathAllocation, GraphBuildInputs, LPOfferInput, ReserveBridgeInput } from './engines/liquidity-composer';
 export * from './read-models/v2';
+// M-RT-20: Invariant Engine public surface:
+export * from './invariants';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -236,6 +240,8 @@ export interface Runtime {
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
   migrations: MigrationManager;
+  // M-RT-20: Invariant Engine (verifies economic invariants before every append).
+  invariants: InvariantEngine;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -406,6 +412,12 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   health.register('payments', async () => { const s = await paymentBackfill.status(); return payments.health(s.prismaCount); });
   health.register('refunds', async () => { const s = await refundBackfill.status(); return refunds.health(s.prismaCount); });
 
+  // ── M-RT-20: Invariant Engine (economic integrity hardening) ────────────
+  const invariants = new InvariantEngine();
+  for (const inv of BUILTIN_INVARIANTS) {
+    invariants.register(inv);
+  }
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -456,6 +468,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     refundBackfill,
     health,
     migrations,
+    invariants,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),
