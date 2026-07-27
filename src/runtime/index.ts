@@ -96,6 +96,8 @@ import {
 } from './settlement-orchestrator';
 // M-ECO-34.5: Economic Control Plane (constitution + digital twin + capital allocation):
 import { EconomicControlPlane } from './control-plane';
+// M-ECO-35: Canonical Economic Ledger & Solvency Engine:
+import { EconomicLedgerEngine } from './ledger';
 
 // Re-export the public surface.
 export * from './types';
@@ -249,6 +251,8 @@ export type {
   GovernanceDecision, ApprovalClass,
   EconomicExplanation, ControlPlaneReport,
 } from './control-plane';
+// M-ECO-35: Economic Ledger:
+export * from './ledger';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -360,6 +364,8 @@ export interface Runtime {
   lpIntelligence: LPIntelligenceEngine;
   // M-ECO-34.5: Economic Control Plane (constitution + digital twin + capital allocation).
   controlPlane: EconomicControlPlane;
+  // M-ECO-35: Canonical Economic Ledger & Solvency Engine.
+  ledger: EconomicLedgerEngine;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -690,6 +696,26 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     getIntelligenceDashboard: () => intelligence.getDashboard(),
   });
 
+  // ── M-ECO-35: Canonical Economic Ledger & Solvency Engine ──────────────
+  const ledger = new EconomicLedgerEngine({
+    getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
+      id: a.id, kind: a.kind, currency: a.currency,
+      availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
+    })),
+    getTwinTokenPositions: () => twinTokens.list().map((t) => ({
+      accountId: t.accountId, tokenType: t.tokenType, currency: t.currency, balance: t.balance,
+    })),
+    getBandwidthPositions: () => bandwidth.list().map((b) => ({
+      owner: b.owner, country: b.country, capacity: b.capacity,
+      available: b.available, escrow: b.escrow, bond: b.bond, used: b.used,
+    })),
+    getSettlementContracts: () => settlementContracts.list().map((c) => ({
+      contractId: c.contractId, amount: c.amount, currency: c.currency,
+      status: c.status, escrowLocked: c.escrowLocked,
+    })),
+    getEventCount: () => eventStore.size(),
+  });
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -760,6 +786,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     treasuryDirector,
     lpIntelligence,
     controlPlane,
+    ledger,
     health,
     migrations,
     invariants,
