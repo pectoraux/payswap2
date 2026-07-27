@@ -74,6 +74,8 @@ import { LiquidityComposer } from './engines/liquidity-composer';
 import { InvariantEngine, BUILTIN_INVARIANTS } from './invariants';
 // M-RT-21: Runtime Enforcement (Dispatcher — the only way to mutate state):
 import { RuntimeDispatcher, CommandRegistry, BUILTIN_HANDLERS } from './dispatcher';
+// M-RT-25: Economic Kernel (Twin Tokens + LP Runtime + Marketplace + Economic Compiler):
+import { TwinTokenProjection, LPRuntimeProjection, EconomicMarketplace, EconomicCompiler } from './economic';
 
 // Re-export the public surface.
 export * from './types';
@@ -179,6 +181,8 @@ export { defaultShouldRetry } from './dispatcher';
 export type { RetryPolicyOptions, RetryOutcome } from './dispatcher';
 // Re-export RetryPolicy with an alias to avoid conflict with scheduling's RetryPolicy.
 export { RetryPolicy as DispatcherRetryPolicy } from './dispatcher';
+// M-RT-25: Economic Kernel public surface:
+export * from './economic';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -261,6 +265,11 @@ export interface Runtime {
   // M-RT-24: Treasury Kernel (financial source of truth — 5 account types).
   treasury: TreasuryService;
   treasuryBackfill: TreasuryBackfillService;
+  // M-RT-25: Economic Kernel (Twin Tokens + LP Runtime + Marketplace + Economic Compiler).
+  twinTokens: TwinTokenProjection;
+  lpRuntime: LPRuntimeProjection;
+  marketplace: EconomicMarketplace;
+  economicCompiler: EconomicCompiler;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -448,6 +457,12 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     correlationPrefix: 'backfill:treasury',
   });
 
+  // ── M-RT-25: Economic Kernel (Twin Tokens + LP Runtime + Marketplace) ───
+  const twinTokens = new TwinTokenProjection();
+  const lpRuntime = new LPRuntimeProjection();
+  const marketplace = new EconomicMarketplace(lpRuntime);
+  const economicCompiler = new EconomicCompiler(marketplace);
+
   // ── M-RT-19: Migration Manager (owns all capability backfills) ──────────
   const migrations = new MigrationManager();
   migrations.register('payments', 1, () => paymentBackfill.run(), () => paymentBackfill.status(), () => paymentBackfill.status().then((s) => payments.health(s.prismaCount)));
@@ -528,6 +543,10 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     walletBackfill,
     treasury,
     treasuryBackfill,
+    twinTokens,
+    lpRuntime,
+    marketplace,
+    economicCompiler,
     health,
     migrations,
     invariants,
