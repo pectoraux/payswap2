@@ -237,152 +237,248 @@ export class ReleaseLiquidityCommandHandler implements CommandHandler<ReleaseLiq
   }
 }
 
-// ─── Wallet Command Handlers (M-RT-23) ─────────────────────────────────────
+// ─── Wallet Command Handlers (M-RT-23 + M-RT-24B) ──────────────────────────
+//
+// M-RT-24B: Wallet handlers now emit DUAL events:
+//   1. wallet.* event (on the wallet stream) — for the wallet projection
+//   2. treasury.account.* event (on the treasury stream) — for the treasury projection
+//
+// This ensures the treasury is the CANONICAL financial state. Wallets are
+// claims on treasury, not independent balance owners.
+//
+//   Wallet → Treasury Account → Ledger → Reserves
 
-/** Handles "wallet.credit" — produces a wallet.credited event. */
+/** Helper: build the treasury account ID for a wallet. */
+function walletTreasuryAccountId(walletId: string): string {
+  return `treasury_wallet_${walletId}`;
+}
+
+/** Helper: build the treasury stream ID for a wallet. */
+function walletTreasuryStreamId(env: string, walletId: string): string {
+  return `${env}:treasury:${walletTreasuryAccountId(walletId)}`;
+}
+
+/** Handles "wallet.credit" — produces wallet.credited + treasury.account.credited events. */
 export class WalletCreditCommandHandler implements CommandHandler<WalletCreditCommand> {
   readonly commandType = 'wallet.credit';
-  readonly description = 'Credit a wallet (produces wallet.credited event)';
+  readonly description = 'Credit a wallet (produces wallet.credited + treasury.account.credited events)';
 
   handle(command: WalletCreditCommand, _snapshot: RuntimeSnapshot): CommandResult {
     const payload = command.payload;
-    const streamId = `${command.metadata.environment}:wallet:${payload.walletId}`;
+    const env = command.metadata.environment;
+    const walletStreamId = `${env}:wallet:${payload.walletId}`;
+    const treasuryStreamId = walletTreasuryStreamId(env, payload.walletId);
+    const treasuryAccountId = walletTreasuryAccountId(payload.walletId);
+    const now = Date.now();
 
-    const event: UncommittedEvent = {
-      type: 'wallet.credited',
-      streamId,
-      streamType: 'wallet',
-      kind: 'domain',
-      payload: {
-        walletId: payload.walletId,
-        amount: payload.amount,
-        currency: payload.currency,
-        counterparty: payload.counterparty ?? null,
-        reference: payload.reference ?? null,
-        txHash: null,
-        reason: payload.reason,
-        creditedAt: Date.now(),
-      } as unknown as Record<string, unknown>,
-    };
+    const events: UncommittedEvent[] = [
+      // 1. Wallet event (for the wallet projection).
+      {
+        type: 'wallet.credited',
+        streamId: walletStreamId,
+        streamType: 'wallet',
+        kind: 'domain',
+        payload: {
+          walletId: payload.walletId,
+          amount: payload.amount,
+          currency: payload.currency,
+          counterparty: payload.counterparty ?? null,
+          reference: payload.reference ?? null,
+          txHash: null,
+          reason: payload.reason,
+          creditedAt: now,
+        } as unknown as Record<string, unknown>,
+      },
+      // 2. Treasury event (for the treasury projection — canonical financial state).
+      {
+        type: 'treasury.account.credited',
+        streamId: treasuryStreamId,
+        streamType: 'treasury',
+        kind: 'domain',
+        payload: {
+          accountId: treasuryAccountId,
+          amount: payload.amount,
+          currency: payload.currency,
+          reason: `Wallet credit: ${payload.reason}`,
+          counterparty: payload.counterparty ?? null,
+          creditedAt: now,
+        } as unknown as Record<string, unknown>,
+      },
+    ];
 
     return {
       success: true,
       commandType: this.commandType,
-      events: [event],
-      streamId,
+      events,
+      streamId: walletStreamId,
       entityId: payload.walletId,
-      message: `Credited ${payload.amount} ${payload.currency} to wallet ${payload.walletId}`,
+      message: `Credited ${payload.amount} ${payload.currency} to wallet ${payload.walletId} (treasury: ${treasuryAccountId})`,
     };
   }
 }
 
-/** Handles "wallet.debit" — produces a wallet.debited event. */
+/** Handles "wallet.debit" — produces wallet.debited + treasury.account.debited events. */
 export class WalletDebitCommandHandler implements CommandHandler<WalletDebitCommand> {
   readonly commandType = 'wallet.debit';
-  readonly description = 'Debit a wallet (produces wallet.debited event)';
+  readonly description = 'Debit a wallet (produces wallet.debited + treasury.account.debited events)';
 
-  handle(command: WalletDebitCommand, snapshot: RuntimeSnapshot): CommandResult {
+  handle(command: WalletDebitCommand, _snapshot: RuntimeSnapshot): CommandResult {
     const payload = command.payload;
-    const wallet = snapshot.payments.get(payload.walletId) as { availableBalance?: number; isClosed?: boolean } | undefined;
-    // Note: wallet state is in the wallets projection, not payments. For now,
-    // we skip the balance check here (the invariant engine handles it).
-    // A future enhancement would pass the wallets projection into the snapshot.
+    const env = command.metadata.environment;
+    const walletStreamId = `${env}:wallet:${payload.walletId}`;
+    const treasuryStreamId = walletTreasuryStreamId(env, payload.walletId);
+    const treasuryAccountId = walletTreasuryAccountId(payload.walletId);
+    const now = Date.now();
 
-    const streamId = `${command.metadata.environment}:wallet:${payload.walletId}`;
-    const event: UncommittedEvent = {
-      type: 'wallet.debited',
-      streamId,
-      streamType: 'wallet',
-      kind: 'domain',
-      payload: {
-        walletId: payload.walletId,
-        amount: payload.amount,
-        currency: payload.currency,
-        counterparty: payload.counterparty ?? null,
-        reference: payload.reference ?? null,
-        txHash: null,
-        reason: payload.reason,
-        debitedAt: Date.now(),
-      } as unknown as Record<string, unknown>,
-    };
+    const events: UncommittedEvent[] = [
+      {
+        type: 'wallet.debited',
+        streamId: walletStreamId,
+        streamType: 'wallet',
+        kind: 'domain',
+        payload: {
+          walletId: payload.walletId,
+          amount: payload.amount,
+          currency: payload.currency,
+          counterparty: payload.counterparty ?? null,
+          reference: payload.reference ?? null,
+          txHash: null,
+          reason: payload.reason,
+          debitedAt: now,
+        } as unknown as Record<string, unknown>,
+      },
+      {
+        type: 'treasury.account.debited',
+        streamId: treasuryStreamId,
+        streamType: 'treasury',
+        kind: 'domain',
+        payload: {
+          accountId: treasuryAccountId,
+          amount: payload.amount,
+          currency: payload.currency,
+          reason: `Wallet debit: ${payload.reason}`,
+          counterparty: payload.counterparty ?? null,
+          debitedAt: now,
+        } as unknown as Record<string, unknown>,
+      },
+    ];
 
     return {
       success: true,
       commandType: this.commandType,
-      events: [event],
-      streamId,
+      events,
+      streamId: walletStreamId,
       entityId: payload.walletId,
-      message: `Debited ${payload.amount} ${payload.currency} from wallet ${payload.walletId}`,
+      message: `Debited ${payload.amount} ${payload.currency} from wallet ${payload.walletId} (treasury: ${treasuryAccountId})`,
     };
   }
 }
 
-/** Handles "wallet.reserve" — produces a wallet.reserved event. */
+/** Handles "wallet.reserve" — produces wallet.reserved + treasury.position.opened events. */
 export class WalletReserveCommandHandler implements CommandHandler<WalletReserveCommand> {
   readonly commandType = 'wallet.reserve';
-  readonly description = 'Reserve wallet balance (produces wallet.reserved event)';
+  readonly description = 'Reserve wallet balance (produces wallet.reserved + treasury.position.opened events)';
 
   handle(command: WalletReserveCommand, _snapshot: RuntimeSnapshot): CommandResult {
     const payload = command.payload;
-    const streamId = `${command.metadata.environment}:wallet:${payload.walletId}`;
+    const env = command.metadata.environment;
+    const walletStreamId = `${env}:wallet:${payload.walletId}`;
+    const treasuryStreamId = walletTreasuryStreamId(env, payload.walletId);
+    const treasuryAccountId = walletTreasuryAccountId(payload.walletId);
+    const now = Date.now();
 
-    const event: UncommittedEvent = {
-      type: 'wallet.reserved',
-      streamId,
-      streamType: 'wallet',
-      kind: 'domain',
-      payload: {
-        walletId: payload.walletId,
-        amount: payload.amount,
-        currency: payload.currency,
-        reason: payload.reason,
-        operationId: payload.operationId,
-        reservedAt: Date.now(),
-      } as unknown as Record<string, unknown>,
-    };
+    const events: UncommittedEvent[] = [
+      {
+        type: 'wallet.reserved',
+        streamId: walletStreamId,
+        streamType: 'wallet',
+        kind: 'domain',
+        payload: {
+          walletId: payload.walletId,
+          amount: payload.amount,
+          currency: payload.currency,
+          reason: payload.reason,
+          operationId: payload.operationId,
+          reservedAt: now,
+        } as unknown as Record<string, unknown>,
+      },
+      {
+        type: 'treasury.position.opened',
+        streamId: treasuryStreamId,
+        streamType: 'treasury',
+        kind: 'domain',
+        payload: {
+          accountId: treasuryAccountId,
+          positionType: 'lp',
+          reference: payload.operationId,
+          amount: payload.amount,
+          currency: payload.currency,
+          terms: payload.reason,
+          openedAt: now,
+        } as unknown as Record<string, unknown>,
+      },
+    ];
 
     return {
       success: true,
       commandType: this.commandType,
-      events: [event],
-      streamId,
+      events,
+      streamId: walletStreamId,
       entityId: payload.walletId,
-      message: `Reserved ${payload.amount} ${payload.currency} in wallet ${payload.walletId}`,
+      message: `Reserved ${payload.amount} ${payload.currency} in wallet ${payload.walletId} (treasury: ${treasuryAccountId})`,
     };
   }
 }
 
-/** Handles "wallet.release" — produces a wallet.released event. */
+/** Handles "wallet.release" — produces wallet.released + treasury.position.closed events. */
 export class WalletReleaseCommandHandler implements CommandHandler<WalletReleaseCommand> {
   readonly commandType = 'wallet.release';
-  readonly description = 'Release reserved wallet balance (produces wallet.released event)';
+  readonly description = 'Release reserved wallet balance (produces wallet.released + treasury.position.closed events)';
 
   handle(command: WalletReleaseCommand, _snapshot: RuntimeSnapshot): CommandResult {
     const payload = command.payload;
-    const streamId = `${command.metadata.environment}:wallet:${payload.walletId}`;
+    const env = command.metadata.environment;
+    const walletStreamId = `${env}:wallet:${payload.walletId}`;
+    const treasuryStreamId = walletTreasuryStreamId(env, payload.walletId);
+    const treasuryAccountId = walletTreasuryAccountId(payload.walletId);
+    const now = Date.now();
 
-    const event: UncommittedEvent = {
-      type: 'wallet.released',
-      streamId,
-      streamType: 'wallet',
-      kind: 'domain',
-      payload: {
-        walletId: payload.walletId,
-        amount: payload.amount,
-        currency: payload.currency,
-        reason: payload.reason,
-        operationId: payload.operationId,
-        releasedAt: Date.now(),
-      } as unknown as Record<string, unknown>,
-    };
+    const events: UncommittedEvent[] = [
+      {
+        type: 'wallet.released',
+        streamId: walletStreamId,
+        streamType: 'wallet',
+        kind: 'domain',
+        payload: {
+          walletId: payload.walletId,
+          amount: payload.amount,
+          currency: payload.currency,
+          reason: payload.reason,
+          operationId: payload.operationId,
+          releasedAt: now,
+        } as unknown as Record<string, unknown>,
+      },
+      {
+        type: 'treasury.position.closed',
+        streamId: treasuryStreamId,
+        streamType: 'treasury',
+        kind: 'domain',
+        payload: {
+          accountId: treasuryAccountId,
+          closeAmount: payload.amount,
+          reason: payload.reason,
+          closedAt: now,
+        } as unknown as Record<string, unknown>,
+      },
+    ];
 
     return {
       success: true,
       commandType: this.commandType,
-      events: [event],
-      streamId,
+      events,
+      streamId: walletStreamId,
       entityId: payload.walletId,
-      message: `Released ${payload.amount} ${payload.currency} from wallet ${payload.walletId}`,
+      message: `Released ${payload.amount} ${payload.currency} from wallet ${payload.walletId} (treasury: ${treasuryAccountId})`,
     };
   }
 }

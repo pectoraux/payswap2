@@ -121,6 +121,9 @@ export class WalletsService {
     }
 
     const events: UncommittedEvent[] = [];
+    const treasuryAccountId = `treasury_wallet_${input.walletId}`;
+    const treasuryStreamId = `${input.environment}:treasury:${treasuryAccountId}`;
+
     // 1. wallet.created
     events.push({
       type: 'wallet.created',
@@ -138,7 +141,24 @@ export class WalletsService {
       } as unknown as Record<string, unknown>,
     });
 
-    // 2. wallet.credited (for the initial balance — if non-zero)
+    // 1b. treasury.account.created (M-RT-24B: each wallet gets a backing treasury account)
+    events.push({
+      type: 'treasury.account.created',
+      streamId: treasuryStreamId,
+      streamType: 'treasury',
+      kind: 'domain' as const,
+      payload: {
+        accountId: treasuryAccountId,
+        kind: 'treasury',
+        ownerId: input.accountId,
+        currency: input.currency,
+        reference: input.walletId,
+        environment: input.environment,
+        createdAt: input.createdAt,
+      } as unknown as Record<string, unknown>,
+    });
+
+    // 2. wallet.credited + treasury.account.credited (for the initial balance — if non-zero)
     if (input.balance > 0) {
       events.push({
         type: 'wallet.credited',
@@ -156,9 +176,24 @@ export class WalletsService {
           creditedAt: input.createdAt,
         } as unknown as Record<string, unknown>,
       });
+      // Treasury mirror event (M-RT-24B).
+      events.push({
+        type: 'treasury.account.credited',
+        streamId: treasuryStreamId,
+        streamType: 'treasury',
+        kind: 'domain' as const,
+        payload: {
+          accountId: treasuryAccountId,
+          amount: input.balance,
+          currency: input.currency,
+          reason: 'Backfill: wallet initial balance',
+          counterparty: null,
+          creditedAt: input.createdAt,
+        } as unknown as Record<string, unknown>,
+      });
     }
 
-    // 3. wallet.reserved (for the locked balance — if non-zero)
+    // 3. wallet.reserved + treasury.position.opened (for the locked balance — if non-zero)
     if (input.lockedBalance > 0) {
       events.push({
         type: 'wallet.reserved',
@@ -174,11 +209,27 @@ export class WalletsService {
           reservedAt: input.createdAt,
         } as unknown as Record<string, unknown>,
       });
+      // Treasury mirror event (M-RT-24B).
+      events.push({
+        type: 'treasury.position.opened',
+        streamId: treasuryStreamId,
+        streamType: 'treasury',
+        kind: 'domain' as const,
+        payload: {
+          accountId: treasuryAccountId,
+          positionType: 'lp',
+          reference: `backfill_${input.walletId}`,
+          amount: input.lockedBalance,
+          currency: input.currency,
+          terms: 'Backfill: locked balance',
+          openedAt: input.createdAt,
+        } as unknown as Record<string, unknown>,
+      });
     }
 
     await this.inputs.eventStore.append(
       events,
-      new Map([[streamId, -1]]),
+      new Map([[streamId, -1], [treasuryStreamId, -1]]),
       {
         intentId: `backfill_wallet_${input.walletId}`,
         correlationId: input.correlationId,
