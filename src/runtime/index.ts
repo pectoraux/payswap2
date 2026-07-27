@@ -104,6 +104,8 @@ import { GlobalEconomicDirectorate } from './directorate';
 import { EconomicCouncil } from './council';
 // M-TRUST: Global Audit & Transparency Layer:
 import { TrustLayer } from './trust';
+// M-PLATFORM-38: Platform Experience & Developer Ecosystem:
+import { PlatformEngine } from './platform';
 
 // Re-export the public surface.
 export * from './types';
@@ -265,6 +267,8 @@ export * from './directorate';
 export * from './council';
 // M-TRUST: Global Audit & Transparency Layer:
 export * from './trust';
+// M-PLATFORM-38: Platform Experience:
+export * from './platform';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -384,6 +388,8 @@ export interface Runtime {
   council: EconomicCouncil;
   // M-TRUST: Global Audit & Transparency Layer (audit, proofs, observatory, formal verification).
   trust: TrustLayer;
+  // M-PLATFORM-38: Platform Experience (simulator, extensions, developer console, UX).
+  platform: PlatformEngine;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -805,6 +811,11 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     getIntelligenceDashboard: () => intelligence.getDashboard(),
   });
 
+  // ── M-PLATFORM-38: Platform Experience (wired after runtime creation) ──
+  // Platform needs a reference to the runtime, so we create a placeholder
+  // and wire it after the runtime object is constructed.
+  const platform = new PlatformEngine({ runtime: null as never });
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -879,6 +890,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     directorate,
     council,
     trust,
+    platform,
     health,
     migrations,
     invariants,
@@ -888,6 +900,10 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),
   };
+
+  // M-PLATFORM-38: Wire the runtime reference back to the platform engine.
+  (platform as unknown as { inputs: { runtime: Runtime } }).inputs.runtime = runtime;
+
   return runtime;
 }
 
