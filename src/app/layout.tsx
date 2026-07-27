@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     "Accept payments, manage payouts, and settle across borders with PaySwap's protocol-layer financial infrastructure.",
   keywords: ["PaySwap", "Payments", "Cross-border", "Settlement", "Fintech", "Africa"],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/logo.svg",
   },
 };
 
