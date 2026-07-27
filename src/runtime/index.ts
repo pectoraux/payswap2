@@ -102,6 +102,8 @@ import { EconomicLedgerEngine } from './ledger';
 import { GlobalEconomicDirectorate } from './directorate';
 // M-ECO-37: Economic Council (coordinated decision protocol + consensus):
 import { EconomicCouncil } from './council';
+// M-TRUST: Global Audit & Transparency Layer:
+import { TrustLayer } from './trust';
 
 // Re-export the public surface.
 export * from './types';
@@ -261,6 +263,8 @@ export * from './ledger';
 export * from './directorate';
 // M-ECO-37: Economic Council:
 export * from './council';
+// M-TRUST: Global Audit & Transparency Layer:
+export * from './trust';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -378,6 +382,8 @@ export interface Runtime {
   directorate: GlobalEconomicDirectorate;
   // M-ECO-37: Economic Council (coordinated decision protocol + weighted consensus).
   council: EconomicCouncil;
+  // M-TRUST: Global Audit & Transparency Layer (audit, proofs, observatory, formal verification).
+  trust: TrustLayer;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -769,6 +775,36 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     }),
   });
 
+  // ── M-TRUST: Global Audit & Transparency Layer ─────────────────────────
+  const trust = new TrustLayer({
+    getEventCount: () => eventStore.size(),
+    getEvents: (from, limit) => eventStore.readAll(from, limit),
+    getBalanceSheet: () => {
+      const bs = ledger.getBalanceSheet();
+      return {
+        assets: { totalAssets: bs.assets.totalAssets, fiatReserves: bs.assets.fiatReserves, stablecoinReserves: bs.assets.stablecoinReserves },
+        liabilities: { twinTokensOutstanding: bs.liabilities.twinTokensOutstanding, pendingSettlements: bs.liabilities.pendingSettlements },
+        equity: { totalEquity: bs.equity.totalEquity },
+        isBalanced: bs.isBalanced,
+      };
+    },
+    getSolvencyReport: () => {
+      const s = ledger.getSolvencyReport();
+      return { reserveCoverage: s.reserveCoverage, twinCoverage: s.twinCoverage, solvencyRatio: s.solvencyRatio, networkSolvent: s.networkSolvent };
+    },
+    getProofOfReserves: () => {
+      const p = ledger.getProofOfReserves();
+      return { totalReserves: p.totalReserves, totalFiat: p.totalFiat, totalStablecoins: p.totalStablecoins };
+    },
+    getProofOfTwinTokens: () => {
+      const p = ledger.getProofOfTwinTokens();
+      return { totalSupply: p.totalSupply, totalBacking: p.totalBacking, backingRatio: p.backingRatio, isFullyBacked: p.isFullyBacked };
+    },
+    getCouncilDecisions: () => council.getDecisions(),
+    getSettlementAdapters: () => settlements.networks(),
+    getIntelligenceDashboard: () => intelligence.getDashboard(),
+  });
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -842,6 +878,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     ledger,
     directorate,
     council,
+    trust,
     health,
     migrations,
     invariants,
