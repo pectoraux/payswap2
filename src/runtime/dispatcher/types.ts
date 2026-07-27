@@ -33,6 +33,18 @@ export interface CommandMetadata {
   causationId?: string;
   /** Where the command came from. */
   source: 'dashboard' | 'api' | 'sdk' | 'cli' | 'webhook' | 'system' | 'extension';
+  /**
+   * Unique command ID (M-RT-22). Used for idempotency — if the same
+   * commandId is dispatched twice, the second dispatch returns the cached
+   * result without re-processing. If not provided, the dispatcher generates one.
+   */
+  commandId?: string;
+  /**
+   * Idempotency key (M-RT-22). An alternative to commandId for client-
+   * provided deduplication (e.g., a mobile app's request ID). If both
+   * are provided, idempotencyKey takes precedence.
+   */
+  idempotencyKey?: string;
 }
 
 // ─── Command Interface ─────────────────────────────────────────────────────

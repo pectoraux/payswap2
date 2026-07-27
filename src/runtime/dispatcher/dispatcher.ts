@@ -22,11 +22,14 @@
 import type { RuntimeCommand, CommandMetadata } from './types';
 import type { UncommittedEvent, StoredEvent } from '../events';
 import type { EventStore } from '../events';
+import { OptimisticConcurrencyError } from '../events';
 import type { RuntimeClock } from '../clock';
 import type { InvariantEngine } from '../invariants';
 import type { RuntimeSnapshot } from '../invariants';
 import type { CommandRegistry, CommandResult } from './registry';
 import { uid } from '../types';
+import { IdempotencyStore } from './idempotency-store';
+import { RetryPolicy, defaultShouldRetry } from './retry-policy';
 
 /** The result of dispatching a command through the runtime. */
 export interface DispatchResult {
@@ -64,6 +67,10 @@ export interface DispatcherInputs {
   clock: RuntimeClock;
   invariants: InvariantEngine;
   registry: CommandRegistry;
+  /** Idempotency store (M-RT-22). If not provided, one is created. */
+  idempotency?: IdempotencyStore;
+  /** Retry policy (M-RT-22). If not provided, one is created. */
+  retry?: RetryPolicy;
 }
 
 /**
@@ -79,18 +86,120 @@ export interface DispatcherInputs {
  * If ANY step fails, no events are appended. No partial financial state.
  */
 export class RuntimeDispatcher {
-  constructor(private inputs: DispatcherInputs) {}
+  private readonly idempotency: IdempotencyStore;
+  private readonly retry: RetryPolicy;
+
+  constructor(private inputs: DispatcherInputs) {
+    this.idempotency = inputs.idempotency ?? new IdempotencyStore();
+    this.retry = inputs.retry ?? new RetryPolicy();
+  }
 
   /**
    * Dispatch a command through the runtime.
    *
    * This is the ONLY way to mutate financial state.
    * Returns a DispatchResult with success/failure + timing metrics.
+   *
+   * M-RT-22: This method now provides:
+   *   - Idempotency: duplicate commandId/idempotencyKey → cached result
+   *   - Optimistic concurrency: expected stream version checked on append
+   *   - Retry: on OCC conflict, re-load + re-handle + re-verify + re-append
+   *   - Atomic boundary: load → handle → verify → append (all-or-nothing)
    */
   async dispatch(command: RuntimeCommand): Promise<DispatchResult> {
     const totalTimeStart = this.inputs.clock.now();
     const dispatchedAt = this.inputs.clock.now();
 
+    // ── M-RT-22: Idempotency check ─────────────────────────────────────────
+    // Determine the idempotency key (idempotencyKey > commandId > auto-generated).
+    const idempotencyKey = command.metadata.idempotencyKey
+      ?? command.metadata.commandId
+      ?? uid('cmd');
+
+    // Check if this command was already processed.
+    const cached = this.idempotency.get(idempotencyKey);
+    if (cached) {
+      const result = cached.result as DispatchResult;
+      return {
+        ...result,
+        message: `${result.message} (idempotent cache hit)`,
+      };
+    }
+
+    // ── M-RT-22: Execute with idempotency + retry ──────────────────────────
+    try {
+      const outcome = await this.idempotency.execute(
+        idempotencyKey,
+        () => this.dispatchWithRetry(command, totalTimeStart, dispatchedAt),
+      );
+
+      if (outcome.cached) {
+        // Another concurrent dispatch processed this key first.
+        const result = outcome.result as DispatchResult;
+        return {
+          ...result,
+          message: `${result.message} (concurrent idempotent hit)`,
+        };
+      }
+
+      return outcome.result;
+    } catch (err) {
+      // All retries exhausted.
+      return this.fail(
+        command.type,
+        err instanceof Error ? err.message : String(err),
+        totalTimeStart,
+        dispatchedAt,
+      );
+    }
+  }
+
+  /**
+   * Dispatch with retry on transient failures (OCC conflicts).
+   *
+   * This is the inner loop: load → handle → verify → append.
+   * On OptimisticConcurrencyError, retry (re-load the stream version).
+   */
+  private async dispatchWithRetry(
+    command: RuntimeCommand,
+    totalTimeStart: number,
+    dispatchedAt: number,
+  ): Promise<DispatchResult> {
+    const outcome = await this.retry.execute(
+      () => this.dispatchOnce(command, totalTimeStart, dispatchedAt),
+      (error) => defaultShouldRetry(error, 0),
+    );
+
+    if (outcome.succeeded) {
+      return outcome.result!;
+    }
+
+    // All retries failed.
+    return this.fail(
+      command.type,
+      outcome.error?.message ?? 'All retries exhausted',
+      totalTimeStart,
+      dispatchedAt,
+    );
+  }
+
+  /**
+   * Execute one dispatch attempt (no retry).
+   *
+   * This is the atomic transaction:
+   *   1. Look up handler
+   *   2. Build snapshot (load stream versions)
+   *   3. Compile (handler produces events)
+   *   4. Verify invariants
+   *   5. Append with expectedVersion (OCC)
+   *
+   * If step 5 fails with OCC, the caller (dispatchWithRetry) retries.
+   */
+  private async dispatchOnce(
+    command: RuntimeCommand,
+    totalTimeStart: number,
+    dispatchedAt: number,
+  ): Promise<DispatchResult> {
     // ── Step 1: Look up the handler ────────────────────────────────────────
     const handler = this.inputs.registry.get(command.type);
     if (!handler) {
