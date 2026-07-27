@@ -89,6 +89,11 @@ import { RuntimeHost, type RuntimeContext } from './host';
 import { LiquidityPolicyEngine, BandwidthEngine, SettlementContractEngine, DisputeEngine } from './liquidity';
 // M-ECO-31: Adaptive Liquidity Intelligence (the "brain"):
 import { LiquidityIntelligenceEngine as EcoIntelligenceEngine } from './eco-intelligence';
+// M-ECO-32/33/34: Settlement Orchestrator + Autonomous Treasury + LP Intelligence:
+import {
+  SettlementOrchestrator, TimerEngine, RetryEngine, CompensationEngine,
+  TreasuryDirector, LPIntelligenceEngine,
+} from './settlement-orchestrator';
 
 // Re-export the public surface.
 export * from './types';
@@ -217,6 +222,19 @@ export type {
   PredictiveOpportunity, EconomicHealthDashboard as EcoEconomicHealthDashboard,
   CountryEconomicHealth, IntelligencePolicyConfig,
 } from './eco-intelligence';
+// M-ECO-32/33/34: Settlement Orchestrator + Autonomous Treasury + LP Intelligence:
+// Explicit re-exports to avoid TreasuryAction conflict with liquidity module.
+export {
+  SettlementOrchestrator, TimerEngine, RetryEngine, CompensationEngine,
+  TreasuryDirector, LPIntelligenceEngine,
+} from './settlement-orchestrator';
+export type {
+  WorkflowState, SettlementActor, SettlementTimer, CompensationStep,
+  SettlementHistoryEntry, SettlementMetrics,
+  TreasuryGovernancePolicy, TreasuryAction as AutonomousTreasuryAction,
+  TreasuryRiskAssessment,
+  LPReputation, LPIncentive, LPLearningUpdate,
+} from './settlement-orchestrator';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -319,6 +337,13 @@ export interface Runtime {
   disputes: DisputeEngine;
   // M-ECO-31: Adaptive Liquidity Intelligence (the economic brain).
   intelligence: EcoIntelligenceEngine;
+  // M-ECO-32: Settlement Orchestrator (durable workflow actors).
+  settlementOrchestrator: SettlementOrchestrator;
+  timerEngine: TimerEngine;
+  // M-ECO-33: Autonomous Treasury Director.
+  treasuryDirector: TreasuryDirector;
+  // M-ECO-34: LP Intelligence & Incentive Engine.
+  lpIntelligence: LPIntelligenceEngine;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -605,6 +630,31 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     getEventCount: () => eventStore.size(),
   });
 
+  // ── M-ECO-32: Settlement Orchestrator (durable workflow actors) ─────────
+  const settlementOrchestrator = new SettlementOrchestrator();
+  const timerEngine = new TimerEngine();
+  projectionRunner.register(settlementOrchestrator as unknown as import('./read-models').Projection);
+
+  // ── M-ECO-33: Autonomous Treasury Director ─────────────────────────────
+  const treasuryDirector = new TreasuryDirector(
+    () => {
+      const dashboard = intelligence.getDashboard();
+      return {
+        reserveRecommendations: dashboard.reserveRecommendations,
+        treasuryDecisions: dashboard.treasuryDecisions,
+      };
+    },
+    () => ({
+      accounts: treasury.projection.list({ take: 10000 }).map((a) => ({
+        kind: a.kind, currency: a.currency,
+        availableBalance: a.availableBalance, reference: a.reference,
+      })),
+    }),
+  );
+
+  // ── M-ECO-34: LP Intelligence & Incentive Engine ───────────────────────
+  const lpIntelligence = new LPIntelligenceEngine();
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -670,6 +720,10 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     settlementContracts,
     disputes,
     intelligence,
+    settlementOrchestrator,
+    timerEngine,
+    treasuryDirector,
+    lpIntelligence,
     health,
     migrations,
     invariants,
