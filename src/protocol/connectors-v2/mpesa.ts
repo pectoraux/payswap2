@@ -1,236 +1,231 @@
 /**
- * PaySwap Protocol — Production Connectors v2 — M-Pesa Connector.
+ * PaySwap Protocol — Production Connectors v2 — M-Pesa (Daraja).
  *
- * Real-shape simulated Safaricom Daraja API connector. Operations:
- *   - getBalance({ phoneNumber })                          → balance, currency
- *   - sendSTKPush({ phoneNumber, amount, callbackUrl })    → ConversationID, OriginatorConversationID, ResponseCode
- *   - verifyTransaction({ transactionId })                  → ResponseCode, ResponseDescription, status
- *   - reverseTransaction({ transactionId })                 → ConversationID, status
+ * Simulated Safaricom Daraja API connector. Real implementations call
+ * the Daraja REST endpoints (sandbox or production) with OAuth + STK Push;
+ * this in-process simulation mirrors that surface area.
  *
- * Auth: OAuth2 access token (simulated). In production this is a two-step flow:
- *   1. GET /oauth/v1/generate?grant_type=client_credentials with Basic auth → access_token
- *   2. Bearer access_token on all subsequent calls
- * We simulate the same shape: resolveOAuthToken() returns a deterministic token.
+ * Operations:
+ *   - getBalance({ phoneNumber })
+ *   - sendSTKPush({ phoneNumber, amount, callbackUrl })
+ *   - verifyTransaction({ transactionId })
  *
- * Response shapes mirror Daraja API: ConversationID, OriginatorConversationID,
- * ResponseCode ('0' = success), ResponseDescription.
- *
- * Evidence: source='psp_confirmation', verificationLevel='institutional',
- *           reputation=0.85. TTL 90s.
+ * Evidence: source='psp_confirmation', verificationLevel='institutional', reputation=0.85.
  */
 import type { Evidence } from '@/kernel/evidence';
-import type {
-  ConnectorConfig,
-  ConnectorError,
-  ConnectorRequest,
-} from './types';
-import { ProductionConnector, buildAttestationEvidence } from './base';
+import { createEvidence } from '@/kernel/evidence';
+import { uid, round } from '@/kernel/support';
+import type { ConnectorConfig, ConnectorRequest } from './types';
 import { invalidResponse } from './errors';
-import { deterministicHash } from './open-banking';
+import { HealthMonitor } from './health';
+import { MetricsCollector } from './metrics';
+import { IdempotencyStore } from './idempotency';
+import { ProductionConnector, type DoQueryResult } from './base';
 
-const DEFAULT_CONFIG: ConnectorConfig = {
+/** Default config — Daraja sandbox-like characteristics. */
+export const DEFAULT_MPESA_CONFIG: ConnectorConfig = {
   id: 'mpesa',
-  type: 'mobile_money',
-  name: 'Safaricom M-Pesa Daraja API',
-  endpoint: 'https://sandbox.safaricom.co.ke',
-  apiKeyRef: 'vault://payswap/mpesa/prod/consumer-key',
-  secretRef: 'vault://payswap/mpesa/prod/hmac-secret',
-  timeout: 10_000,
+  type: 'mpesa',
+  name: 'M-Pesa (Daraja)',
+  endpoint: 'sim://mpesa/daraja/v1',
+  timeout: 15_000,
   retryCount: 2,
   retryBackoffMs: 500,
   rateLimitRps: 5,
   rateLimitBurst: 10,
-  idempotencyTtlMs: 90_000,
+  idempotencyTtlMs: 10 * 60 * 1000,
 };
 
+interface StkPushRecord {
+  checkoutRequestId: string;
+  merchantRequestId: string;
+  phoneNumber: string;
+  amount: number;
+  callbackUrl: string;
+  status: 'pending' | 'success' | 'failed' | 'cancelled';
+  transactionId?: string;
+  createdAt: number;
+}
+
+interface TransactionRecord {
+  transactionId: string;
+  phoneNumber: string;
+  amount: number;
+  status: 'completed' | 'failed' | 'pending';
+  createdAt: number;
+}
+
+/** Deterministic M-Pesa balance from a phone number — stable across calls. */
+function pseudoBalance(phoneNumber: string): number {
+  let h = 0;
+  for (let i = 0; i < phoneNumber.length; i++) h = (h * 31 + phoneNumber.charCodeAt(i)) | 0;
+  const positive = Math.abs(h);
+  return round(100 + (positive % 9999) * 10, 2); // 100..99,990 in 10-unit steps
+}
+
 export class MpesaConnector extends ProductionConnector {
-  constructor(config?: Partial<ConnectorConfig>) {
-    super({ ...DEFAULT_CONFIG, ...config });
+  /** checkoutRequestId -> STK Push record. */
+  private stkPushes = new Map<string, StkPushRecord>();
+  /** transactionId -> transaction record. */
+  private transactions = new Map<string, TransactionRecord>();
+
+  constructor(
+    healthMonitor: HealthMonitor,
+    metricsCollector: MetricsCollector,
+    config?: Partial<ConnectorConfig>,
+    idempotency?: IdempotencyStore,
+  ) {
+    super(
+      { ...DEFAULT_MPESA_CONFIG, ...config },
+      healthMonitor,
+      metricsCollector,
+      idempotency,
+    );
   }
 
-  /** Simulated OAuth2 token resolution (real Daraja: Basic auth → access_token). */
-  protected resolveOAuthToken(): string {
-    // In production: fetch(`${endpoint}/oauth/v1/generate?grant_type=client_credentials`,
-    //   { headers: { Authorization: `Basic ${base64(consumerKey:consumerSecret)}` } })
-    //   .then(r => r.json()) → r.access_token
-    if (!this.apiKey) return '<unresolved-oauth-token>';
-    return `access_${deterministicHash(this.apiKey).slice(0, 24)}`;
-  }
-
-  protected authHeader(): string {
-    return `Bearer ${this.resolveOAuthToken()}`;
-  }
-
-  async doQuery(
-    request: ConnectorRequest,
-  ): Promise<{ result: Record<string, unknown>; error?: ConnectorError }> {
-    // In production: fetch(`${endpoint}/${path}`, {
-    //   method: 'POST', headers: { Authorization: this.authHeader(), 'Content-Type': 'application/json' },
-    //   body: JSON.stringify(request.params),
-    // });
+  protected async doQuery(request: ConnectorRequest): Promise<DoQueryResult> {
     switch (request.operation) {
       case 'getBalance':
-        return this.simGetBalance(request);
+        return this.getBalance(request.params);
       case 'sendSTKPush':
-        return this.simSendSTKPush(request);
+        return this.sendSTKPush(request.params);
       case 'verifyTransaction':
-        return this.simVerifyTransaction(request);
-      case 'reverseTransaction':
-        return this.simReverseTransaction(request);
+        return this.verifyTransaction(request.params);
       default:
-        return { result: {}, error: invalidResponse(`Unknown operation: ${request.operation}`) };
+        return { ok: false, error: invalidResponse(`unknown_operation:${request.operation}`) };
     }
   }
 
-  private simGetBalance(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const phoneNumber = request.params.phoneNumber as string | undefined;
-    if (!phoneNumber) {
-      return { result: {}, error: invalidResponse('phoneNumber required') };
-    }
-    // Daraja account-balance response shape.
-    const balance = (request.params.expectedBalance as number | undefined)
-      ?? deterministicBalance(phoneNumber, 'KES');
-    return {
-      result: {
-        ConversationID: `AG_${deterministicHash(phoneNumber).slice(0, 24).toUpperCase()}`,
-        OriginatorConversationID: `OC-${request.id.slice(0, 16)}`,
-        ResponseCode: '0',
-        ResponseDescription: 'Accept the service request successfully.',
-        balance,
-        currency: 'KES',
-      },
-    };
-  }
-
-  private simSendSTKPush(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const { phoneNumber, amount, callbackUrl } = request.params as {
-      phoneNumber?: string; amount?: number; callbackUrl?: string;
-    };
-    if (!phoneNumber || amount == null) {
-      return { result: {}, error: invalidResponse('phoneNumber and amount required') };
-    }
-    // Daraja STK push response shape.
-    const merchantRequestId = `29115-${deterministicHash(`${phoneNumber}${amount}`).slice(0, 8)}`;
-    const checkoutRequestId = `ws_CO_${deterministicHash(`${request.id}${phoneNumber}`).slice(0, 16)}`;
-    return {
-      result: {
-        MerchantRequestID: merchantRequestId,
-        CheckoutRequestID: checkoutRequestId,
-        ResponseCode: '0',
-        ResponseDescription: 'Success. Request accepted for processing',
-        CustomerMessage: 'Success. Request accepted for processing',
-        callbackUrl: callbackUrl ?? 'https://payswap.example.com/mpesa/callback',
-      },
-    };
-  }
-
-  private simVerifyTransaction(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const transactionId = request.params.transactionId as string | undefined;
-    if (!transactionId) {
-      return { result: {}, error: invalidResponse('transactionId required') };
-    }
-    // Deterministic transaction status.
-    const status = transactionId.includes('FAIL')
-      ? 'failed'
-      : transactionId.includes('PEND')
-      ? 'pending'
-      : 'completed';
-    return {
-      result: {
-        ConversationID: `AG_${deterministicHash(transactionId).slice(0, 24).toUpperCase()}`,
-        OriginatorConversationID: `OC-${transactionId.slice(0, 16)}`,
-        ResponseCode: status === 'completed' ? '0' : status === 'pending' ? '1' : '2',
-        ResponseDescription:
-          status === 'completed' ? 'Transaction completed successfully'
-          : status === 'pending' ? 'Transaction pending confirmation'
-          : 'Transaction failed',
-        status,
-        amount: deterministicBalance(transactionId, 'KES'),
-        currency: 'KES',
-      },
-    };
-  }
-
-  private simReverseTransaction(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const transactionId = request.params.transactionId as string | undefined;
-    if (!transactionId) {
-      return { result: {}, error: invalidResponse('transactionId required') };
-    }
-    return {
-      result: {
-        ConversationID: `AG_REV_${deterministicHash(transactionId).slice(0, 20).toUpperCase()}`,
-        OriginatorConversationID: `OC-REV-${transactionId.slice(0, 12)}`,
-        ResponseCode: '0',
-        ResponseDescription: 'Accept the service request successfully.',
-        status: 'reversed',
-        originalTransactionId: transactionId,
-      },
-    };
-  }
-
-  buildEvidence(request: ConnectorRequest, result: Record<string, unknown>): Evidence {
-    const phoneNumber = request.params.phoneNumber as string | undefined;
-    const transactionId =
-      (request.params.transactionId as string | undefined) ??
-      (result.CheckoutRequestID as string | undefined) ??
-      (result.ConversationID as string | undefined);
-
-    let attestedAmount: number | undefined;
-    let attestedValue = '';
-    const currency = (result.currency as string | undefined) ?? 'KES';
-
-    if (request.operation === 'getBalance') {
-      attestedAmount = result.balance as number | undefined;
-      attestedValue = `${attestedAmount} ${currency} on M-Pesa`;
-    } else if (request.operation === 'sendSTKPush') {
-      const amt = request.params.amount as number | undefined;
-      attestedAmount = amt;
-      attestedValue = `STK push ${amt} ${currency} to ${phoneNumber}`;
-    } else if (request.operation === 'verifyTransaction') {
-      attestedAmount = result.amount as number | undefined;
-      attestedValue = `M-Pesa transaction ${transactionId}: ${result.status}`;
-    } else if (request.operation === 'reverseTransaction') {
-      attestedValue = `M-Pesa transaction ${transactionId} reversed`;
-    }
-
-    const entityId = phoneNumber
-      ? `mmo:${phoneNumber}`
-      : transactionId
-      ? `mpesa-tx:${transactionId}`
-      : 'mpesa';
-
-    return buildAttestationEvidence({
+  protected buildEvidence(request: ConnectorRequest, result: unknown): Evidence {
+    const params = request.params;
+    const entityId =
+      (params['phoneNumber'] as string | undefined) ??
+      (params['transactionId'] as string | undefined) ??
+      request.id;
+    return createEvidence({
+      type: 'fiat_proof',
       source: 'psp_confirmation',
       verificationLevel: 'institutional',
       entityId,
-      attester: this.config.id,
-      attestedAmount,
-      currency,
+      attester: 'mpesa-connector-v2',
       reputation: 0.85,
-      jurisdiction: 'KE',
-      ttlMs: 90_000,
-      payload: {
-        connector: this.config.id,
-        connectorType: this.config.type,
-        operation: request.operation,
-        attestedValue,
-        phoneNumber,
-        transactionId,
-        conversationId: result.ConversationID,
-        responseCode: result.ResponseCode,
-      },
+      jurisdiction: 'Kenya',
+      payload: { operation: request.operation, requestId: request.id, result },
     });
   }
 
   async healthCheck(): Promise<{ healthy: boolean; latencyMs: number }> {
     const start = Date.now();
-    return { healthy: true, latencyMs: Math.floor(Math.random() * 200) + 100 };
+    return { healthy: true, latencyMs: Date.now() - start };
   }
-}
 
-/** Deterministic pseudo-balance for a phone/transaction identifier. */
-function deterministicBalance(id: string, currency: string): number {
-  const h = deterministicHash(`${id}|${currency}`);
-  const n = parseInt(h.slice(0, 8), 16);
-  return 500 + (n % 99500);
+  // ---------------------------------------------------------------- getBalance
+  private getBalance(params: Record<string, unknown>): DoQueryResult {
+    const phoneNumber = params['phoneNumber'] as string | undefined;
+    if (!phoneNumber) {
+      return { ok: false, error: invalidResponse('phoneNumber_required') };
+    }
+    const balance = pseudoBalance(phoneNumber);
+    return {
+      ok: true,
+      data: { phoneNumber, currency: 'KES', balance, available: balance, asOf: Date.now() },
+    };
+  }
+
+  // -------------------------------------------------------------- sendSTKPush
+  private sendSTKPush(params: Record<string, unknown>): DoQueryResult {
+    const phoneNumber = params['phoneNumber'] as string | undefined;
+    const amount = params['amount'] as number | undefined;
+    const callbackUrl = (params['callbackUrl'] as string | undefined) ?? '';
+    if (!phoneNumber || amount === undefined) {
+      return { ok: false, error: invalidResponse('phoneNumber_amount_required') };
+    }
+    if (amount <= 0) {
+      return { ok: false, error: invalidResponse('amount_must_be_positive') };
+    }
+    const checkoutRequestId = uid('mpesackr');
+    const merchantRequestId = uid('mpesamr');
+    const record: StkPushRecord = {
+      checkoutRequestId,
+      merchantRequestId,
+      phoneNumber,
+      amount: round(amount, 2),
+      callbackUrl,
+      status: 'pending',
+      createdAt: Date.now(),
+    };
+    this.stkPushes.set(checkoutRequestId, record);
+    return {
+      ok: true,
+      data: {
+        checkoutRequestId,
+        merchantRequestId,
+        status: record.status,
+        responseCode: '0',
+        responseDescription: 'Success. Request accepted for processing',
+      },
+    };
+  }
+
+  // --------------------------------------------------------- verifyTransaction
+  private verifyTransaction(params: Record<string, unknown>): DoQueryResult {
+    const transactionId = params['transactionId'] as string | undefined;
+    const checkoutRequestId = params['checkoutRequestId'] as string | undefined;
+    if (!transactionId && !checkoutRequestId) {
+      return { ok: false, error: invalidResponse('transactionId_or_checkoutRequestId_required') };
+    }
+
+    // If caller passed a checkoutRequestId, resolve it to a transaction.
+    if (checkoutRequestId) {
+      const stk = this.stkPushes.get(checkoutRequestId);
+      if (!stk) {
+        return { ok: false, error: invalidResponse(`checkout_request_not_found:${checkoutRequestId}`) };
+      }
+      // Simulated STK Push confirmation: pending -> success on first verify.
+      if (stk.status === 'pending') {
+        stk.status = 'success';
+        const txId = stk.transactionId ?? uid('mpesatx');
+        stk.transactionId = txId;
+        const tx: TransactionRecord = {
+          transactionId: txId,
+          phoneNumber: stk.phoneNumber,
+          amount: stk.amount,
+          status: 'completed',
+          createdAt: Date.now(),
+        };
+        this.transactions.set(txId, tx);
+      }
+      return {
+        ok: true,
+        data: {
+          checkoutRequestId: stk.checkoutRequestId,
+          transactionId: stk.transactionId,
+          status: stk.status,
+          amount: stk.amount,
+          phoneNumber: stk.phoneNumber,
+        },
+      };
+    }
+
+    // transactionId path
+    const tx = this.transactions.get(transactionId!);
+    if (!tx) {
+      return { ok: false, error: invalidResponse(`transaction_not_found:${transactionId}`) };
+    }
+    return {
+      ok: true,
+      data: {
+        transactionId: tx.transactionId,
+        status: tx.status,
+        amount: tx.amount,
+        phoneNumber: tx.phoneNumber,
+      },
+    };
+  }
+
+  /** Test helper: force a checkout request into a specific state. */
+  _setStkPushStatus(checkoutRequestId: string, status: StkPushRecord['status']): void {
+    const r = this.stkPushes.get(checkoutRequestId);
+    if (r) r.status = status;
+  }
 }

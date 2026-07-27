@@ -1,109 +1,96 @@
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { db } from '@/lib/db';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/page-header';
+import { EmptyState } from '@/components/empty-state';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
-import { StatusBadge } from '@/components/status-badge';
 import { Building2 } from 'lucide-react';
+import { requireAdmin } from '@/lib/auth-guards';
+import { db } from '@/lib/db';
+import { formatCurrency, formatDate, statusBadgeClass } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
-export default async function MerchantsPage() {
-  const session = await getServerSession(authOptions);
+const TIER_BADGE: Record<string, string> = {
+  UNVERIFIED: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
+  VERIFIED: 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20',
+  TRUSTED: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
+  PREMIUM: 'bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20',
+};
+
+export default async function AdminMerchantsPage() {
+  await requireAdmin();
 
   const merchants = await db.merchant.findMany({
-    where: { deletedAt: null },
     orderBy: { createdAt: 'desc' },
-    take: 100,
+    take: 500,
   });
-
-  const fmt = (n: number, c: string = 'GHS') =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: c }).format(n);
-  const fmtDate = (d: Date) =>
-    new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Merchants</h1>
-        <p className="text-sm text-muted-foreground">
-          Businesses onboarded onto the PaySwap platform.
-        </p>
-      </div>
+      <PageHeader
+        title="Merchants"
+        description="Every merchant account on the platform, with tier, status and bond."
+      />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">All merchants</CardTitle>
-          <CardDescription>
-            {merchants.length} merchant{merchants.length === 1 ? '' : 's'} onboarded
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {merchants.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10">
-                <Building2 className="h-6 w-6 text-emerald-500" />
-              </div>
-              <h3 className="mt-4 text-sm font-semibold">No merchants yet</h3>
-              <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-                Approved waitlist entries become merchants and appear here.
-              </p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Country</TableHead>
-                  <TableHead>Tier</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Bond</TableHead>
-                  <TableHead>Created</TableHead>
+      {merchants.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<Building2 className="h-5 w-5" />}
+            title="No merchants yet"
+            description="Approve waitlist entries to convert them into merchants. New merchants show up here automatically."
+          />
+        </Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Email</TableHead>
+                <TableHead>Country</TableHead>
+                <TableHead>Tier</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Bond</TableHead>
+                <TableHead className="text-right">Joined</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {merchants.map((m) => (
+                <TableRow key={m.id}>
+                  <TableCell className="font-medium">
+                    <div className="flex flex-col">
+                      <span>{m.name}</span>
+                      {m.legalName && (
+                        <span className="text-[11px] text-muted-foreground">{m.legalName}</span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{m.email}</TableCell>
+                  <TableCell className="text-muted-foreground">{m.country}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={TIER_BADGE[m.tier] ?? ''}>
+                      {m.tier}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={statusBadgeClass(m.status)}>
+                      {m.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right font-medium">
+                    {formatCurrency(m.bond, m.currency)}
+                  </TableCell>
+                  <TableCell className="text-right text-muted-foreground">
+                    {formatDate(m.createdAt)}
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {merchants.map((m) => (
-                  <TableRow key={m.id}>
-                    <TableCell className="font-medium">{m.name}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {m.email}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {m.country}
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={m.tier} />
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={m.status} />
-                    </TableCell>
-                    <TableCell className="text-right font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-                      {fmt(m.bond, m.currency)}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {fmtDate(m.createdAt)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
     </div>
   );
 }

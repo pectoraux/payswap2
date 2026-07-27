@@ -1,183 +1,290 @@
 /**
- * PaySwap Protocol — Double-Entry Ledger / Chart of Accounts.
- * -----------------------------------------------------------------------------
- * The standard 5-type chart of accounts for PaySwap:
- *   - Asset       (cash, twin tokens in circulation/escrow, settlement claims, LP collateral, stellar reserves)
- *   - Liability   (user wallet balances, merchant payables, pending payouts, twin token backing)
- *   - Equity      (protocol equity, fees equity, treasury)
- *   - Revenue     (fees by method, fx)
- *   - Expense     (connector costs, on-chain costs)
+ * PaySwap Protocol — Ledger Chart of Accounts.
  *
- * Account codes are hierarchical strings: `category:subcategory[:identifier]`.
- * Examples:
- *   `cash:bank:GHS`               — bank cash in GHS
- *   `cash:mmo:KES`                — mobile-money-operator cash in KES
- *   `twintoken:circulating:TWINGHS` — Twin Tokens currently in circulation
- *   `twin:backing:GHS`            — liability to redeem TWINGHS for GHS
- *   `user:wallet:wallet_abc`      — liability owed to a wallet holder
- *   `merchant:payable:merchant_xyz` — liability owed to a merchant
- *   `revenue:fees:bank`           — fee revenue collected from bank payouts
+ * The protocol ledger is a multi-currency double-entry book that mirrors every
+ * value movement in the protocol layer (twin tokens, wallets, payouts,
+ * settlement, treasury). It is the single source of truth for "where did the
+ * money go" — independent of the kernel's own internal ledger, which is used
+ * for simulation-state accounting.
  *
- * This module is pure data — no kernel mutations. It defines the standard
- * set, plus a lookup helper for ad-hoc codes (per-currency, per-merchant).
+ * Account codes are namespaced strings (type shown in parentheses):
+ *
+ *   twintoken:circulating:${assetCode}   — twin tokens in circulation (asset)
+ *   twin:backing:${currency}              — fiat backing owed to LPs (liability)
+ *   twintoken:escrowed:${assetCode}      — twin tokens locked in escrow (asset)
+ *   cash:bank:${currency}                 — bank-held fiat (asset)
+ *   cash:mmo:${currency}                  — mobile-money-operator fiat (asset)
+ *   user:wallet:${walletId}              — user wallet liability (liability)
+ *   merchant:payable:${merchantId}       — merchant payable (liability)
+ *   payout:pending                       — payouts awaiting rail (liability)
+ *   settlement:receivable                — settlement owed to protocol (asset)
+ *   lp:collateral                        — LP collateral held (asset)
+ *   reserve:stellar                      — on-chain reserve (asset)
+ *   equity:protocol                      — protocol equity (equity)
+ *   equity:fees                          — accrued fees awaiting recognition (equity)
+ *   equity:treasury                      — treasury-allocated equity (equity)
+ *   revenue:fees:${method}               — fee revenue by payout method (revenue)
+ *   revenue:fx                           — FX revenue (revenue)
+ *   expense:connector                    — connector/PSP cost (expense)
+ *   expense:chain                        — on-chain settlement cost (expense)
+ *
+ * Twin token accounting model: every minted token is backed 1:1 by fiat held
+ * by an LP. The protocol tracks the issued tokens as a receivable (asset) and
+ * the corresponding fiat deposit as a backing liability owed to the LP. This
+ * gives the invariant: circulating + escrowed === backing liability.
+ *
+ * Account types follow the classical accounting equation:
+ *   Assets = Liabilities + Equity
+ * with revenue and expense accounts closing into equity at period end.
  */
-import type { CurrencyCode } from '@/kernel/types';
 
+/** Classical accounting account types. */
 export type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
-export type NormalBalance = 'debit' | 'credit';
 
-export interface LedgerAccount {
-  /** Hierarchical code, e.g. `cash:bank:GHS`. */
+/** A chart-of-accounts definition entry. */
+export interface AccountDefinition {
+  /** Template or fully-qualified account code (may contain `${var}` segments). */
   code: string;
   /** Human-readable label. */
-  name: string;
-  /** Accounting type — drives which financial statement this appears on. */
+  label: string;
+  /** Accounting type — drives debit/credit normal balance. */
   type: AccountType;
-  /** Which side increases the account: assets/expenses → debit; liabilities/equity/revenue → credit. */
-  normalBalance: NormalBalance;
-  /** Currency code if the account is single-currency; undefined for multi-currency rollups. */
-  currency?: string;
+  /** Currency this account is denominated in, or 'multi' if mixed. */
+  currency: 'multi' | string;
+  /** True if the code contains `${var}` and is a template, not a leaf account. */
+  template: boolean;
 }
 
 /**
- * Standard template accounts — concrete instances are typically created with
- * `getAccount(code)` for parameterized codes (per currency / per merchant).
+ * Canonical chart of accounts. Templates (with `${var}`) describe families of
+ * accounts; concrete accounts are derived at runtime by substituting the
+ * variable (e.g. `twintoken:circulating:TWINGHS`).
  */
-export const CHART_OF_ACCOUNTS: LedgerAccount[] = [
-  // ─── Assets ────────────────────────────────────────────────────────────
-  { code: 'cash:bank', name: 'Cash — Bank', type: 'asset', normalBalance: 'debit' },
-  { code: 'cash:mmo', name: 'Cash — Mobile Money Operator', type: 'asset', normalBalance: 'debit' },
-  { code: 'twintoken:circulating', name: 'Twin Tokens — Circulating', type: 'asset', normalBalance: 'debit' },
-  { code: 'twintoken:escrowed', name: 'Twin Tokens — Escrowed', type: 'asset', normalBalance: 'debit' },
-  { code: 'settlement:receivable', name: 'Settlement — Receivable (locked funds)', type: 'asset', normalBalance: 'debit' },
-  { code: 'lp:collateral', name: 'LP / Merchant Collateral', type: 'asset', normalBalance: 'debit' },
-  { code: 'reserve:stellar', name: 'Reserve — Stellar (XLM)', type: 'asset', normalBalance: 'debit' },
+export const CHART_OF_ACCOUNTS: AccountDefinition[] = [
+  // ---- Twin tokens ---------------------------------------------------------
+  {
+    code: 'twintoken:circulating:${assetCode}',
+    label: 'Twin tokens in circulation',
+    type: 'asset',
+    currency: 'multi',
+    template: true,
+  },
+  {
+    code: 'twin:backing:${currency}',
+    label: 'Fiat backing owed to LPs',
+    type: 'liability',
+    currency: 'multi',
+    template: true,
+  },
+  {
+    code: 'twintoken:escrowed:${assetCode}',
+    label: 'Twin tokens held in escrow',
+    type: 'asset',
+    currency: 'multi',
+    template: true,
+  },
 
-  // ─── Liabilities ──────────────────────────────────────────────────────
-  { code: 'user:wallet', name: 'User Wallet Balance (payable)', type: 'liability', normalBalance: 'credit' },
-  { code: 'merchant:payable', name: 'Merchant Payable', type: 'liability', normalBalance: 'credit' },
-  { code: 'payout:pending', name: 'Pending Payouts', type: 'liability', normalBalance: 'credit' },
-  { code: 'twin:backing', name: 'Twin Token Backing Liability (redeemable)', type: 'liability', normalBalance: 'credit' },
+  // ---- Cash ----------------------------------------------------------------
+  {
+    code: 'cash:bank:${currency}',
+    label: 'Bank-held cash',
+    type: 'asset',
+    currency: 'multi',
+    template: true,
+  },
+  {
+    code: 'cash:mmo:${currency}',
+    label: 'Mobile-money-operator cash',
+    type: 'asset',
+    currency: 'multi',
+    template: true,
+  },
 
-  // ─── Equity ───────────────────────────────────────────────────────────
-  { code: 'equity:protocol', name: 'Protocol Equity', type: 'equity', normalBalance: 'credit' },
-  { code: 'equity:fees', name: 'Fees Equity (unrecognized)', type: 'equity', normalBalance: 'credit' },
-  { code: 'equity:treasury', name: 'Treasury Equity (bonds + retained fees)', type: 'equity', normalBalance: 'credit' },
+  // ---- User & merchant -----------------------------------------------------
+  {
+    code: 'user:wallet:${walletId}',
+    label: 'User wallet liability',
+    type: 'liability',
+    currency: 'multi',
+    template: true,
+  },
+  {
+    code: 'merchant:payable:${merchantId}',
+    label: 'Merchant payable',
+    type: 'liability',
+    currency: 'multi',
+    template: true,
+  },
+  {
+    code: 'payout:pending',
+    label: 'Payouts pending rail confirmation',
+    type: 'liability',
+    currency: 'multi',
+    template: false,
+  },
 
-  // ─── Revenue ──────────────────────────────────────────────────────────
-  { code: 'revenue:fees', name: 'Fee Revenue (by method)', type: 'revenue', normalBalance: 'credit' },
-  { code: 'revenue:fx', name: 'FX Revenue', type: 'revenue', normalBalance: 'credit' },
+  // ---- Settlement ----------------------------------------------------------
+  {
+    code: 'settlement:receivable',
+    label: 'Settlement owed to protocol',
+    type: 'asset',
+    currency: 'multi',
+    template: false,
+  },
+  {
+    code: 'lp:collateral',
+    label: 'LP collateral held',
+    type: 'asset',
+    currency: 'multi',
+    template: false,
+  },
+  {
+    code: 'reserve:stellar',
+    label: 'On-chain Stellar reserve',
+    type: 'asset',
+    currency: 'multi',
+    template: false,
+  },
 
-  // ─── Expenses ─────────────────────────────────────────────────────────
-  { code: 'expense:connector', name: 'Connector Expenses', type: 'expense', normalBalance: 'debit' },
-  { code: 'expense:chain', name: 'On-Chain Expenses', type: 'expense', normalBalance: 'debit' },
+  // ---- Equity --------------------------------------------------------------
+  {
+    code: 'equity:protocol',
+    label: 'Protocol equity',
+    type: 'equity',
+    currency: 'multi',
+    template: false,
+  },
+  {
+    code: 'equity:fees',
+    label: 'Accrued fees awaiting recognition',
+    type: 'equity',
+    currency: 'multi',
+    template: false,
+  },
+  {
+    code: 'equity:treasury',
+    label: 'Treasury-allocated equity',
+    type: 'equity',
+    currency: 'multi',
+    template: false,
+  },
+
+  // ---- Revenue -------------------------------------------------------------
+  {
+    code: 'revenue:fees:${method}',
+    label: 'Fee revenue by payout method',
+    type: 'revenue',
+    currency: 'multi',
+    template: true,
+  },
+  {
+    code: 'revenue:fx',
+    label: 'FX revenue',
+    type: 'revenue',
+    currency: 'multi',
+    template: false,
+  },
+
+  // ---- Expense -------------------------------------------------------------
+  {
+    code: 'expense:connector',
+    label: 'Connector / PSP cost',
+    type: 'expense',
+    currency: 'multi',
+    template: false,
+  },
+  {
+    code: 'expense:chain',
+    label: 'On-chain settlement cost',
+    type: 'expense',
+    currency: 'multi',
+    template: false,
+  },
 ];
 
-/** Quick lookup of standard template accounts by their prefix. */
-const STANDARD_BY_CODE: Map<string, LedgerAccount> = new Map(
-  CHART_OF_ACCOUNTS.map((a) => [a.code, a]),
-);
-
-/** Known parameterized-account prefixes (in order of specificity). */
-const PARAMETERIZED_PREFIXES: Array<{ prefix: string; template: LedgerAccount }> = [
-  { prefix: 'cash:bank:', template: STANDARD_BY_CODE.get('cash:bank')! },
-  { prefix: 'cash:mmo:', template: STANDARD_BY_CODE.get('cash:mmo')! },
-  { prefix: 'twintoken:circulating:', template: STANDARD_BY_CODE.get('twintoken:circulating')! },
-  { prefix: 'twintoken:escrowed:', template: STANDARD_BY_CODE.get('twintoken:escrowed')! },
-  { prefix: 'settlement:receivable:', template: STANDARD_BY_CODE.get('settlement:receivable')! },
-  { prefix: 'lp:collateral:', template: STANDARD_BY_CODE.get('lp:collateral')! },
-  { prefix: 'reserve:stellar:', template: STANDARD_BY_CODE.get('reserve:stellar')! },
-  { prefix: 'user:wallet:', template: STANDARD_BY_CODE.get('user:wallet')! },
-  { prefix: 'merchant:payable:', template: STANDARD_BY_CODE.get('merchant:payable')! },
-  { prefix: 'payout:pending:', template: STANDARD_BY_CODE.get('payout:pending')! },
-  { prefix: 'twin:backing:', template: STANDARD_BY_CODE.get('twin:backing')! },
-  { prefix: 'equity:protocol:', template: STANDARD_BY_CODE.get('equity:protocol')! },
-  { prefix: 'equity:fees:', template: STANDARD_BY_CODE.get('equity:fees')! },
-  { prefix: 'equity:treasury:', template: STANDARD_BY_CODE.get('equity:treasury')! },
-  { prefix: 'revenue:fees:', template: STANDARD_BY_CODE.get('revenue:fees')! },
-  { prefix: 'revenue:fx:', template: STANDARD_BY_CODE.get('revenue:fx')! },
-  { prefix: 'expense:connector:', template: STANDARD_BY_CODE.get('expense:connector')! },
-  { prefix: 'expense:chain:', template: STANDARD_BY_CODE.get('expense:chain')! },
-];
-
-/** Standalone equity/revenue/expense codes that aren't parameterized. */
-const STANDALONE_CODES = new Set([
-  'equity:protocol', 'equity:fees', 'equity:treasury',
-  'revenue:fx',
-  'expense:connector', 'expense:chain',
-  'settlement:receivable',
-]);
+/** Lookup map keyed by the prefix before the first `${` (or full code). */
+const TEMPLATE_INDEX: Map<string, AccountDefinition> = new Map();
+for (const def of CHART_OF_ACCOUNTS) {
+  const key = def.template ? def.code.slice(0, def.code.indexOf('${')) : def.code;
+  TEMPLATE_INDEX.set(key, def);
+}
 
 /**
- * Resolve any account code (standard or parameterized) to a LedgerAccount.
- * Parameterized codes inherit type/normalBalance from their template.
- * Unknown codes default to an asset account with debit normal balance
- * (this preserves ledger integrity — the trial balance invariant only
- * requires debits === credits, not account-type correctness).
+ * Resolve a fully-qualified account code to its chart-of-accounts definition.
+ * Returns undefined for unknown account namespaces.
+ *
+ * Example: `twintoken:circulating:TWINGHS` matches the
+ * `twintoken:circulating:${assetCode}` template.
  */
-export function getAccount(code: string): LedgerAccount {
-  const exact = STANDARD_BY_CODE.get(code);
-  if (exact) return exact;
+export function getAccount(code: string): AccountDefinition | undefined {
+  // Exact (non-template) match first.
+  const exact = TEMPLATE_INDEX.get(code);
+  if (exact && !exact.template) return exact;
 
-  for (const { prefix, template } of PARAMETERIZED_PREFIXES) {
-    if (code.startsWith(prefix)) {
-      const tail = code.slice(prefix.length);
-      // The tail may be a currency (e.g. "GHS"), an asset code ("TWINGHS"),
-      // a merchantId, a walletId, or a "holder:${id}" suffix.
-      const currency = looksLikeCurrency(tail) ? tail : undefined;
-      return {
-        code,
-        name: `${template.name} — ${tail}`,
-        type: template.type,
-        normalBalance: template.normalBalance,
-        currency,
-      };
+  // Walk the prefix set, longest-match wins.
+  let best: AccountDefinition | undefined;
+  let bestLen = -1;
+  for (const [prefix, def] of TEMPLATE_INDEX) {
+    if (def.template && code.startsWith(prefix)) {
+      if (prefix.length > bestLen) {
+        best = def;
+        bestLen = prefix.length;
+      }
     }
   }
-
-  if (STANDALONE_CODES.has(code)) {
-    return STANDARD_BY_CODE.get(code)!;
-  }
-
-  // Unknown — default to asset/debit to preserve balance invariants.
-  return {
-    code,
-    name: `Unknown account — ${code}`,
-    type: 'asset',
-    normalBalance: 'debit',
-  };
+  return best;
 }
 
-const CURRENCY_SET: Set<string> = new Set<string>([
-  'KES', 'GHS', 'NGN', 'USD', 'ZAR', 'UGX', 'TZS',
-]);
-
-function looksLikeCurrency(s: string): boolean {
-  if (CURRENCY_SET.has(s)) return true;
-  // Twin Token asset codes look like `TWIN<CCY>`.
-  if (s.startsWith('TWIN') && s.length > 4) {
-    return CURRENCY_SET.has(s.slice(4));
-  }
-  return false;
+/** Account type for a code, defaulting to 'asset' if unknown. */
+export function accountType(code: string): AccountType {
+  return getAccount(code)?.type ?? 'asset';
 }
 
-/** Extract the underlying currency from a Twin Token asset code (e.g. TWINGHS → GHS). */
+/**
+ * Map a Twin Token asset code (e.g. `TWINGHS`) to its underlying currency
+ * (e.g. `GHS`). Twin token codes are conventionally `TWIN<CCY>`.
+ */
 export function twinAssetToCurrency(assetCode: string): string {
-  if (assetCode.startsWith('TWIN') && assetCode.length > 4) {
-    return assetCode.slice(4);
-  }
+  if (assetCode.startsWith('TWIN')) return assetCode.slice(4);
   return assetCode;
 }
 
-/** Convenience: filter chart of accounts by type. */
-export function accountsByType(type: AccountType): LedgerAccount[] {
-  return CHART_OF_ACCOUNTS.filter((a) => a.type === type);
+/** Build a twin-token circulating account code from an asset code. */
+export function circulatingAccount(assetCode: string): string {
+  return `twintoken:circulating:${assetCode}`;
 }
 
-/** All supported currency codes (re-exported for convenience). */
-export const CURRENCIES: readonly string[] = [
-  'KES', 'GHS', 'NGN', 'USD', 'ZAR', 'UGX', 'TZS',
-] as const;
+/** Build a twin-token escrowed account code from an asset code. */
+export function escrowedAccount(assetCode: string): string {
+  return `twintoken:escrowed:${assetCode}`;
+}
 
-/** Type alias for the CurrencyCode used elsewhere in the protocol. */
-export type { CurrencyCode };
+/** Build a fiat backing account code from a currency. */
+export function backingAccount(currency: string): string {
+  return `twin:backing:${currency}`;
+}
+
+/** Build a bank cash account code from a currency. */
+export function bankCashAccount(currency: string): string {
+  return `cash:bank:${currency}`;
+}
+
+/** Build a mobile-money cash account code from a currency. */
+export function mmoCashAccount(currency: string): string {
+  return `cash:mmo:${currency}`;
+}
+
+/** Build a user wallet liability account code from a wallet id. */
+export function userWalletAccount(walletId: string): string {
+  return `user:wallet:${walletId}`;
+}
+
+/** Build a merchant payable account code from a merchant id. */
+export function merchantPayableAccount(merchantId: string): string {
+  return `merchant:payable:${merchantId}`;
+}
+
+/** Build a fee revenue account code from a payout method. */
+export function feeRevenueAccount(method: string): string {
+  return `revenue:fees:${method}`;
+}

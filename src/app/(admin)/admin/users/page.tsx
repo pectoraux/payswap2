@@ -1,111 +1,93 @@
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { db } from '@/lib/db';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/page-header';
+import { EmptyState } from '@/components/empty-state';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
-import { StatusBadge } from '@/components/status-badge';
-import { Users } from 'lucide-react';
+import { Users as UsersIcon } from 'lucide-react';
+import { requireAdmin } from '@/lib/auth-guards';
+import { db } from '@/lib/db';
+import { formatDate, formatRelative, statusBadgeClass } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
-export default async function UsersPage() {
-  const session = await getServerSession(authOptions);
+export default async function AdminUsersPage() {
+  await requireAdmin();
 
   const users = await db.user.findMany({
-    where: { deletedAt: null },
-    orderBy: { createdAt: 'desc' },
-    take: 100,
     include: { roles: true },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
   });
-
-  const fmtDate = (d: Date | null) =>
-    d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Users</h1>
-        <p className="text-sm text-muted-foreground">
-          Everyone with a PaySwap account on this platform.
-        </p>
-      </div>
+      <PageHeader
+        title="Users"
+        description="Every account on the PaySwap platform."
+      />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">All users</CardTitle>
-          <CardDescription>
-            {users.length} user{users.length === 1 ? '' : 's'} registered
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {users.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10">
-                <Users className="h-6 w-6 text-emerald-500" />
-              </div>
-              <h3 className="mt-4 text-sm font-semibold">No users yet</h3>
-              <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-                Registered users will appear here once sign-ups begin.
-              </p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Last login</TableHead>
-                  <TableHead>Joined</TableHead>
+      {users.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<UsersIcon className="h-5 w-5" />}
+            title="No users yet"
+            description="When people sign up — either via waitlist approval or directly — they'll be listed here."
+          />
+        </Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Email</TableHead>
+                <TableHead>Roles</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Last login</TableHead>
+                <TableHead className="text-right">Joined</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {users.map((u) => (
+                <TableRow key={u.id}>
+                  <TableCell className="font-medium">{u.name ?? '—'}</TableCell>
+                  <TableCell className="text-muted-foreground">{u.email}</TableCell>
+                  <TableCell>
+                    <div className="flex max-w-[260px] flex-wrap gap-1">
+                      {u.roles.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">No roles</span>
+                      ) : (
+                        u.roles.map((r) => (
+                          <Badge
+                            key={r.id}
+                            variant="outline"
+                            className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px]"
+                          >
+                            {r.role}
+                          </Badge>
+                        ))
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={statusBadgeClass(u.status)}>
+                      {u.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right text-muted-foreground">
+                    {formatRelative(u.lastLoginAt)}
+                  </TableCell>
+                  <TableCell className="text-right text-muted-foreground">
+                    {formatDate(u.createdAt)}
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {users.map((u) => {
-                  const role = u.roles[0]?.role || '—';
-                  return (
-                    <TableRow key={u.id}>
-                      <TableCell className="font-medium">
-                        {u.name || '—'}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {u.email}
-                      </TableCell>
-                      <TableCell>
-                        <span className="rounded bg-teal-500/10 px-1.5 py-0.5 text-[10px] font-medium text-teal-600 dark:text-teal-400">
-                          {role}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={u.status} />
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {fmtDate(u.lastLoginAt)}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {fmtDate(u.createdAt)}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
     </div>
   );
 }

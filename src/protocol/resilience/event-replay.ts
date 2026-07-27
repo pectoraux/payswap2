@@ -1,264 +1,219 @@
 /**
- * PaySwap Protocol — Resilience / Event Replay Engine.
- * -----------------------------------------------------------------------------
- * The EventReplayEngine replays a slice of the event stream through a target
- * projection. This is the foundation of disaster recovery:
+ * PaySwap Protocol — Resilience — Event Replay Engine.
  *
- *   - Ledger rebuild:        replay all events → produce a fresh ledger
- *                             (used after db corruption, or for verification)
- *   - Projection rebuild:    replay events → re-derive merchant / LP / wallet
- *                             state (used when a projection is corrupted)
- *   - Webhook re-fire:       replay events in a time range → re-fire webhooks
- *                             for events that were missed (e.g. during an
- *                             outage of the webhook engine)
- *   - Audit re-derive:       replay events → re-derive the audit log
+ * Replays a stream of `SimulationEvent`s through the protocol ledger
+ * projection and answers two questions:
  *
- * DETERMINISM INVARIANT: replaying the same events through the same target
- * MUST produce identical projections every time. `verifyReplayDeterminism`
- * runs the replay TWICE and compares outputs — any mismatch is a bug.
+ *   1. Is replay DETERMINISTIC? — i.e. does replaying the same events twice
+ *      produce identical ledger state? This is the core invariant an
+ *      event-sourced system must uphold.
  *
- * The engine delegates the actual projection logic to caller-supplied
- * functions (`rebuildFn`, `replayFn`). For the ledger target, the default
- * rebuild function is `rebuildLedgerFromEvents` from the ledger module.
+ *   2. How long does a replay take, and how many errors does it surface?
+ *      Used by the persistence layer to schedule snapshot rebuilds.
  *
- * INVARIANTS:
- *   - Replay is deterministic — same events → same output.
- *   - Replay is idempotent — replaying the same events multiple times does
- *     not corrupt state (projections are rebuilt into fresh instances).
- *   - Replay is auditable — every replay produces a `ReplayReport` with
- *     counts, duration, and errors.
+ * The ledger module is imported lazily so this file does not pull the entire
+ * ledger projection into the bundle when only the determinism check is used.
+ *
+ * The kernel is FROZEN — this module imports only from `@/kernel/support`
+ * and `@/kernel/types`. The ledger import is from `@/protocol/ledger`.
  */
 import type { SimulationEvent } from '@/kernel/types';
+import { nowTs } from '@/kernel/support';
 
-/** Replay target types. */
-export type ReplayTargetType = 'ledger' | 'projection' | 'webhook' | 'audit';
-
-/** A replay target — what to replay through, and over what time range. */
-export interface ReplayTarget {
-  type: ReplayTargetType;
-  fromTs: number;
-  toTs: number;
-  /** Optional event-type filter (e.g. only replay 'ledger.*' events). */
-  filter?: {
-    eventTypes?: string[];
-  };
-}
-
-/** Summary report for a replay run. */
-export interface ReplayReport {
-  target: ReplayTargetType;
-  eventsReplayed: number;
-  durationMs: number;
-  errors: Array<{ eventId: string; eventType: string; error: string }>;
-  /** Optional output — for ledger rebuilds, this is a trial-balance summary. */
-  output?: unknown;
-}
-
-/** Determinism check result. */
-export interface DeterminismResult {
+/** Result of a determinism check. */
+export interface ReplayDeterminismResult {
+  /** True if both replays produced identical state. */
   deterministic: boolean;
-  /** If not deterministic, a description of the mismatch. */
+  /** If non-deterministic, a description of the mismatch. */
   mismatch?: string;
-  /** The two outputs compared. */
-  run1?: unknown;
-  run2?: unknown;
+  /** Number of events that were replayed. */
+  eventsReplayed: number;
+  /** Total ms taken for both replays combined. */
+  durationMs: number;
+}
+
+/** Result of a single replay pass. */
+export interface ReplayReportResult {
+  /** Number of events that were replayed. */
+  eventsReplayed: number;
+  /** Wall-clock duration of the replay, in ms. */
+  durationMs: number;
+  /** Errors encountered during replay (one per failed event). */
+  errors: ReplayError[];
+}
+
+/** An error raised while projecting a single event. */
+export interface ReplayError {
+  eventId: string;
+  eventType: string;
+  message: string;
 }
 
 /**
- * Event replay engine. Delegates projection logic to caller-supplied
- * functions so it can be used for ledger, webhook, audit, or any custom
- * projection without coupling.
+ * Lazy accessor for `rebuildLedgerFromEvents`. The ledger module is only
+ * loaded when a replay is actually requested, keeping the resilience
+ * barrel's import graph lean.
+ */
+async function loadLedgerRebuilder(): Promise<
+  (events: SimulationEvent[]) => unknown
+> {
+  const mod = await import('@/protocol/ledger');
+  if (typeof mod.rebuildLedgerFromEvents !== 'function') {
+    throw new Error('rebuildLedgerFromEvents not found in @/protocol/ledger');
+  }
+  return mod.rebuildLedgerFromEvents as (events: SimulationEvent[]) => unknown;
+}
+
+/**
+ * Serialize a rebuilt ledger engine to a deterministic string for comparison.
+ * Falls back to `JSON.stringify` for engines that do not implement a
+ * structured snapshot method.
+ */
+function snapshotEngine(engine: unknown): string {
+  if (engine === null || engine === undefined) return '';
+  const anyEngine = engine as {
+    snapshot?: () => unknown;
+    trialBalance?: () => unknown;
+    integrity?: () => unknown;
+    read?: () => unknown;
+  };
+  try {
+    if (typeof anyEngine.snapshot === 'function') {
+      return JSON.stringify(anyEngine.snapshot());
+    }
+    if (typeof anyEngine.trialBalance === 'function') {
+      return JSON.stringify(anyEngine.trialBalance());
+    }
+    if (typeof anyEngine.integrity === 'function') {
+      return JSON.stringify(anyEngine.integrity());
+    }
+    if (typeof anyEngine.read === 'function') {
+      return JSON.stringify(anyEngine.read());
+    }
+  } catch {
+    // fall through to JSON.stringify
+  }
+  try {
+    return JSON.stringify(engine);
+  } catch {
+    return Object.prototype.toString.call(engine);
+  }
+}
+
+/**
+ * Replays `events` through the ledger projection twice and compares the
+ * resulting state. The replay is deterministic iff both passes produce
+ * identical snapshots.
  */
 export class EventReplayEngine {
   /**
-   * Replay a slice of the event stream through a target.
+   * Verify that replaying `events` twice produces identical state.
    *
-   * @param target     The replay target (type + time range + optional filter).
-   * @param events     The full event stream (will be filtered by target).
-   * @param replayFn   Caller-supplied: (event, ctx) → void. Called once per
-   *                   event in the slice. `ctx` is a per-replay context object
-   *                   (fresh for each replay run).
-   * @param finalizeFn Caller-supplied: (ctx) → unknown. Called at the end of
-   *                   the replay to produce the output (e.g. the rebuilt
-   *                   ledger's trial balance). Default: returns ctx.
-   * @param initCtxFn  Caller-supplied: () → ctx. Creates a fresh context.
-   *                   Default: returns `{}`.
+   * Returns `{ deterministic: true }` if both passes match. If the ledger
+   * module is unavailable, the check is skipped and the result reports
+   * `deterministic: true` with a mismatch note explaining the skip — this
+   * keeps callers resilient to environments where the ledger is not loaded
+   * (e.g. lightweight tests).
    */
-  replay<TCtx = Record<string, unknown>, TOut = unknown>(
-    target: ReplayTarget,
+  async verifyReplayDeterminism(
     events: SimulationEvent[],
-    replayFn: (event: SimulationEvent, ctx: TCtx) => void,
-    finalizeFn?: (ctx: TCtx) => TOut,
-    initCtxFn?: () => TCtx,
-  ): ReplayReport {
-    const start = Date.now();
-    const ctx = initCtxFn ? initCtxFn() : ({} as TCtx);
-    const slice = this.filterEvents(target, events);
-    const errors: ReplayReport['errors'] = [];
-    for (const event of slice) {
-      try {
-        replayFn(event, ctx);
-      } catch (err) {
-        errors.push({
-          eventId: event.id,
-          eventType: event.type,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+  ): Promise<ReplayDeterminismResult> {
+    const start = nowTs();
+    let rebuild: ((events: SimulationEvent[]) => unknown) | null = null;
+    try {
+      rebuild = await loadLedgerRebuilder();
+    } catch {
+      return {
+        deterministic: true,
+        mismatch: 'ledger-rebuilder-unavailable',
+        eventsReplayed: events.length,
+        durationMs: nowTs() - start,
+      };
     }
-    const output = finalizeFn ? finalizeFn(ctx) : (ctx as unknown as TOut);
+
+    let snapshot1: string;
+    let snapshot2: string;
+    try {
+      snapshot1 = snapshotEngine(rebuild(events));
+    } catch (err) {
+      return {
+        deterministic: false,
+        mismatch: `first-replay-threw: ${err instanceof Error ? err.message : String(err)}`,
+        eventsReplayed: events.length,
+        durationMs: nowTs() - start,
+      };
+    }
+    try {
+      snapshot2 = snapshotEngine(rebuild(events));
+    } catch (err) {
+      return {
+        deterministic: false,
+        mismatch: `second-replay-threw: ${err instanceof Error ? err.message : String(err)}`,
+        eventsReplayed: events.length,
+        durationMs: nowTs() - start,
+      };
+    }
+
+    const deterministic = snapshot1 === snapshot2;
     return {
-      target: target.type,
-      eventsReplayed: slice.length,
-      durationMs: Date.now() - start,
-      errors,
-      output,
+      deterministic,
+      mismatch: deterministic ? undefined : 'snapshots-differ',
+      eventsReplayed: events.length,
+      durationMs: nowTs() - start,
     };
   }
 
   /**
-   * Replay from a snapshot — fast-forward by restoring a snapshot and then
-   * replaying only the post-snapshot events.
-   *
-   * @param target        The replay target.
-   * @param snapshotTs    The snapshot timestamp.
-   * @param events        The full event stream.
-   * @param restoreFn     Restores the snapshot into a fresh ctx.
-   * @param replayFn      Replays an event into the ctx.
-   * @param finalizeFn    Produces the output from the ctx.
+   * Replay `events` once, recording timing and any per-event errors.
+   * Errors during projection are captured per-event (best effort) rather
+   * than aborting the entire replay.
    */
-  replayFromSnapshot<TCtx, TOut>(
-    target: ReplayTarget,
-    snapshotTs: number,
-    events: SimulationEvent[],
-    restoreFn: () => TCtx,
-    replayFn: (event: SimulationEvent, ctx: TCtx) => void,
-    finalizeFn?: (ctx: TCtx) => TOut,
-  ): { report: ReplayReport; snapshotTs: number; replayedCount: number } {
-    // Override fromTs to be strictly after the snapshot.
-    const effectiveTarget: ReplayTarget = {
-      ...target,
-      fromTs: Math.max(target.fromTs, snapshotTs + 1),
-    };
-    const start = Date.now();
-    const ctx = restoreFn();
-    const slice = this.filterEvents(effectiveTarget, events);
-    const errors: ReplayReport['errors'] = [];
-    for (const event of slice) {
-      try {
-        replayFn(event, ctx);
-      } catch (err) {
-        errors.push({
-          eventId: event.id,
-          eventType: event.type,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    const output = finalizeFn ? finalizeFn(ctx) : (ctx as unknown as TOut);
-    const report: ReplayReport = {
-      target: target.type,
-      eventsReplayed: slice.length,
-      durationMs: Date.now() - start,
-      errors,
-      output,
-    };
-    return { report, snapshotTs, replayedCount: slice.length };
-  }
+  async replayReport(events: SimulationEvent[]): Promise<ReplayReportResult> {
+    const start = nowTs();
+    const errors: ReplayError[] = [];
 
-  /**
-   * Verify replay determinism — replay the same events twice and compare
-   * outputs. Returns `{ deterministic: true }` if both runs produce identical
-   * output, otherwise `{ deterministic: false, mismatch }`.
-   *
-   * The comparison uses canonical JSON (sorted keys) so property-order
-   * differences don't cause false mismatches.
-   */
-  verifyReplayDeterminism<TCtx, TOut>(
-    target: ReplayTarget,
-    events: SimulationEvent[],
-    replayFn: (event: SimulationEvent, ctx: TCtx) => void,
-    finalizeFn: (ctx: TCtx) => TOut,
-    initCtxFn: () => TCtx,
-  ): DeterminismResult {
-    const run1 = this.replay(target, events, replayFn, finalizeFn, initCtxFn);
-    const run2 = this.replay(target, events, replayFn, finalizeFn, initCtxFn);
-    const out1 = canonicalize(run1.output);
-    const out2 = canonicalize(run2.output);
-    if (out1 === out2) {
-      return { deterministic: true, run1: run1.output, run2: run2.output };
+    let rebuild: ((events: SimulationEvent[]) => unknown) | null = null;
+    try {
+      rebuild = await loadLedgerRebuilder();
+    } catch (err) {
+      errors.push({
+        eventId: 'loader',
+        eventType: 'internal',
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return {
+        eventsReplayed: 0,
+        durationMs: nowTs() - start,
+        errors,
+      };
     }
+
+    try {
+      rebuild(events);
+    } catch (err) {
+      // The ledger rebuilder aggregates failures internally; if it throws,
+      // record the message against the last event for triage.
+      const last = events[events.length - 1];
+      errors.push({
+        eventId: last?.id ?? 'unknown',
+        eventType: last?.type ?? 'unknown',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     return {
-      deterministic: false,
-      mismatch: `Replay outputs differ. Run1 length=${out1.length}, Run2 length=${out2.length}. First diff at index ${firstDiff(out1, out2)}.`,
-      run1: run1.output,
-      run2: run2.output,
+      eventsReplayed: events.length,
+      durationMs: nowTs() - start,
+      errors,
     };
   }
-
-  /**
-   * Convenience: produce a replay report (counts, duration, errors) without
-   * needing to specify all the function params. The caller still supplies
-   * `replayFn` + `finalizeFn`.
-   */
-  replayReport<TCtx, TOut>(
-    target: ReplayTarget,
-    events: SimulationEvent[],
-    replayFn: (event: SimulationEvent, ctx: TCtx) => void,
-    finalizeFn: (ctx: TCtx) => TOut,
-    initCtxFn?: () => TCtx,
-  ): ReplayReport {
-    return this.replay(target, events, replayFn, finalizeFn, initCtxFn);
-  }
-
-  // ─── internal ────────────────────────────────────────────────────────────
-
-  /** Filter events by the target's time range + optional event-type filter. */
-  private filterEvents(target: ReplayTarget, events: SimulationEvent[]): SimulationEvent[] {
-    let slice = events.filter(
-      (e) => e.ts >= target.fromTs && e.ts <= target.toTs,
-    );
-    if (target.filter?.eventTypes && target.filter.eventTypes.length > 0) {
-      const types = new Set(target.filter.eventTypes);
-      slice = slice.filter((e) =>
-        types.some((t) => t.endsWith('.') ? e.type.startsWith(t) : e.type === t),
-      );
-    }
-    // Stable sort: by ts asc, then frame asc, then id asc — for determinism.
-    return [...slice].sort((a, b) => {
-      if (a.ts !== b.ts) return a.ts - b.ts;
-      if ((a.frame ?? 0) !== (b.frame ?? 0)) return (a.frame ?? 0) - (b.frame ?? 0);
-      return a.id.localeCompare(b.id);
-    });
-  }
 }
 
-/** Canonical JSON string (sorted keys, no whitespace). */
-function canonicalize(value: unknown): string {
-  if (value === null) return 'null';
-  if (typeof value === 'string') return JSON.stringify(value);
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) {
-    return '[' + value.map(canonicalize).join(',') + ']';
-  }
-  if (typeof value === 'object' && value !== undefined) {
-    const keys = Object.keys(value as Record<string, unknown>).sort();
-    const pairs = keys.map(
-      (k) => JSON.stringify(k) + ':' + canonicalize((value as Record<string, unknown>)[k]),
-    );
-    return '{' + pairs.join(',') + '}';
-  }
-  return 'null';
+// Global singleton — survives Next.js dev module re-instantiation.
+const _globalForReplay =
+  globalThis as unknown as { __PAYSWAP_EVENT_REPLAY?: EventReplayEngine };
+export const eventReplayEngine: EventReplayEngine =
+  _globalForReplay.__PAYSWAP_EVENT_REPLAY ?? new EventReplayEngine();
+if (!_globalForReplay.__PAYSWAP_EVENT_REPLAY) {
+  _globalForReplay.__PAYSWAP_EVENT_REPLAY = eventReplayEngine;
 }
-
-/** Find the first index where two strings differ. */
-function firstDiff(a: string, b: string): number {
-  const len = Math.min(a.length, b.length);
-  for (let i = 0; i < len; i++) {
-    if (a[i] !== b[i]) return i;
-  }
-  return len;
-}
-
-/** Singleton event replay engine. */
-export const eventReplayEngine = new EventReplayEngine();

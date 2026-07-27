@@ -1,132 +1,131 @@
 /**
- * PaySwap Protocol — Operational Readiness — Alerting.
+ * PaySwap Protocol — Ops Module — Alerting.
  *
- * Evaluates `AlertRule`s against the current metrics registry and fires
- * `Alert`s when conditions are violated. Respects per-rule cooldowns so
- * flapping metrics don't spam the alert log. Each fired alert emits an
- * `ops.alert_fired` event into the kernel event stream (so the audit
- * trail and any downstream notification systems see it).
+ * Rule-driven alerting on top of the metrics registry. Each `AlertRule`
+ * derives a numeric value from the registry, compares it against a threshold
+ * using a condition operator, and fires an `Alert` when violated. Alerts
+ * auto-resolve when their rule stops triggering; manual `resolve()` is also
+ * supported.
  *
- * Rule evaluation model:
- *   - For counters/gauges: aggregates all label values (sum by default;
- *     min for 'lt'/'lte' rules; max for 'gt'/'gte' rules). This means a
- *     rule like "treasury_reserve_ratio < 1.1" fires if ANY currency's
- *     ratio drops below 1.1.
- *   - For histograms: takes the configured percentile (default p99) and
- *     aggregates as max across label sets — so "settlement p99 > 10s"
- *     fires if ANY corridor's p99 exceeds 10s.
- *   - For derived metrics (e.g. error rate = failed/total): use the
- *     `compute` callback — it receives the registry and returns a number.
+ * Cooldowns prevent alert flapping: a rule will not re-fire within its
+ * `cooldownMs` window even if it keeps triggering.
  *
- * Pre-registered rules cover the four critical PaySwap failure modes:
- *   1. Settlement p99 latency > 10s  (warning)
- *   2. Connector error rate > 5%     (critical)
- *   3. Treasury reserve ratio < 1.1  (critical)
- *   4. LP active count < 3           (warning)
- *   5. Webhook failure rate > 10%    (critical)
+ * The kernel is FROZEN. This module imports `uid` / `nowTs` from
+ * `@/kernel/support` and the metrics registry from `./metrics`.
  */
-import { eventEngine } from '@/kernel/event';
-import {
-  histogramPercentile,
-  parseLabelKey,
-  type HistogramValue,
-  type MetricsRegistry,
-} from './metrics';
+import { uid, nowTs } from '@/kernel/support';
+import type { MetricsRegistry, AnyMetric, Counter, Gauge, Histogram } from './metrics';
+import { METRIC_NAMES } from './metrics';
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+/** Comparison operators supported by alert rules. */
+export type AlertCondition = 'gt' | 'lt' | 'gte' | 'lte';
 
-export type AlertCondition = 'gt' | 'lt' | 'gte' | 'lte' | 'eq';
+/** Alert severity tiers. */
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 
-/**
- * Which aspect of a histogram to evaluate. Ignored for counter/gauge.
- * Defaults to 'p99'.
- */
-export type HistogramAspect = 'p50' | 'p95' | 'p99' | 'count' | 'sum';
-
+/** A user-defined alert rule. */
 export interface AlertRule {
-  /** Unique rule ID (used as dedup key for cooldown). */
+  /** Stable rule id (used as the dedup key). */
   id: string;
-  /** Human-readable name (shown in alerts + dashboards). */
+  /** Human-readable rule name. */
   name: string;
-  /** Metric name to evaluate (or '_derived' if `compute` is set). */
+  /** Metric name the rule observes (documentary; the evaluator reads it). */
   metric: string;
-  /** Comparison operator. */
+  /** Comparison operator applied to `evaluate(registry)` vs `threshold`. */
   condition: AlertCondition;
-  /** Threshold value (rule fires when metric value crosses this). */
+  /** Threshold the evaluated value is compared against. */
   threshold: number;
-  /** Evaluation window (informational — current implementation is point-in-time). */
-  windowMs: number;
-  /** Alert severity — drives routing + paging. */
+  /** Severity assigned to alerts fired by this rule. */
   severity: AlertSeverity;
-  /** Static labels attached to every fired alert (for routing). */
-  labels?: Record<string, string>;
-  /** Minimum time between consecutive fires of the same rule. */
+  /** Minimum time between consecutive firings of this rule, in ms. */
   cooldownMs: number;
-  /** For histograms: which aspect to evaluate (default 'p99'). */
-  evaluate?: HistogramAspect;
   /**
-   * Optional derived-value computation. Takes precedence over `metric`
-   * lookup. Use this for ratios (error rate, success rate) that don't
-   * correspond to a single registered metric.
+   * Derive the numeric value to compare. Optional — when omitted the manager
+   * falls back to a sensible default per metric type (counter/gauge total,
+   * histogram p99).
    */
-  compute?: (registry: MetricsRegistry) => number | null;
-  /** Optional human-readable description (shown in alerts). */
-  description?: string;
+  evaluate?: (registry: MetricsRegistry) => number;
 }
 
+/** A fired alert instance. */
 export interface Alert {
-  /** Unique alert ID. */
   id: string;
-  /** Rule that fired. */
   ruleId: string;
-  /** Human-readable name. */
   name: string;
-  /** Severity. */
   severity: AlertSeverity;
-  /** Human-readable message (includes value + threshold). */
   message: string;
-  /** Observed metric value when the alert fired. */
   value: number;
-  /** Threshold the rule was checking. */
-  threshold: number;
-  /** Epoch ms when the alert fired. */
   firedAt: number;
-  /** Epoch ms when the alert was resolved (undefined if still active). */
   resolvedAt?: number;
-  /** Labels (from the rule + any rule-specific labels). */
-  labels: Record<string, string>;
-  /** Optional description from the rule. */
-  description?: string;
 }
 
-// ─── AlertManager ──────────────────────────────────────────────────────────────
+/** Optional time range filter for `all()`. */
+export interface AlertTimeRange {
+  from?: number;
+  to?: number;
+}
 
 /**
- * Owns alert rules and active alert history. `evaluate()` checks all
- * rules against the current metrics registry and fires alerts (respecting
- * per-rule cooldowns). Active alerts remain until `resolve()` is called
- * (manually or by an external resolver).
+ * Returns true when `value <op> threshold` holds.
+ */
+function matches(condition: AlertCondition, value: number, threshold: number): boolean {
+  switch (condition) {
+    case 'gt':
+      return value > threshold;
+    case 'lt':
+      return value < threshold;
+    case 'gte':
+      return value >= threshold;
+    case 'lte':
+      return value <= threshold;
+    default:
+      return false;
+  }
+}
+
+/** Default evaluator used when a rule omits `evaluate`. */
+function defaultValue(registry: MetricsRegistry, rule: AlertRule): number {
+  const m: AnyMetric | undefined = registry.get(rule.metric);
+  if (!m) return 0;
+  if ((m as Counter).total) return (m as Counter).total();
+  if ((m as Histogram).percentile) return (m as Histogram).percentile(0.99);
+  if ((m as Gauge).get) return (m as Gauge).get();
+  return 0;
+}
+
+/** Format the human-readable alert message. */
+function formatMessage(rule: AlertRule, value: number): string {
+  const op: Record<AlertCondition, string> = {
+    gt: '>',
+    lt: '<',
+    gte: '>=',
+    lte: '<=',
+  };
+  return `${rule.name}: ${rule.metric}=${round6(value)} ${op[rule.condition]} ${rule.threshold}`;
+}
+
+function round6(n: number): number {
+  return Math.round((n + Number.EPSILON) * 1e6) / 1e6;
+}
+
+/**
+ * AlertManager owns alert rules and the alert history. `evaluate()` runs every
+ * rule against the registry, fires new alerts (respecting cooldowns), and
+ * auto-resolves alerts whose rule has stopped triggering.
  */
 export class AlertManager {
-  private rules: Map<string, AlertRule> = new Map();
-  private alerts: Alert[] = [];
-  private lastFiredAt: Map<string, number> = new Map();
-  private seq = 0;
+  private rules = new Map<string, AlertRule>();
+  private alerts = new Map<string, Alert>();
+  private lastFired = new Map<string, number>();
 
-  /** Register a rule. Overwrites an existing rule with the same id. */
+  /** Register a rule. Overwrites a rule with the same id. */
   addRule(rule: AlertRule): void {
     this.rules.set(rule.id, rule);
   }
 
-  /** Remove a rule by id. Does NOT resolve already-fired alerts. */
-  removeRule(id: string): void {
-    this.rules.delete(id);
-  }
-
-  /** Get a rule by id. */
-  getRule(id: string): AlertRule | undefined {
-    return this.rules.get(id);
+  /** Remove a rule by id. */
+  removeRule(ruleId: string): void {
+    this.rules.delete(ruleId);
   }
 
   /** All registered rules. */
@@ -134,295 +133,163 @@ export class AlertManager {
     return [...this.rules.values()];
   }
 
+  /** Look up a rule by id. */
+  rule(id: string): AlertRule | undefined {
+    return this.rules.get(id);
+  }
+
   /**
-   * Evaluate all rules against the current metrics. Returns the list of
-   * newly-fired alerts (empty if none). Idempotent: same metric state →
-   * same alerts (modulo cooldown). Fired alerts are appended to the
-   * internal history and emit `ops.alert_fired` events.
+   * Evaluate every rule against the registry. Returns the list of alerts fired
+   * during this pass. Previously-fired alerts whose rule is no longer
+   * triggering are auto-resolved.
    */
   evaluate(registry: MetricsRegistry): Alert[] {
+    const now = nowTs();
     const fired: Alert[] = [];
-    const now = Date.now();
     for (const rule of this.rules.values()) {
-      const value = this.evaluateRule(rule, registry);
-      if (value === null) continue;
-      if (!checkCondition(rule.condition, value, rule.threshold)) continue;
+      const value = rule.evaluate ? rule.evaluate(registry) : defaultValue(registry, rule);
+      const triggering = matches(rule.condition, value, rule.threshold);
+      const active = this.activeAlertForRule(rule.id);
 
-      // Cooldown — skip if we fired this rule recently.
-      const last = this.lastFiredAt.get(rule.id) ?? 0;
-      if (now - last < rule.cooldownMs) continue;
-
-      this.seq += 1;
-      const alert: Alert = {
-        id: `alert_${rule.id}_${now}_${this.seq}`,
-        ruleId: rule.id,
-        name: rule.name,
-        severity: rule.severity,
-        message: `${rule.name}: ${rule.metric} ${rule.condition} ${rule.threshold} (current: ${formatValue(value)})`,
-        value,
-        threshold: rule.threshold,
-        firedAt: now,
-        labels: { ...(rule.labels ?? {}) },
-        description: rule.description,
-      };
-      this.alerts.push(alert);
-      this.lastFiredAt.set(rule.id, now);
-      fired.push(alert);
-
-      // Emit into the kernel event stream — audit trail + downstream
-      // notification systems can subscribe.
-      eventEngine.emit('ops.alert_fired', {
-        alertId: alert.id,
-        ruleId: rule.id,
-        name: alert.name,
-        severity: alert.severity,
-        message: alert.message,
-        value: alert.value,
-        threshold: alert.threshold,
-        labels: alert.labels,
-      });
+      if (triggering) {
+        if (active) continue; // already firing — no duplicate
+        const last = this.lastFired.get(rule.id) ?? 0;
+        if (now - last < rule.cooldownMs) continue;
+        this.lastFired.set(rule.id, now);
+        const alert: Alert = {
+          id: uid('alert'),
+          ruleId: rule.id,
+          name: rule.name,
+          severity: rule.severity,
+          message: formatMessage(rule, value),
+          value: round6(value),
+          firedAt: now,
+        };
+        this.alerts.set(alert.id, alert);
+        fired.push(alert);
+      } else if (active) {
+        // Rule recovered — auto-resolve its active alert.
+        active.resolvedAt = now;
+      }
     }
     return fired;
   }
 
-  /** Compute the current value of a rule against the registry. */
-  private evaluateRule(rule: AlertRule, registry: MetricsRegistry): number | null {
-    if (rule.compute) {
-      try {
-        return rule.compute(registry);
-      } catch {
-        return null;
-      }
-    }
-    const m = registry.get(rule.metric);
-    if (!m) return null;
-
-    if (m.type === 'histogram') {
-      // Aggregate as max across label sets — fires if ANY label set
-      // breaches the threshold.
-      let max = 0;
-      let seen = false;
-      for (const v of m.values.values()) {
-        const hv = v as HistogramValue;
-        const aspect = rule.evaluate ?? 'p99';
-        let val: number;
-        switch (aspect) {
-          case 'p50': val = histogramPercentile(hv, 0.5); break;
-          case 'p95': val = histogramPercentile(hv, 0.95); break;
-          case 'p99': val = histogramPercentile(hv, 0.99); break;
-          case 'count': val = hv.count; break;
-          case 'sum': val = hv.sum; break;
-          default: val = histogramPercentile(hv, 0.99);
-        }
-        if (val > max) max = val;
-        seen = true;
-      }
-      return seen ? max : null;
-    }
-
-    // Counter/Gauge — aggregate label values.
-    const values: number[] = [];
-    for (const v of m.values.values()) {
-      if (typeof v === 'number') values.push(v);
-    }
-    if (values.length === 0) return null;
-    // For 'lt'/'lte' rules, alert if ANY value is below threshold → take min.
-    // For 'gt'/'gte' rules, alert if ANY value is above threshold → take max.
-    // For 'eq' rules, alert if the sum equals threshold.
-    if (rule.condition === 'lt' || rule.condition === 'lte') {
-      return Math.min(...values);
-    }
-    if (rule.condition === 'eq') {
-      return values.reduce((s, v) => s + v, 0);
-    }
-    return Math.max(...values);
-  }
-
-  /** Currently-active (unresolved) alerts. */
+  /** Currently active (unresolved) alerts, most severe first. */
   active(): Alert[] {
-    return this.alerts.filter((a) => a.resolvedAt === undefined);
+    const sevRank: Record<AlertSeverity, number> = { critical: 0, warning: 1, info: 2 };
+    return [...this.alerts.values()]
+      .filter((a) => a.resolvedAt === undefined)
+      .sort((a, b) => {
+        const s = sevRank[a.severity] - sevRank[b.severity];
+        return s !== 0 ? s : b.firedAt - a.firedAt;
+      });
   }
 
-  /** Alerts within a time range (default: all history). */
-  all(range?: { since?: number; until?: number }): Alert[] {
-    if (!range) return [...this.alerts];
-    return this.alerts.filter(
-      (a) =>
-        (range.since === undefined || a.firedAt >= range.since) &&
-        (range.until === undefined || a.firedAt <= range.until),
-    );
+  /** All alerts (active + resolved), optionally filtered to a time range. */
+  all(range?: AlertTimeRange): Alert[] {
+    const from = range?.from ?? -Infinity;
+    const to = range?.to ?? Infinity;
+    return [...this.alerts.values()]
+      .filter((a) => a.firedAt >= from && a.firedAt <= to)
+      .sort((a, b) => b.firedAt - a.firedAt);
   }
 
-  /** Resolve an alert by id. Returns true if the alert was active. */
+  /** Manually resolve an alert. Returns true on success. */
   resolve(alertId: string): boolean {
-    const a = this.alerts.find((x) => x.id === alertId);
+    const a = this.alerts.get(alertId);
     if (!a || a.resolvedAt !== undefined) return false;
-    a.resolvedAt = Date.now();
-    eventEngine.emit('ops.alert_resolved', {
-      alertId: a.id,
-      ruleId: a.ruleId,
-      name: a.name,
-      resolvedAt: a.resolvedAt,
-    });
+    a.resolvedAt = nowTs();
     return true;
   }
 
-  /** Resolve all active alerts for a rule (e.g. when the rule condition clears). */
-  resolveRule(ruleId: string): number {
-    let n = 0;
-    for (const a of this.alerts) {
-      if (a.ruleId === ruleId && a.resolvedAt === undefined) {
-        a.resolvedAt = Date.now();
-        n += 1;
-        eventEngine.emit('ops.alert_resolved', {
-          alertId: a.id,
-          ruleId: a.ruleId,
-          name: a.name,
-          resolvedAt: a.resolvedAt,
-        });
-      }
-    }
-    return n;
+  /** Look up a single alert. */
+  get(alertId: string): Alert | undefined {
+    return this.alerts.get(alertId);
   }
 
-  /** Clear all alert history (test helper). */
+  /** Clear all alerts and cooldown state (testing only). */
   reset(): void {
-    this.alerts = [];
-    this.lastFiredAt.clear();
-    this.seq = 0;
+    this.alerts.clear();
+    this.lastFired.clear();
+  }
+
+  /** Find the currently-active alert for a rule, if any. */
+  private activeAlertForRule(ruleId: string): Alert | undefined {
+    for (const a of this.alerts.values()) {
+      if (a.ruleId === ruleId && a.resolvedAt === undefined) return a;
+    }
+    return undefined;
   }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Pre-registered rules + singleton
+// ---------------------------------------------------------------------------
 
-/** Check whether `value` triggers `condition` against `threshold`. */
-export function checkCondition(
-  condition: AlertCondition,
-  value: number,
-  threshold: number,
-): boolean {
-  switch (condition) {
-    case 'gt': return value > threshold;
-    case 'lt': return value < threshold;
-    case 'gte': return value >= threshold;
-    case 'lte': return value <= threshold;
-    case 'eq': return value === threshold;
-    default: return false;
-  }
-}
+/** Build an AlertManager pre-loaded with PaySwap's default rules. */
+function createDefaultAlertManager(): AlertManager {
+  const mgr = new AlertManager();
 
-/** Format a value for human-readable alert messages. */
-function formatValue(v: number): string {
-  if (Number.isInteger(v)) return v.toString();
-  if (Math.abs(v) < 1) return v.toFixed(4);
-  return v.toFixed(2);
-}
-
-// ─── Pre-registered rules ─────────────────────────────────────────────────────
-
-/**
- * Compute the failure rate for a counter metric that has a `status` label.
- * Returns failed/total as a fraction in [0, 1], or null if no data.
- */
-export function failureRate(
-  registry: MetricsRegistry,
-  metricName: string,
-  failureStatuses: string[] = ['failed', 'error'],
-): number | null {
-  const m = registry.get(metricName);
-  if (!m || m.type !== 'counter') return null;
-  let total = 0;
-  let failed = 0;
-  for (const [key, v] of m.values.entries()) {
-    if (typeof v !== 'number') continue;
-    total += v;
-    const labels = parseLabelKey(key);
-    if (failureStatuses.includes(String(labels.status))) failed += v;
-  }
-  if (total === 0) return null;
-  return failed / total;
-}
-
-/** Sum a counter's values, optionally filtered by a label predicate. Re-exported from ./metrics. */
-export { counterSum } from './metrics';
-
-/** Pre-registered PaySwap alert rules. */
-export const STANDARD_ALERT_RULES: AlertRule[] = [
-  {
+  // Settlement p99 latency above 10s → warning.
+  mgr.addRule({
     id: 'settlement_p99_high',
-    name: 'Settlement p99 latency > 10s',
-    metric: 'payswap_settlement_duration_ms',
+    name: 'Settlement p99 latency above 10s',
+    metric: METRIC_NAMES.settlementDurationMs,
     condition: 'gt',
-    threshold: 10000,
-    windowMs: 5 * 60_000,
+    threshold: 10_000,
     severity: 'warning',
-    cooldownMs: 5 * 60_000,
-    evaluate: 'p99',
-    description:
-      'Settlement p99 latency exceeds 10s. Indicates corridor congestion or treasury rebalancing delays.',
-    labels: { team: 'settlement', runbook: 'r/settlement-p99' },
-  },
-  {
+    cooldownMs: 60_000,
+    evaluate: (r) => r.getHistogram(METRIC_NAMES.settlementDurationMs)?.percentile(0.99) ?? 0,
+  });
+
+  // Connector error rate above 5% → critical.
+  mgr.addRule({
     id: 'connector_error_rate_high',
-    name: 'Connector error rate > 5%',
-    metric: '_derived',
-    compute: (reg) => failureRate(reg, 'payswap_connector_requests_total', ['failed', 'error']),
+    name: 'Connector error rate above 5%',
+    metric: METRIC_NAMES.connectorRequestsTotal,
     condition: 'gt',
     threshold: 0.05,
-    windowMs: 5 * 60_000,
     severity: 'critical',
-    cooldownMs: 5 * 60_000,
-    description:
-      'Connector failure rate exceeds 5%. Indicates upstream outages or auth issues.',
-    labels: { team: 'connectors', runbook: 'r/connector-errors' },
-  },
-  {
+    cooldownMs: 30_000,
+    evaluate: (r) => {
+      const c = r.getCounter(METRIC_NAMES.connectorRequestsTotal);
+      if (!c) return 0;
+      const total = c.total();
+      if (total <= 0) return 0;
+      const failed = c.get({ status: 'error' });
+      return failed / total;
+    },
+  });
+
+  // Treasury reserve ratio below 1.1 → critical.
+  // The gauge is populated by the dashboards refresh step; before it has been
+  // set we return a safe high value so the alert does not fire on cold start.
+  mgr.addRule({
     id: 'treasury_reserve_ratio_low',
-    name: 'Treasury reserve ratio < 1.1',
-    metric: 'payswap_treasury_reserve_ratio',
+    name: 'Treasury reserve ratio below 1.1',
+    metric: METRIC_NAMES.treasuryReserveRatio,
     condition: 'lt',
     threshold: 1.1,
-    windowMs: 60_000,
     severity: 'critical',
-    cooldownMs: 5 * 60_000,
-    description:
-      'Treasury reserve ratio below 1.1 for at least one currency. Backing at risk — investigate immediately.',
-    labels: { team: 'treasury', runbook: 'r/reserve-ratio' },
-  },
-  {
-    id: 'lp_active_count_low',
-    name: 'LP active count < 3',
-    metric: 'payswap_lp_active_count',
-    condition: 'lt',
-    threshold: 3,
-    windowMs: 60_000,
-    severity: 'warning',
-    cooldownMs: 5 * 60_000,
-    description:
-      'Fewer than 3 active liquidity providers. Settlement diversity at risk.',
-    labels: { team: 'liquidity', runbook: 'r/lp-count' },
-  },
-  {
-    id: 'webhook_failure_rate_high',
-    name: 'Webhook failure rate > 10%',
-    metric: '_derived',
-    compute: (reg) => failureRate(reg, 'payswap_webhook_deliveries_total', ['failed', 'error']),
-    condition: 'gt',
-    threshold: 0.1,
-    windowMs: 5 * 60_000,
-    severity: 'critical',
-    cooldownMs: 5 * 60_000,
-    description:
-      'Webhook delivery failure rate exceeds 10%. Merchants are missing event notifications.',
-    labels: { team: 'webhooks', runbook: 'r/webhook-failures' },
-  },
-];
+    cooldownMs: 60_000,
+    evaluate: (r) => {
+      const g = r.getGauge(METRIC_NAMES.treasuryReserveRatio);
+      if (!g || !g.has()) return Number.MAX_SAFE_INTEGER;
+      return g.get();
+    },
+  });
 
-// ─── Singleton ─────────────────────────────────────────────────────────────────
+  return mgr;
+}
 
-/** Singleton alert manager — pre-registered with the standard rules. */
-export const alertManager = new AlertManager();
-
-for (const rule of STANDARD_ALERT_RULES) {
-  alertManager.addRule(rule);
+/**
+ * Singleton alert manager with the default rules pre-registered. Stashed on
+ * `globalThis` to survive Next.js dev module re-instantiation.
+ */
+const _globalForAlerts = globalThis as unknown as { __PAYSWAP_ALERT_MANAGER?: AlertManager };
+export const alertManager: AlertManager =
+  _globalForAlerts.__PAYSWAP_ALERT_MANAGER ?? createDefaultAlertManager();
+if (!_globalForAlerts.__PAYSWAP_ALERT_MANAGER) {
+  _globalForAlerts.__PAYSWAP_ALERT_MANAGER = alertManager;
 }

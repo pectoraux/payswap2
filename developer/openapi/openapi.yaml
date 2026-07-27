@@ -1,0 +1,1342 @@
+openapi: 3.1.0
+info:
+  title: PaySwap API
+  version: 1.0.0
+  summary: Payments, payouts, settlement, treasury, compliance, and ledger API for African fintechs.
+  description: |
+    # PaySwap API
+
+    PaySwap is a settlement and payments network built on Stellar and M-Pesa
+    for African fintechs. This API exposes the full platform surface:
+
+      - **Payments** — create, capture, refund, list
+      - **Payouts** — create, process, cancel, list
+      - **Merchants** — manage the current merchant
+      - **Webhooks** — endpoints, deliveries, replay
+      - **Customers** — CRUD + list
+      - **Products** — catalog management
+      - **Invoices** — create, send, mark paid
+      - **Compliance** — sanctions / PEP / KYC screening, audit export
+      - **Treasury** — positions, status, rebalancing
+      - **Ledger** — trial balance, reconciliation, accounts
+      - **Ops** — health, metrics, overview
+
+    ## Authentication
+    All requests must include `Authorization: Bearer <api_key>`. API keys
+    are prefixed `psk_live_` (production) or `psk_test_` (sandbox).
+
+    ## Idempotency
+    POST/PUT/PATCH accept an `Idempotency-Key` header. If you omit it, the
+    SDK will generate one for you. Retry the same key to safely deduplicate.
+
+    ## Pagination
+    List endpoints accept `limit` (1–100), `starting_after`, and
+    `ending_before` cursors. Responses include `has_more` and `data`.
+
+    ## Versioning
+    The API is versioned via the URL prefix `/v1`. Breaking changes are
+    released under a new URL prefix.
+
+    ## Rate limiting
+    Default rate limit is 1000 requests per minute per API key. Rate-limited
+    requests return HTTP 429 with `Retry-After`.
+  contact:
+    name: PaySwap Developer Support
+    url: https://docs.payswap.io
+    email: developers@payswap.io
+  license:
+    name: MIT
+    url: https://opensource.org/license/mit
+  termsOfService: https://payswap.io/terms
+externalDocs:
+  description: PaySwap developer documentation
+  url: https://docs.payswap.io
+servers:
+  - url: https://api.payswap.io/v1
+    description: Production
+  - url: https://api.sandbox.payswap.io/v1
+    description: Sandbox (test API keys, simulated connectors)
+  - url: http://localhost:3000/api
+    description: Local development
+security:
+  - bearerAuth: []
+tags:
+  - name: Payments
+    description: Accept and manage incoming payments.
+  - name: Payouts
+    description: Send money to customers and partners.
+  - name: Merchants
+    description: Manage the merchant identified by the API key.
+  - name: Customers
+    description: Customer records.
+  - name: Products
+    description: Product catalog.
+  - name: Invoices
+    description: Bill customers with invoices.
+  - name: Webhooks
+    description: Webhook endpoints, deliveries, and replay.
+  - name: Compliance
+    description: Sanctions, PEP, KYC screening and audit export.
+  - name: Treasury
+    description: Treasury positions and rebalancing.
+  - name: Ledger
+    description: Trial balance, reconciliation, accounts.
+  - name: Ops
+    description: System health, metrics, and overview.
+
+paths:
+  # -------------------------------------------------------------------------
+  # Payments
+  # -------------------------------------------------------------------------
+  /payments:
+    get:
+      tags: [Payments]
+      operationId: listPayments
+      summary: List payments
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/StartingAfter'
+        - $ref: '#/components/parameters/EndingBefore'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/PaymentStatus'
+        - name: customer
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: A paginated list of payments.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ListEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Payment' }
+              examples:
+                default:
+                  value:
+                    object: list
+                    url: /payments
+                    has_more: false
+                    data:
+                      - id: pay_01HZX...
+                        object: payment
+                        amount: 2900
+                        currency: KES
+                        status: succeeded
+                        customer: cust_01HZX...
+                        created: 1735000000
+    post:
+      tags: [Payments]
+      operationId: createPayment
+      summary: Create a payment
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePaymentRequest' }
+            examples:
+              mpesa:
+                value:
+                  amount: 2900
+                  currency: KES
+                  method:
+                    type: mpesa
+                    mpesa: { phone: '+254700000000', reference: 'ORDER-123' }
+                  description: Pro Plan subscription
+              card:
+                value:
+                  amount: 100
+                  currency: USD
+                  method:
+                    type: card
+                    card: { number: '4242424242424242', exp_month: 12, exp_year: 2030, cvc: '123' }
+              crypto:
+                value:
+                  amount: 50
+                  currency: USDC
+                  method:
+                    type: crypto
+                    crypto: { chain: stellar, address: 'GABC...', asset: 'USDC:GA5Z...' }
+      responses:
+        '200':
+          description: The newly created payment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+              examples:
+                succeeded:
+                  value:
+                    id: pay_01HZX...
+                    object: payment
+                    amount: 2900
+                    currency: KES
+                    status: succeeded
+                    customer: cust_01HZX...
+                    captured: true
+                    refunded_amount: 0
+                    created: 1735000000
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /payments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Payments]
+      operationId: getPayment
+      summary: Retrieve a payment
+      responses:
+        '200':
+          description: The requested payment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /payments/{id}/refund:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [Payments]
+      operationId: refundPayment
+      summary: Refund a payment
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount: { type: integer, description: Amount to refund. Defaults to full. }
+                reason: { type: string }
+      responses:
+        '200':
+          description: The refunded payment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+
+  /payments/{id}/capture:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [Payments]
+      operationId: capturePayment
+      summary: Capture a previously authorized payment
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The captured payment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+
+  # -------------------------------------------------------------------------
+  # Payouts
+  # -------------------------------------------------------------------------
+  /payouts:
+    get:
+      tags: [Payouts]
+      operationId: listPayouts
+      summary: List payouts
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/StartingAfter'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/PayoutStatus' }
+      responses:
+        '200':
+          description: A paginated list of payouts.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ListEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Payout' }
+    post:
+      tags: [Payouts]
+      operationId: createPayout
+      summary: Create a payout
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePayoutRequest' }
+            examples:
+              mpesa:
+                value:
+                  amount: 50000
+                  currency: KES
+                  destination: { type: mpesa, phone: '+254700000001' }
+                  reference: 'WITHDRAWAL-001'
+      responses:
+        '200':
+          description: The newly created payout.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payout' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /payouts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Payouts]
+      operationId: getPayout
+      summary: Retrieve a payout
+      responses:
+        '200':
+          description: The requested payout.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payout' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /payouts/{id}/process:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [Payouts]
+      operationId: processPayout
+      summary: Process (execute) a payout
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The processed payout.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payout' }
+
+  /payouts/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [Payouts]
+      operationId: cancelPayout
+      summary: Cancel a pending payout
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The canceled payout.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payout' }
+
+  # -------------------------------------------------------------------------
+  # Merchants
+  # -------------------------------------------------------------------------
+  /merchants/me:
+    get:
+      tags: [Merchants]
+      operationId: getMerchant
+      summary: Get the current merchant
+      responses:
+        '200':
+          description: The merchant identified by the API key.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Merchant' }
+              examples:
+                default:
+                  value:
+                    id: mch_01HZX...
+                    object: merchant
+                    name: Acme Ltd
+                    email: finance@acme.co.ke
+                    country: KE
+                    default_currency: KES
+                    business_type: llc
+                    created: 1735000000
+    patch:
+      tags: [Merchants]
+      operationId: updateMerchant
+      summary: Update the current merchant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateMerchantRequest' }
+      responses:
+        '200':
+          description: The updated merchant.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Merchant' }
+
+  # -------------------------------------------------------------------------
+  # Webhooks
+  # -------------------------------------------------------------------------
+  /webhooks/endpoints:
+    get:
+      tags: [Webhooks]
+      operationId: listWebhookEndpoints
+      summary: List webhook endpoints
+      responses:
+        '200':
+          description: A paginated list of webhook endpoints.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ListEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/WebhookEndpoint' }
+    post:
+      tags: [Webhooks]
+      operationId: createWebhookEndpoint
+      summary: Create a webhook endpoint
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url: { type: string, format: uri }
+                events:
+                  type: array
+                  items: { type: string }
+                description: { type: string }
+                enabled: { type: boolean, default: true }
+      responses:
+        '200':
+          description: The newly created webhook endpoint.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookEndpoint' }
+
+  /webhooks/deliveries:
+    get:
+      tags: [Webhooks]
+      operationId: listWebhookDeliveries
+      summary: List webhook deliveries
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - name: endpoint_id
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string, enum: [succeeded, failed] }
+      responses:
+        '200':
+          description: A paginated list of webhook deliveries.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ListEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/WebhookDelivery' }
+
+  /webhooks/replay:
+    post:
+      tags: [Webhooks]
+      operationId: replayWebhooks
+      summary: Replay webhook deliveries
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplayWebhookRequest' }
+      responses:
+        '200':
+          description: Replay result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  replayed: { type: integer }
+                  deliveries:
+                    type: array
+                    items: { $ref: '#/components/schemas/WebhookDelivery' }
+
+  # -------------------------------------------------------------------------
+  # Customers
+  # -------------------------------------------------------------------------
+  /customers:
+    get:
+      tags: [Customers]
+      operationId: listCustomers
+      summary: List customers
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/StartingAfter'
+      responses:
+        '200':
+          description: A paginated list of customers.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ListEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Customer' }
+    post:
+      tags: [Customers]
+      operationId: createCustomer
+      summary: Create a customer
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCustomerRequest' }
+      responses:
+        '200':
+          description: The newly created customer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Customer' }
+
+  /customers/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Customers]
+      operationId: getCustomer
+      summary: Retrieve a customer
+      responses:
+        '200':
+          description: The requested customer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Customer' }
+
+  # -------------------------------------------------------------------------
+  # Products
+  # -------------------------------------------------------------------------
+  /products:
+    get:
+      tags: [Products]
+      operationId: listProducts
+      summary: List products
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A paginated list of products.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ListEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Product' }
+    post:
+      tags: [Products]
+      operationId: createProduct
+      summary: Create a product
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProductRequest' }
+      responses:
+        '200':
+          description: The newly created product.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+
+  # -------------------------------------------------------------------------
+  # Invoices
+  # -------------------------------------------------------------------------
+  /invoices:
+    get:
+      tags: [Invoices]
+      operationId: listInvoices
+      summary: List invoices
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/InvoiceStatus' }
+      responses:
+        '200':
+          description: A paginated list of invoices.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ListEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Invoice' }
+    post:
+      tags: [Invoices]
+      operationId: createInvoice
+      summary: Create an invoice (in `draft` state)
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateInvoiceRequest' }
+      responses:
+        '200':
+          description: The newly created invoice.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Invoice' }
+
+  /invoices/{id}/send:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      tags: [Invoices]
+      operationId: sendInvoice
+      summary: Send an invoice (`draft` → `sent`)
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The sent invoice.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Invoice' }
+
+  # -------------------------------------------------------------------------
+  # Compliance
+  # -------------------------------------------------------------------------
+  /compliance/screen:
+    post:
+      tags: [Compliance]
+      operationId: screenEntity
+      summary: Screen an entity against sanctions / PEP / adverse-media lists
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entity]
+              properties:
+                entity:
+                  type: object
+                  required: [name]
+                  properties:
+                    name: { type: string }
+                    type: { type: string, enum: [individual, entity] }
+                    dob: { type: string, format: date }
+                    nationality: { type: string }
+                    identifiers:
+                      type: array
+                      items: { type: string }
+                lists:
+                  type: array
+                  items:
+                    type: string
+                    enum: [ofac, eu, un, uk_hmt, pep, adverse_media]
+      responses:
+        '200':
+          description: Screening result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  screened: { type: boolean }
+                  hits:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        list: { type: string }
+                        score: { type: number }
+                        matchedName: { type: string }
+                  score: { type: number }
+                  recommendation:
+                    type: string
+                    enum: [clear, review, block]
+                  checkedAt: { type: integer }
+
+  /compliance/audit-export:
+    get:
+      tags: [Compliance]
+      operationId: auditExport
+      summary: Export compliance audit log
+      parameters:
+        - name: from
+          in: query
+          schema: { type: integer }
+        - name: to
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Audit log entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ts: { type: integer }
+                        actor: { type: string }
+                        action: { type: string }
+                        target: { type: string }
+                        result: { type: string }
+
+  # -------------------------------------------------------------------------
+  # Treasury
+  # -------------------------------------------------------------------------
+  /treasury/status:
+    get:
+      tags: [Treasury]
+      operationId: treasuryStatus
+      summary: Treasury status overview
+      responses:
+        '200':
+          description: Current treasury status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  positions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        currency: { type: string }
+                        balance: { type: number }
+                  health:
+                    type: string
+                    enum: [healthy, warning, critical]
+                  asOf: { type: integer }
+
+  /treasury/positions:
+    get:
+      tags: [Treasury]
+      operationId: treasuryPositions
+      summary: Detailed treasury positions
+      responses:
+        '200':
+          description: Treasury positions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  positions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        currency: { type: string }
+                        balance: { type: number }
+                        available: { type: number }
+                        reserved: { type: number }
+
+  # -------------------------------------------------------------------------
+  # Ledger
+  # -------------------------------------------------------------------------
+  /ledger/trial-balance:
+    get:
+      tags: [Ledger]
+      operationId: trialBalance
+      summary: Trial balance
+      parameters:
+        - name: as_of
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Trial balance.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object: { type: string, example: trial_balance }
+                  asOf: { type: integer }
+                  accounts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { type: string }
+                        name: { type: string }
+                        debit: { type: number }
+                        credit: { type: number }
+                  totals:
+                    type: object
+                    properties:
+                      debit: { type: number }
+                      credit: { type: number }
+
+  /ledger/reconciliation:
+    post:
+      tags: [Ledger]
+      operationId: reconciliation
+      summary: Run a reconciliation
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from: { type: integer }
+                to: { type: integer }
+      responses:
+        '200':
+          description: Reconciliation result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matched: { type: integer }
+                  unmatched: { type: integer }
+                  discrepancies:
+                    type: array
+                    items: { type: object }
+
+  /ledger/accounts:
+    get:
+      tags: [Ledger]
+      operationId: listLedgerAccounts
+      summary: List ledger accounts
+      responses:
+        '200':
+          description: A paginated list of ledger accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { type: string }
+                        name: { type: string }
+                        type: { type: string }
+                        currency: { type: string }
+                        balance: { type: number }
+
+  # -------------------------------------------------------------------------
+  # Ops
+  # -------------------------------------------------------------------------
+  /ops/health:
+    get:
+      tags: [Ops]
+      operationId: opsHealth
+      summary: System health check
+      security: []
+      responses:
+        '200':
+          description: System health.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, degraded, down]
+                  version: { type: string }
+                  uptime: { type: integer }
+                  checks:
+                    type: object
+                    additionalProperties:
+                      type: string
+                      enum: [ok, degraded, down]
+
+  /ops/metrics:
+    get:
+      tags: [Ops]
+      operationId: opsMetrics
+      summary: Prometheus metrics
+      security: []
+      responses:
+        '200':
+          description: Prometheus text exposition format.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /ops/overview:
+    get:
+      tags: [Ops]
+      operationId: opsOverview
+      summary: Operations overview
+      responses:
+        '200':
+          description: Operational overview.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  payments: { type: object }
+                  payouts: { type: object }
+                  treasury: { type: object }
+                  compliance: { type: object }
+                  asOf: { type: integer }
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API_KEY
+      description: |
+        Use your API key (`psk_live_...` or `psk_test_...`) as the bearer
+        token. Example: `Authorization: Bearer psk_live_abc123`.
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: Maximum records to return (1–100).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 25
+    StartingAfter:
+      name: starting_after
+      in: query
+      description: Cursor for forward pagination.
+      schema:
+        type: string
+    EndingBefore:
+      name: ending_before
+      in: query
+      description: Cursor for backward pagination.
+      schema:
+        type: string
+    PathId:
+      name: id
+      in: path
+      required: true
+      description: Resource identifier.
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Unique key for safe retry of state-changing requests.
+      schema:
+        type: string
+        maxLength: 255
+
+  responses:
+    BadRequest:
+      description: Invalid request.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Authentication failed.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Rate limit exceeded.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    # ---- Common ----------------------------------------------------------
+    ListEnvelope:
+      type: object
+      properties:
+        object: { type: string, example: list }
+        url: { type: string }
+        has_more: { type: boolean }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [type, message]
+          properties:
+            type: { type: string }
+            code: { type: string }
+            message: { type: string }
+            param: { type: string }
+            requestId: { type: string }
+            retryable: { type: boolean }
+            retryAfterMs: { type: integer }
+
+    # ---- Payments --------------------------------------------------------
+    PaymentStatus:
+      type: string
+      enum: [pending, requires_action, succeeded, failed, refunded, partially_refunded]
+    PaymentMethod:
+      type: string
+      enum: [card, mpesa, bank, crypto]
+    CardDetails:
+      type: object
+      properties:
+        number: { type: string }
+        exp_month: { type: integer }
+        exp_year: { type: integer }
+        cvc: { type: string }
+    MpesaDetails:
+      type: object
+      properties:
+        phone: { type: string }
+        reference: { type: string }
+    BankDetails:
+      type: object
+      properties:
+        bank: { type: string }
+        account: { type: string }
+        reference: { type: string }
+    CryptoDetails:
+      type: object
+      properties:
+        chain:
+          type: string
+          enum: [stellar, ethereum, polygon, base]
+        address: { type: string }
+        asset: { type: string }
+    PaymentMethodDetails:
+      type: object
+      properties:
+        type: { $ref: '#/components/schemas/PaymentMethod' }
+        card: { $ref: '#/components/schemas/CardDetails' }
+        mpesa: { $ref: '#/components/schemas/MpesaDetails' }
+        bank: { $ref: '#/components/schemas/BankDetails' }
+        crypto: { $ref: '#/components/schemas/CryptoDetails' }
+    CreatePaymentRequest:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount: { type: integer, description: Smallest currency unit (e.g. cents). }
+        currency: { type: string, example: KES }
+        customer: { type: string }
+        customer_details:
+          type: object
+          properties:
+            name: { type: string }
+            email: { type: string }
+            phone: { type: string }
+        method: { $ref: '#/components/schemas/PaymentMethodDetails' }
+        description: { type: string }
+        reference: { type: string }
+        capture: { type: boolean, default: true }
+        idempotency_key: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+    Payment:
+      type: object
+      properties:
+        id: { type: string, example: pay_01HZX... }
+        object: { type: string, example: payment }
+        amount: { type: integer }
+        currency: { type: string }
+        status: { $ref: '#/components/schemas/PaymentStatus' }
+        customer: { type: string }
+        method: { $ref: '#/components/schemas/PaymentMethodDetails' }
+        description: { type: string }
+        reference: { type: string }
+        captured: { type: boolean }
+        refunded_amount: { type: integer }
+        metadata:
+          type: object
+          additionalProperties: true
+        created: { type: integer }
+
+    # ---- Payouts ---------------------------------------------------------
+    PayoutStatus:
+      type: string
+      enum: [pending, in_transit, paid, failed, canceled]
+    PayoutDestination:
+      type: object
+      properties:
+        type: { $ref: '#/components/schemas/PaymentMethod' }
+        phone: { type: string }
+        account: { type: string }
+        bank: { type: string }
+        address: { type: string }
+        chain: { type: string }
+    CreatePayoutRequest:
+      type: object
+      required: [amount, currency, destination]
+      properties:
+        amount: { type: integer }
+        currency: { type: string }
+        destination: { $ref: '#/components/schemas/PayoutDestination' }
+        reference: { type: string }
+        description: { type: string }
+        idempotency_key: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+    Payout:
+      type: object
+      properties:
+        id: { type: string, example: po_01HZX... }
+        object: { type: string, example: payout }
+        amount: { type: integer }
+        currency: { type: string }
+        status: { $ref: '#/components/schemas/PayoutStatus' }
+        destination: { $ref: '#/components/schemas/PayoutDestination' }
+        reference: { type: string }
+        description: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+        created: { type: integer }
+        arrived_at: { type: integer }
+
+    # ---- Merchants -------------------------------------------------------
+    Merchant:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: merchant }
+        name: { type: string }
+        email: { type: string }
+        country: { type: string }
+        default_currency: { type: string }
+        business_type: { type: string }
+        website: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+        created: { type: integer }
+    UpdateMerchantRequest:
+      type: object
+      properties:
+        name: { type: string }
+        email: { type: string }
+        default_currency: { type: string }
+        business_type: { type: string }
+        website: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+
+    # ---- Webhooks --------------------------------------------------------
+    WebhookEndpoint:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: webhook_endpoint }
+        url: { type: string }
+        enabled: { type: boolean }
+        events:
+          type: array
+          items: { type: string }
+        secret: { type: string, description: Signing secret (only returned on create). }
+        description: { type: string }
+        created: { type: integer }
+    WebhookDelivery:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: webhook_delivery }
+        endpoint_id: { type: string }
+        event_type: { type: string }
+        status:
+          type: string
+          enum: [succeeded, failed]
+        attempts: { type: integer }
+        response_code: { type: integer }
+        created: { type: integer }
+    ReplayWebhookRequest:
+      type: object
+      properties:
+        delivery_id: { type: string }
+        event_id: { type: string }
+        failed_within_ms: { type: integer }
+
+    # ---- Customers -------------------------------------------------------
+    Customer:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: customer }
+        name: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        country: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+        created: { type: integer }
+    CreateCustomerRequest:
+      type: object
+      properties:
+        name: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        country: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+
+    # ---- Products --------------------------------------------------------
+    Product:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: product }
+        name: { type: string }
+        description: { type: string }
+        price: { type: integer }
+        currency: { type: string }
+        sku: { type: string }
+        active: { type: boolean }
+        metadata:
+          type: object
+          additionalProperties: true
+        created: { type: integer }
+    CreateProductRequest:
+      type: object
+      required: [name, price, currency]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        price: { type: integer }
+        currency: { type: string }
+        sku: { type: string }
+        active: { type: boolean, default: true }
+        metadata:
+          type: object
+          additionalProperties: true
+
+    # ---- Invoices --------------------------------------------------------
+    InvoiceStatus:
+      type: string
+      enum: [draft, sent, paid, overdue, void]
+    InvoiceLineItem:
+      type: object
+      properties:
+        description: { type: string }
+        quantity: { type: integer }
+        amount: { type: integer }
+        currency: { type: string }
+    Invoice:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: invoice }
+        number: { type: string }
+        customer: { type: string }
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/InvoiceLineItem' }
+        amount: { type: integer }
+        currency: { type: string }
+        status: { $ref: '#/components/schemas/InvoiceStatus' }
+        due_at: { type: integer }
+        sent_at: { type: integer }
+        paid_at: { type: integer }
+        created: { type: integer }
+    CreateInvoiceRequest:
+      type: object
+      required: [lines]
+      properties:
+        customer: { type: string }
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/InvoiceLineItem' }
+        currency: { type: string }
+        due_at: { type: integer }
+        description: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+
+    # ---- Webhook event payload ------------------------------------------
+    WebhookEvent:
+      type: object
+      properties:
+        id: { type: string, example: evt_01HZX... }
+        object: { type: string, example: event }
+        type:
+          type: string
+          example: payment.succeeded
+          description: |
+            Event types follow a `<resource>.<verb>` convention. Common
+            types: `payment.succeeded`, `payment.failed`, `payment.refunded`,
+            `payout.paid`, `payout.failed`, `invoice.paid`, `invoice.overdue`,
+            `compliance.alert`.
+        api_version: { type: string, example: '1.0.0' }
+        created: { type: integer }
+        data:
+          type: object
+          properties:
+            object:
+              description: The resource affected by the event.
+              oneOf:
+                - $ref: '#/components/schemas/Payment'
+                - $ref: '#/components/schemas/Payout'
+                - $ref: '#/components/schemas/Invoice'
+        previous_attributes:
+          type: object
+          additionalProperties: true

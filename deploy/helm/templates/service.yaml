@@ -1,0 +1,18 @@
+{{/* PaySwap — Service */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "payswap.fullname" . }}
+  namespace: {{ include "payswap.namespace" . }}
+  labels:
+    {{- include "payswap.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "payswap.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      appProtocol: http

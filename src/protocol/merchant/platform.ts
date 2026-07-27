@@ -1,52 +1,56 @@
 /**
  * PaySwap Protocol — Merchant Platform.
  *
- * Complete merchant lifecycle: onboarding → verification → API keys →
- * products → invoices → checkout → refunds → customers → analytics → team.
+ * The Merchant Platform is the full merchant surface area on top of the
+ * frozen kernel + protocol layer. It owns:
+ *
+ *   - Merchant onboarding → verification → bond escrow (state machine)
+ *   - API key issuance / revocation (HMAC-scoped credentials)
+ *   - Product catalog (price + metadata)
+ *   - Customer registry (per merchant)
+ *   - Invoice lifecycle (draft → sent → paid → disputed)
+ *   - Refund lifecycle (requested → approved/rejected → processed)
+ *   - Team member invitations (role-based)
+ *   - Webhook endpoint setup (delegated to webhookEngine)
+ *   - Analytics (revenue, AOV, refund rate, top customers)
+ *
+ * It bridges into the merchantRegistry (for tier/bond tracking) and the
+ * webhookEngine (for endpoint registration + delivery). Merchant balances
+ * in TWIN tokens live in the twinTokenEngine under holder key
+ * `merchant:${merchantId}` and are queried via this platform.
+ *
+ * The kernel is FROZEN — this module imports only from `@/kernel/*`,
+ * `@/protocol/merchant-registry`, and `@/protocol/webhooks/engine`.
  */
-import { uid, round } from '@/kernel/support';
+import { uid, round, nowTs } from '@/kernel/support';
 import { eventEngine } from '@/kernel/event';
-import { merchantRegistry, type MerchantTier } from '../merchant-registry';
-import { webhookEngine } from '../webhooks/engine';
+import { merchantRegistry, type MerchantTier } from '@/protocol/merchant-registry';
+import { webhookEngine } from '@/protocol/webhooks/engine';
+import { DEFAULT_WEBHOOK_EVENTS } from '@/protocol/webhooks/engine';
 
+// -------------------------------------------------------------- types
 export type MerchantState = 'pending' | 'verified' | 'active' | 'suspended' | 'closed';
-export type ProductState = 'active' | 'inactive' | 'archived';
-export type InvoiceState = 'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled';
-export type RefundState = 'pending' | 'approved' | 'completed' | 'denied';
-export type Role = 'owner' | 'admin' | 'developer' | 'analyst' | 'viewer';
 
-export interface MerchantAccount {
+export interface TeamMember {
   id: string;
-  name: string;
+  merchantId: string;
   email: string;
-  country: string;
-  currency: string;
-  state: MerchantState;
-  tier: MerchantTier;
-  bond: number;
-  apiKeys: ApiKey[];
-  team: TeamMember[];
-  settings: MerchantSettings;
-  createdAt: number;
-  verifiedAt: number | null;
+  role: 'owner' | 'admin' | 'developer' | 'analyst';
+  invitedAt: number;
+  acceptedAt: number | null;
+  status: 'invited' | 'active' | 'revoked';
 }
 
 export interface ApiKey {
   id: string;
-  key: string;
+  merchantId: string;
   label: string;
+  key: string;            // psk_live_xxx — shown once on creation
+  keyPrefix: string;      // psk_live_xxxx****
   scopes: string[];
-  createdAt: number;
-  lastUsedAt: number | null;
   active: boolean;
-}
-
-export interface TeamMember {
-  id: string;
-  email: string;
-  role: Role;
-  invitedAt: number;
-  joinedAt: number | null;
+  createdAt: number;
+  revokedAt: number | null;
 }
 
 export interface Product {
@@ -56,25 +60,36 @@ export interface Product {
   description: string;
   price: number;
   currency: string;
-  state: ProductState;
-  metadata: Record<string, string>;
+  metadata: Record<string, unknown>;
+  active: boolean;
   createdAt: number;
 }
+
+export interface InvoiceItem {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+}
+
+export type InvoiceState = 'draft' | 'sent' | 'paid' | 'disputed' | 'void';
 
 export interface Invoice {
   id: string;
   merchantId: string;
   customerId: string;
-  items: { description: string; quantity: number; unitPrice: number; total: number }[];
+  number: string;
+  items: InvoiceItem[];
   subtotal: number;
   tax: number;
   total: number;
   currency: string;
-  state: InvoiceState;
   dueDate: number;
+  state: InvoiceState;
+  paymentId?: string;
   createdAt: number;
+  sentAt: number | null;
   paidAt: number | null;
-  paymentId: string | null;
 }
 
 export interface Customer {
@@ -82,11 +97,13 @@ export interface Customer {
   merchantId: string;
   name: string;
   email: string;
-  phone: string;
-  totalSpent: number;
+  phone?: string;
+  lifetimeValue: number;
   transactionCount: number;
   createdAt: number;
 }
+
+export type RefundState = 'requested' | 'approved' | 'rejected' | 'processed' | 'failed';
 
 export interface Refund {
   id: string;
@@ -102,253 +119,422 @@ export interface Refund {
 
 export interface MerchantSettings {
   defaultCurrency: string;
+  payoutCurrency: string;
+  statementDescriptor: string;
   webhookUrl: string | null;
   webhookSecret: string | null;
-  checkoutTheme: 'light' | 'dark';
-  logoUrl: string | null;
-  autoSettle: boolean;
-  settlementCurrency: string;
+  webhookEvents: string[];
+  businessType: string;
+  industry: string;
+  supportEmail: string;
 }
 
 export interface MerchantAnalytics {
-  totalRevenue: number;
-  totalTransactions: number;
-  averageOrderValue: number;
-  refundRate: number;
-  topCustomers: { customerId: string; name: string; totalSpent: number }[];
-  revenueByDay: { date: string; revenue: number; count: number }[];
+  merchantId: string;
+  revenue: number;
+  transactions: number;
+  aov: number;              // average order value
+  refundRate: number;       // refunds / transactions
+  refundVolume: number;
+  topCustomers: { customerId: string; name: string; lifetimeValue: number; transactionCount: number }[];
+  currency: string;
+  asOf: number;
 }
 
-export class MerchantPlatform {
-  private merchants: Map<string, MerchantAccount> = new Map();
-  private products: Map<string, Product> = new Map();
-  private invoices: Map<string, Invoice> = new Map();
-  private customers: Map<string, Customer> = new Map();
-  private refunds: Map<string, Refund> = new Map();
+export interface MerchantAccount {
+  id: string;
+  name: string;
+  email: string;
+  country: string;
+  currency: string;
+  state: MerchantState;
+  tier: MerchantTier;
+  bond: number;
+  bondEscrowed: number;
+  createdAt: number;
+  verifiedAt: number | null;
+  suspendedAt: number | null;
+  suspensionReason: string | null;
+  settings: MerchantSettings;
+  revenue: number;
+  transactionCount: number;
+  refundVolume: number;
+}
 
-  /** Onboard a new merchant. */
+export const DEFAULT_API_KEY_SCOPES: string[] = [
+  'payments:write',
+  'payments:read',
+  'webhooks:read',
+];
+
+export const DEFAULT_WEBHOOK_EVENT_TYPES: string[] = [...DEFAULT_WEBHOOK_EVENTS];
+
+// -------------------------------------------------------------- class
+export class MerchantPlatform {
+  private merchants = new Map<string, MerchantAccount>();
+  private apiKeys: ApiKey[] = [];
+  private team: TeamMember[] = [];
+  private products = new Map<string, Product>();
+  private invoices = new Map<string, Invoice>();
+  private customers = new Map<string, Customer>();
+  private refunds = new Map<string, Refund>();
+  private payments: { id: string; merchantId: string; customerId: string; amount: number; currency: string; createdAt: number }[] = [];
+  private invoiceCounter = 0;
+
+  // ----------------------------------------------------------- onboard
   onboard(params: { name: string; email: string; country: string; currency: string }): MerchantAccount {
-    const merchant: MerchantAccount = {
-      id: uid('merchant'),
-      name: params.name, email: params.email, country: params.country, currency: params.currency,
-      state: 'pending', tier: 'unverified', bond: 0,
-      apiKeys: [], team: [{
-        id: uid('member'), email: params.email, role: 'owner',
-        invitedAt: Date.now(), joinedAt: Date.now(),
-      }],
-      settings: {
-        defaultCurrency: params.currency, webhookUrl: null, webhookSecret: null,
-        checkoutTheme: 'light', logoUrl: null, autoSettle: true, settlementCurrency: params.currency,
-      },
-      createdAt: Date.now(), verifiedAt: null,
+    const id = uid('mch');
+    const settings: MerchantSettings = {
+      defaultCurrency: params.currency,
+      payoutCurrency: params.currency,
+      statementDescriptor: params.name.slice(0, 22),
+      webhookUrl: null,
+      webhookSecret: null,
+      webhookEvents: [...DEFAULT_WEBHOOK_EVENT_TYPES],
+      businessType: 'individual',
+      industry: 'general',
+      supportEmail: params.email,
     };
-    this.merchants.set(merchant.id, merchant);
-    // Register in trust tier system
-    merchantRegistry.register(merchant.id, params.name, params.country, params.currency, 0);
-    eventEngine.emit('merchant.onboarded', { merchantId: merchant.id, name: params.name }, 0);
-    return merchant;
+    const account: MerchantAccount = {
+      id,
+      name: params.name,
+      email: params.email,
+      country: params.country,
+      currency: params.currency,
+      state: 'pending',
+      tier: 'unverified',
+      bond: 0,
+      bondEscrowed: 0,
+      createdAt: nowTs(),
+      verifiedAt: null,
+      suspendedAt: null,
+      suspensionReason: null,
+      settings,
+      revenue: 0,
+      transactionCount: 0,
+      refundVolume: 0,
+    };
+    this.merchants.set(id, account);
+    // Mirror into the kernel-backed merchant registry (tier/bond tracking).
+    merchantRegistry.register(id, params.name, params.country, params.currency, 0);
+    eventEngine.emit('merchant.onboarded', {
+      merchantId: id,
+      name: params.name,
+      email: params.email,
+      country: params.country,
+      currency: params.currency,
+      state: 'pending',
+      tier: 'unverified',
+    }, 0);
+    return account;
   }
 
-  /** Complete verification (KYC + bond). */
+  // ----------------------------------------------------------- verify
   verify(merchantId: string, bond: number): MerchantAccount | null {
     const m = this.merchants.get(merchantId);
-    if (!m || m.state !== 'pending') return null;
-    m.state = 'verified';
-    m.bond = bond;
-    m.verifiedAt = Date.now();
-    // Upgrade tier based on bond
-    merchantRegistry.upgradeTier(merchantId, bond);
-    m.tier = merchantRegistry.get(merchantId)?.tier ?? 'unverified';
-    // Auto-activate if bond sufficient
-    if (bond >= 1000) m.state = 'active';
-    eventEngine.emit('merchant.verified', { merchantId, bond, tier: m.tier }, 0);
+    if (!m) return null;
+    const safeBond = Math.max(0, round(bond, 6));
+    m.bond = safeBond;
+    m.bondEscrowed = safeBond;
+    m.state = safeBond >= 1000 ? 'active' : 'verified';
+    m.verifiedAt = nowTs();
+    merchantRegistry.upgradeTier(merchantId, safeBond);
+    const registry = merchantRegistry.get(merchantId);
+    if (registry) m.tier = registry.tier;
+    eventEngine.emit('merchant.verified', {
+      merchantId,
+      bond: safeBond,
+      state: m.state,
+      tier: m.tier,
+    }, 0);
     return m;
   }
 
-  /** Generate an API key. */
-  createApiKey(merchantId: string, label: string, scopes: string[] = ['payments:write', 'payments:read', 'webhooks:read']): ApiKey | null {
-    const m = this.merchants.get(merchantId);
-    if (!m || m.state !== 'active') return null;
+  // ------------------------------------------------------ createApiKey
+  createApiKey(merchantId: string, label: string, scopes?: string[]): ApiKey | null {
+    if (!this.merchants.has(merchantId)) return null;
+    const id = uid('psk_id');
+    const raw = uid('psk_live');
+    const key = `psk_live_${raw}`;
     const apiKey: ApiKey = {
-      id: uid('key'), key: `psk_${uid('live').replace(/_/g, '')}`, label,
-      scopes, createdAt: Date.now(), lastUsedAt: null, active: true,
+      id,
+      merchantId,
+      label,
+      key,
+      keyPrefix: `${key.slice(0, 14)}****`,
+      scopes: scopes && scopes.length > 0 ? [...scopes] : [...DEFAULT_API_KEY_SCOPES],
+      active: true,
+      createdAt: nowTs(),
+      revokedAt: null,
     };
-    m.apiKeys.push(apiKey);
-    eventEngine.emit('merchant.api_key_created', { merchantId, keyId: apiKey.id, label }, 0);
+    this.apiKeys.push(apiKey);
+    eventEngine.emit('merchant.api_key_created', {
+      merchantId, keyId: id, label, scopes: apiKey.scopes,
+    }, 0);
     return apiKey;
   }
 
-  /** Revoke an API key. */
+  // ------------------------------------------------------ revokeApiKey
   revokeApiKey(merchantId: string, keyId: string): boolean {
-    const m = this.merchants.get(merchantId);
-    if (!m) return false;
-    const key = m.apiKeys.find((k) => k.id === keyId);
-    if (key) { key.active = false; return true; }
-    return false;
+    const k = this.apiKeys.find((x) => x.id === keyId && x.merchantId === merchantId);
+    if (!k || !k.active) return false;
+    k.active = false;
+    k.revokedAt = nowTs();
+    return true;
   }
 
-  /** Create a product. */
-  createProduct(merchantId: string, params: { name: string; description: string; price: number; currency: string; metadata?: Record<string, string> }): Product | null {
-    const m = this.merchants.get(merchantId);
-    if (!m || m.state !== 'active') return null;
+  // ------------------------------------------------------- createProduct
+  createProduct(merchantId: string, params: { name: string; description: string; price: number; currency: string; metadata?: Record<string, unknown> }): Product | null {
+    if (!this.merchants.has(merchantId)) return null;
+    const id = uid('prod');
     const product: Product = {
-      id: uid('prod'), merchantId,
-      name: params.name, description: params.description,
-      price: params.price, currency: params.currency,
-      state: 'active', metadata: params.metadata ?? {},
-      createdAt: Date.now(),
+      id, merchantId,
+      name: params.name,
+      description: params.description,
+      price: round(params.price, 6),
+      currency: params.currency,
+      metadata: params.metadata ?? {},
+      active: true,
+      createdAt: nowTs(),
     };
-    this.products.set(product.id, product);
+    this.products.set(id, product);
+    eventEngine.emit('merchant.product_created', { merchantId, productId: id, name: params.name, price: product.price, currency: params.currency }, 0);
     return product;
   }
 
-  /** Create an invoice. */
-  createInvoice(merchantId: string, params: {
-    customerId: string;
-    items: { description: string; quantity: number; unitPrice: number }[];
-    tax?: number;
-    currency: string;
-    dueDate: number;
-  }): Invoice | null {
+  // ------------------------------------------------------ createInvoice
+  createInvoice(merchantId: string, params: { customerId: string; items: InvoiceItem[]; tax?: number; currency: string; dueDate: number }): Invoice | null {
     const m = this.merchants.get(merchantId);
-    if (!m || m.state !== 'active') return null;
-    const items = params.items.map((item) => ({
-      description: item.description, quantity: item.quantity,
-      unitPrice: item.unitPrice, total: round(item.quantity * item.unitPrice, 2),
-    }));
-    const subtotal = round(items.reduce((s, i) => s + i.total, 0), 2);
-    const tax = round(params.tax ?? 0, 2);
-    const total = round(subtotal + tax, 2);
+    if (!m) return null;
+    if (!this.customers.has(params.customerId) || this.customers.get(params.customerId)?.merchantId !== merchantId) {
+      return null;
+    }
+    this.invoiceCounter += 1;
+    const number = `INV-${this.invoiceCounter.toString().padStart(5, '0')}`;
+    const subtotal = round(params.items.reduce((s, i) => s + i.amount, 0), 6);
+    const tax = round(params.tax ?? 0, 6);
+    const total = round(subtotal + tax, 6);
+    const id = uid('inv');
     const invoice: Invoice = {
-      id: uid('inv'), merchantId, customerId: params.customerId,
-      items, subtotal, tax, total, currency: params.currency,
-      state: 'draft', dueDate: params.dueDate,
-      createdAt: Date.now(), paidAt: null, paymentId: null,
+      id, merchantId,
+      customerId: params.customerId,
+      number,
+      items: params.items,
+      subtotal, tax, total,
+      currency: params.currency,
+      dueDate: params.dueDate,
+      state: 'draft',
+      createdAt: nowTs(),
+      sentAt: null,
+      paidAt: null,
     };
-    this.invoices.set(invoice.id, invoice);
+    this.invoices.set(id, invoice);
+    eventEngine.emit('merchant.invoice_created', { merchantId, invoiceId: id, number, total, currency: params.currency, customerId: params.customerId }, 0);
     return invoice;
   }
 
-  /** Send invoice (transitions to 'sent'). */
+  // ---------------------------------------------------------- sendInvoice
   sendInvoice(invoiceId: string): Invoice | null {
     const inv = this.invoices.get(invoiceId);
     if (!inv || inv.state !== 'draft') return null;
     inv.state = 'sent';
+    inv.sentAt = nowTs();
+    eventEngine.emit('merchant.invoice_sent', { merchantId: inv.merchantId, invoiceId, number: inv.number, total: inv.total }, 0);
     return inv;
   }
 
-  /** Mark invoice as paid. */
+  // ---------------------------------------------------------- payInvoice
   payInvoice(invoiceId: string, paymentId: string): Invoice | null {
     const inv = this.invoices.get(invoiceId);
     if (!inv || inv.state !== 'sent') return null;
     inv.state = 'paid';
-    inv.paidAt = Date.now();
     inv.paymentId = paymentId;
-    // Update customer stats
-    const customer = this.customers.get(inv.customerId);
-    if (customer) {
-      customer.totalSpent = round(customer.totalSpent + inv.total, 2);
-      customer.transactionCount++;
+    inv.paidAt = nowTs();
+    const m = this.merchants.get(inv.merchantId);
+    if (m) {
+      m.revenue = round(m.revenue + inv.total, 6);
+      m.transactionCount += 1;
     }
+    const c = this.customers.get(inv.customerId);
+    if (c) {
+      c.lifetimeValue = round(c.lifetimeValue + inv.total, 6);
+      c.transactionCount += 1;
+    }
+    this.payments.push({ id: paymentId, merchantId: inv.merchantId, customerId: inv.customerId, amount: inv.total, currency: inv.currency, createdAt: nowTs() });
+    eventEngine.emit('merchant.invoice_paid', { merchantId: inv.merchantId, invoiceId, paymentId, amount: inv.total, currency: inv.currency }, 0);
     return inv;
   }
 
-  /** Create a customer. */
-  createCustomer(merchantId: string, params: { name: string; email: string; phone: string }): Customer | null {
-    const m = this.merchants.get(merchantId);
-    if (!m) return null;
+  // ------------------------------------------------------- createCustomer
+  createCustomer(merchantId: string, params: { name: string; email: string; phone?: string }): Customer | null {
+    if (!this.merchants.has(merchantId)) return null;
+    const id = uid('cust');
     const customer: Customer = {
-      id: uid('cust'), merchantId,
-      name: params.name, email: params.email, phone: params.phone,
-      totalSpent: 0, transactionCount: 0, createdAt: Date.now(),
+      id, merchantId,
+      name: params.name,
+      email: params.email,
+      phone: params.phone,
+      lifetimeValue: 0,
+      transactionCount: 0,
+      createdAt: nowTs(),
     };
-    this.customers.set(customer.id, customer);
+    this.customers.set(id, customer);
     return customer;
   }
 
-  /** Create a refund request. */
+  // -------------------------------------------------------- createRefund
   createRefund(merchantId: string, paymentId: string, amount: number, currency: string, reason: string): Refund | null {
-    const m = this.merchants.get(merchantId);
-    if (!m || m.state !== 'active') return null;
+    if (!this.merchants.has(merchantId)) return null;
+    const id = uid('rfnd');
     const refund: Refund = {
-      id: uid('refund'), merchantId, paymentId, amount, currency, reason,
-      state: 'pending', createdAt: Date.now(), processedAt: null,
+      id, merchantId, paymentId,
+      amount: round(amount, 6),
+      currency,
+      reason,
+      state: 'requested',
+      createdAt: nowTs(),
+      processedAt: null,
     };
-    this.refunds.set(refund.id, refund);
+    this.refunds.set(id, refund);
+    eventEngine.emit('merchant.refund_requested', { merchantId, refundId: id, paymentId, amount, currency, reason }, 0);
     return refund;
   }
 
-  /** Process a refund. */
+  // ------------------------------------------------------- processRefund
   processRefund(refundId: string, approved: boolean): Refund | null {
     const r = this.refunds.get(refundId);
-    if (!r || r.state !== 'pending') return null;
-    r.state = approved ? 'completed' : 'denied';
-    r.processedAt = Date.now();
+    if (!r || r.state !== 'requested') return null;
+    if (!approved) {
+      r.state = 'rejected';
+      r.processedAt = nowTs();
+      eventEngine.emit('merchant.refund_rejected', { merchantId: r.merchantId, refundId }, 0);
+      return r;
+    }
+    r.state = 'processed';
+    r.processedAt = nowTs();
+    const m = this.merchants.get(r.merchantId);
+    if (m) {
+      m.refundVolume = round(m.refundVolume + r.amount, 6);
+    }
+    eventEngine.emit('merchant.refund_processed', { merchantId: r.merchantId, refundId, amount: r.amount, currency: r.currency }, 0);
     return r;
   }
 
-  /** Register webhook for merchant. */
-  setupWebhook(merchantId: string, url: string, events?: string[]): { secret: string } | null {
-    const m = this.merchants.get(merchantId);
-    if (!m) return null;
-    const endpoint = webhookEngine.register({ merchantId, url, events });
+  // --------------------------------------------------------- setupWebhook
+  setupWebhook(merchantId: string, url: string, events?: string[]): { endpointId: string; secret: string } | null {
+    if (!this.merchants.has(merchantId)) return null;
+    const ep = webhookEngine.register({ merchantId, url, events });
+    const m = this.merchants.get(merchantId)!;
     m.settings.webhookUrl = url;
-    m.settings.webhookSecret = endpoint.secret;
-    return { secret: endpoint.secret };
+    m.settings.webhookSecret = ep.secret;
+    m.settings.webhookEvents = [...ep.events];
+    eventEngine.emit('merchant.webhook_setup', { merchantId, endpointId: ep.id, url, events: ep.events }, 0);
+    return { endpointId: ep.id, secret: ep.secret };
   }
 
-  /** Get merchant analytics. */
-  getAnalytics(merchantId: string): MerchantAnalytics {
-    const merchantInvoices = [...this.invoices.values()].filter((i) => i.merchantId === merchantId && i.state === 'paid');
-    const totalRevenue = merchantInvoices.reduce((s, i) => s + i.total, 0);
-    const totalTransactions = merchantInvoices.length;
-    const refunds = [...this.refunds.values()].filter((r) => r.merchantId === merchantId && r.state === 'completed');
-    const refundRate = totalTransactions > 0 ? refunds.length / totalTransactions : 0;
-
-    const merchantCustomers = [...this.customers.values()].filter((c) => c.merchantId === merchantId);
-    const topCustomers = merchantCustomers
-      .sort((a, b) => b.totalSpent - a.totalSpent)
+  // ----------------------------------------------------------- getAnalytics
+  getAnalytics(merchantId: string): MerchantAnalytics | null {
+    const m = this.merchants.get(merchantId);
+    if (!m) return null;
+    const refundRate = m.transactionCount > 0 ? round(m.refundVolume / (m.revenue || 1), 4) : 0;
+    const aov = m.transactionCount > 0 ? round(m.revenue / m.transactionCount, 6) : 0;
+    const customers = [...this.customers.values()].filter((c) => c.merchantId === merchantId);
+    const topCustomers = customers
+      .sort((a, b) => b.lifetimeValue - a.lifetimeValue)
       .slice(0, 5)
-      .map((c) => ({ customerId: c.id, name: c.name, totalSpent: c.totalSpent }));
-
+      .map((c) => ({ customerId: c.id, name: c.name, lifetimeValue: c.lifetimeValue, transactionCount: c.transactionCount }));
     return {
-      totalRevenue: round(totalRevenue, 2),
-      totalTransactions,
-      averageOrderValue: totalTransactions > 0 ? round(totalRevenue / totalTransactions, 2) : 0,
-      refundRate: round(refundRate, 4),
+      merchantId,
+      revenue: m.revenue,
+      transactions: m.transactionCount,
+      aov,
+      refundRate,
+      refundVolume: m.refundVolume,
       topCustomers,
-      revenueByDay: [],
+      currency: m.currency,
+      asOf: nowTs(),
     };
   }
 
-  /** Invite team member. */
-  inviteTeamMember(merchantId: string, email: string, role: Role): TeamMember | null {
-    const m = this.merchants.get(merchantId);
-    if (!m) return null;
-    const member: TeamMember = { id: uid('member'), email, role, invitedAt: Date.now(), joinedAt: null };
-    m.team.push(member);
+  // ---------------------------------------------------- inviteTeamMember
+  inviteTeamMember(merchantId: string, email: string, role: TeamMember['role']): TeamMember | null {
+    if (!this.merchants.has(merchantId)) return null;
+    const member: TeamMember = {
+      id: uid('tm'),
+      merchantId, email, role,
+      invitedAt: nowTs(),
+      acceptedAt: null,
+      status: 'invited',
+    };
+    this.team.push(member);
+    eventEngine.emit('merchant.team_invited', { merchantId, teamMemberId: member.id, email, role }, 0);
     return member;
   }
 
-  /** Suspend merchant. */
+  // -------------------------------------------------------------- suspend
   suspend(merchantId: string, reason: string): MerchantAccount | null {
     const m = this.merchants.get(merchantId);
     if (!m) return null;
     m.state = 'suspended';
+    m.suspendedAt = nowTs();
+    m.suspensionReason = reason;
     eventEngine.emit('merchant.suspended', { merchantId, reason }, 0);
     return m;
   }
 
-  getMerchant(merchantId: string): MerchantAccount | undefined { return this.merchants.get(merchantId); }
-  getProducts(merchantId: string): Product[] { return [...this.products.values()].filter((p) => p.merchantId === merchantId); }
-  getInvoices(merchantId: string): Invoice[] { return [...this.invoices.values()].filter((i) => i.merchantId === merchantId); }
-  getCustomers(merchantId: string): Customer[] { return [...this.customers.values()].filter((c) => c.merchantId === merchantId); }
-  getRefunds(merchantId: string): Refund[] { return [...this.refunds.values()].filter((r) => r.merchantId === merchantId); }
-  allMerchants(): MerchantAccount[] { return [...this.merchants.values()]; }
+  // -------------------------------------------------------------- getters
+  getMerchant(merchantId: string): MerchantAccount | undefined {
+    return this.merchants.get(merchantId);
+  }
 
+  getProducts(merchantId?: string): Product[] {
+    if (!merchantId) return [...this.products.values()];
+    return [...this.products.values()].filter((p) => p.merchantId === merchantId);
+  }
+
+  getInvoices(merchantId?: string): Invoice[] {
+    if (!merchantId) return [...this.invoices.values()];
+    return [...this.invoices.values()].filter((i) => i.merchantId === merchantId);
+  }
+
+  getCustomers(merchantId?: string): Customer[] {
+    if (!merchantId) return [...this.customers.values()];
+    return [...this.customers.values()].filter((c) => c.merchantId === merchantId);
+  }
+
+  getRefunds(merchantId?: string): Refund[] {
+    if (!merchantId) return [...this.refunds.values()];
+    return [...this.refunds.values()].filter((r) => r.merchantId === merchantId);
+  }
+
+  getApiKeys(merchantId: string): ApiKey[] {
+    return this.apiKeys.filter((k) => k.merchantId === merchantId);
+  }
+
+  getTeam(merchantId: string): TeamMember[] {
+    return this.team.filter((t) => t.merchantId === merchantId);
+  }
+
+  getPayments(merchantId?: string) {
+    if (!merchantId) return [...this.payments];
+    return this.payments.filter((p) => p.merchantId === merchantId);
+  }
+
+  allMerchants(): MerchantAccount[] {
+    return [...this.merchants.values()];
+  }
+
+  // --------------------------------------------------------------- reset
   reset(): void {
-    this.merchants.clear(); this.products.clear(); this.invoices.clear();
-    this.customers.clear(); this.refunds.clear();
+    this.merchants.clear();
+    this.apiKeys = [];
+    this.team = [];
+    this.products.clear();
+    this.invoices.clear();
+    this.customers.clear();
+    this.refunds.clear();
+    this.payments = [];
+    this.invoiceCounter = 0;
   }
 }
 

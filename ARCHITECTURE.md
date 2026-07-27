@@ -1,716 +1,1078 @@
-# PaySwap Protocol v1 — Architecture Design Document (Phase 1)
+# PaySwap — Product Architecture (Phase 1)
 
-> **Status**: Phase 1 — Architecture only. No implementation code.
-> **Runtime**: v1.0.0-stable (frozen — no new architectural layers).
-> **Goal**: Replace placeholder financial logic with the real PaySwap protocol.
-> Every feature must execute through the existing `kernel.converge(intent)` pipeline.
+> **Principle**: Think like Stripe, Shopify, Mercury, Linear — not like a demo.
+> **Constraint**: Kernel frozen. Everything above the kernel.
 
 ---
 
-## Table of Contents
+## 1. Personas
 
-1. [Design Constraints](#1-design-constraints)
-2. [Protocol Economics Model](#2-protocol-economics-model)
-3. [Smart Contract Interfaces](#3-smart-contract-interfaces)
-4. [Extension Platform Architecture](#4-extension-platform-architecture)
-5. [Mapping 20 Success Criteria to converge(intent)](#5-mapping-20-success-criteria-to-convergeintent)
-6. [Design Challenges & Weaknesses](#6-design-challenges--weaknesses)
-7. [Proposed Improvements](#7-proposed-improvements)
-8. [Folder Structure](#8-folder-structure)
-9. [Implementation Plan (Phase 2)](#9-implementation-plan-phase-2)
-
----
-
-## 1. Design Constraints
-
-The runtime is frozen. The protocol replacement must work within these constraints:
-
-### What we have (immutable)
-- `kernel.converge(intent)` — the single entry point
-- Entity-Component model (entities have capabilities, policies, state)
-- Generic Constraint Solver (queries capabilities, never hardcodes finance)
-- Execution Graph DAG (Transitions with preconditions/postconditions/rollback)
-- Event-sourced world (events = truth, snapshots = cache)
-- State Machine Engine (9 object kinds with lifecycles)
-- Constitution (43 immutable invariants, 12 sections)
-- Organization Policy (configurable business rules)
-- 5 Runtime Services (World, Constraint, Solver, Execution, Developer)
-
-### What we must NOT do
-- Add new runtime services or engines
-- Redesign the kernel architecture
-- Create special-case code for payments, loans, insurance, etc.
-- Bypass `converge(intent)` for any financial operation
-
-### What we MUST do
-- Replace placeholder financial logic with real protocol semantics
-- Model fiat as external state (never assume availability)
-- Collateralize every manual operation
-- Make LP authorization dynamic (derived from protocol state)
-- Implement disputes via escrow (no insurance pool)
+| # | Persona | Description | Landing Page | Key Actions |
+|---|---------|-------------|--------------|-------------|
+| 1 | **Guest** | Unauthenticated visitor | `/` (marketing) | Browse marketing, join waitlist, view docs |
+| 2 | **Customer** | End user who pays merchants | `/portal` | Pay invoices, view payment history, download receipts, manage wallet |
+| 3 | **Merchant** | Business owner accepting payments | `/dashboard` | View analytics, manage products, process payouts, configure checkout |
+| 4 | **Merchant Staff** | Merchant team member | `/dashboard` | Role-limited merchant actions (developer: API keys; analyst: reports; support: refunds) |
+| 5 | **LP** | Liquidity Provider | `/lp` | View capacity, settlement history, profitability, manage stake |
+| 6 | **Treasury** | Treasury operator | `/treasury` | Monitor reserves, manage corridors, approve large payouts, run stress tests |
+| 7 | **Compliance** | Compliance officer | `/compliance` | Review AML alerts, sanctions hits, KYC/KYB, file SARs, manage cases |
+| 8 | **Support** | Customer support agent | `/support` | Search merchants/payments, process refunds, replay webhooks, view audit trail |
+| 9 | **Developer** | External developer integrating API | `/developers` | API docs, API explorer, webhook tester, sandbox, SDK downloads |
+| 10 | **Operations** | Ops engineer | `/ops` | System health, circuit breakers, connectors, DR status, deployment |
+| 11 | **Admin** | Platform administrator | `/admin` | Approve waitlist, manage users, configure corridors, view all data |
+| 12 | **Super Admin** | Full system access | `/admin` | Everything admin does + system config, feature flags, emergency freeze |
 
 ---
 
-## 2. Protocol Economics Model
-
-### 2.1 On-Chain vs Off-Chain Separation
-
-The protocol has deterministic control over **on-chain assets only**:
-
-| On-Chain (protocol controls) | Off-Chain (external, observable only) |
-|---|---|
-| Twin Tokens | LP fiat accounts |
-| Liquidity Pools | Platform reserve bank accounts |
-| Settlement Escrow | Financial Operator accounts |
-| LP Collateral Vault | Mobile Money wallets |
-| Governance | PSP wallets |
-| Treasury contracts | Bank accounts |
-
-**Principle**: Fiat is modeled as an external resource. The protocol observes it through FO attestations or LP proofs. It never assumes fiat balances are correct or accounts remain connected.
-
-### 2.2 Replace Liquidity Pool with Three Independent Concepts
-
-The current Liquidity Pool incorrectly mixes multiple responsibilities. Replace with:
-
-#### 2.2.1 Liquidity Pool (on-chain)
-- Contains LP Twin Tokens **only**
-- Purpose: provide liquidity, mint/burn Twin Tokens, LP staking/withdrawals
-- **Never** used directly to compensate users
-- Entity type: `liquidity_pool` with capabilities: `canMint, canBurn, canStake`
-
-#### 2.2.2 Settlement Escrow (on-chain)
-- Every transaction reserves Twin Tokens in escrow
-- Example: 25,000 GHS payment → freeze 25,000 TwinGHS
-- Tokens remain frozen until: merchant confirms, timeout, dispute resolution, or cancellation
-- **New state machine**: `Created → Frozen → Releasing → Released | Disputed → Slashed | Refunded`
-
-#### 2.2.3 LP Collateral Vault (on-chain)
-- Separate from liquidity (never used as routing liquidity)
-- Secures manual settlement obligations
-- Slashed **only** after protocol adjudication
-- Entity type: `collateral_vault` with capabilities: `canLock, canSlash, canRelease`
-
-### 2.3 Dispute Resolution (replaces insurance)
-
-**There is no insurance pool.** The frozen Twin Tokens in Settlement Escrow ARE the guarantee.
-
-#### Dispute flow
-```
-Dispute opened
-    ↓
-Escrow remains frozen
-    ↓
-Evidence collection (LP proof + merchant proof)
-    ↓
-Adjudication (community vote + PaySwap vote, weighted by merchant trust tier)
-    ↓
-Outcome:
-  LP wins  → unlock escrow → return Twin Tokens to LP
-  Merchant wins → merchant chooses:
-    Option A: withdraw frozen Twin Tokens
-    Option B: request replacement LP to complete settlement
-      → new LP settles → merchant confirms
-      → frozen Twin Tokens transfer to new LP
-      → old LP loses access + reputation slash
-```
-
-#### Dispute state machine
-```
-Opened → EvidenceCollection → Voting → Adjudicated
-  → (LPWins → EscrowReturned)
-  → (MerchantWins → MerchantWithdraws | ReplacementRequested → ReplacementSettled)
-  → (CollateralSlash → LP penalized)
-```
-
-### 2.4 Fraud Classification
-
-| Fraud type | Consequence |
-|---|---|
-| Settlement timeout | Small reputation penalty |
-| Unable to prove payment | Escrow remains frozen; merchant may withdraw Twin Tokens |
-| Forged evidence | Collateral slash + reputation slash + temporary suspension |
-| Repeated fraud | LP removed + routes closed + staking locked |
-
-Every fraud outcome updates: reputation, exposure, routing score, authorization limit.
-
-### 2.5 Merchant Trust Tiers
-
-Merchants are protocol actors with trust tiers:
-
-| Tier | Bond | Routing priority | Dispute weight | Claim speed |
-|---|---|---|---|---|
-| Unverified | 0 | lowest | minimal | slow |
-| Verified | small | medium | standard | normal |
-| Trusted | medium | high | elevated | fast |
-| Premium | large | highest | maximum | instant |
-
-Merchants can be penalized for fraudulent claims (bond slashed).
-
-### 2.6 LP Authorized Exposure (dynamic)
-
-Replace `authorized = stake × multiplier` with **Authorized Exposure** computed continuously:
+## 2. Sitemap (Complete Route Hierarchy)
 
 ```
-AuthorizedExposure = f(
-  collateral,
-  liquidity,
-  completed_settlements,
-  active_disputes,
-  fraud_history,
-  country_risk,
-  reserve_utilization,
-  outstanding_obligations,
-  manual_settlement_ratio,
-  protocol_reputation
-)
+/                                   → Marketing landing (guest)
+/waitlist                           → Waitlist signup form
+/login                              → Login page
+/login/[role]                       → Role-specific login (demo quick-login buttons)
+
+# === CUSTOMER PORTAL ===
+/portal                             → Customer dashboard (recent payments, wallet balance)
+/portal/payments                    → Payment history
+/portal/payments/[id]               → Payment detail + receipt download
+/portal/wallet                      → Wallet balance + Twin Token holdings
+/portal/wallet/deposit              → Deposit funds
+/portal/wallet/withdraw             → Withdraw funds
+/portal/invoices                    → Outstanding invoices
+/portal/invoices/[id]               → Pay invoice
+/portal/payment-methods             → Saved payment methods
+/portal/profile                     → Profile + security settings
+
+# === MERCHANT DASHBOARD ===
+/dashboard                          → Overview (revenue, volume, recent activity)
+/dashboard/payments                 → Payments list
+/dashboard/payments/[id]            → Payment detail
+/dashboard/payouts                  → Payouts list
+/dashboard/payouts/new              → Create payout
+/dashboard/payouts/[id]             → Payout detail
+/dashboard/customers                → Customers list
+/dashboard/customers/[id]           → Customer detail (history, lifetime value)
+/dashboard/products                 → Products list
+/dashboard/products/new             → Create product
+/dashboard/products/[id]            → Edit product
+/dashboard/invoices                 → Invoices list
+/dashboard/invoices/new             → Create invoice
+/dashboard/invoices/[id]            → Invoice detail (send, mark paid, void)
+/dashboard/subscriptions            → Subscriptions list
+/dashboard/subscriptions/new        → Create subscription plan
+/dashboard/subscriptions/[id]       → Subscription detail
+/dashboard/refunds                  → Refunds list
+/dashboard/refunds/new              → Create refund
+/dashboard/checkout                 → Checkout builder (visual)
+/dashboard/checkout/[id]            → Edit checkout config
+/dashboard/payment-links            → Payment links list
+/dashboard/payment-links/new        → Create payment link
+/dashboard/qr                       → QR payments (generate, manage)
+/dashboard/analytics                → Analytics dashboard (charts)
+/dashboard/reports                  → Reports (financial, tax, settlement)
+/dashboard/reports/[type]           → Generate specific report
+/dashboard/extensions               → Extension marketplace
+/dashboard/settings                 → Merchant settings (profile, branding, team)
+/dashboard/settings/team            → Team management (invite, roles)
+/dashboard/settings/api-keys        → API key management
+/dashboard/settings/webhooks        → Webhook endpoints + deliveries
+/dashboard/settings/branding        → Logo, colors, checkout theme
+
+# === LP PORTAL ===
+/lp                                 → LP overview (capacity, utilization, PnL)
+/lp/positions                       → Active positions + collateral
+/lp/settlements                     → Settlement history
+/lp/profitability                   → Profitability analytics
+/lp/stake                           → Manage stake (add/withdraw)
+/lp/settings                        → LP settings
+
+# === TREASURY ===
+/treasury                           → Treasury overview (reserves, backing ratio)
+/treasury/reserves                  → Reserve management
+/treasury/corridors                 → Corridor funding + rebalancing
+/treasury/limits                    → Mint/burn limits
+/treasury/stress-tests              → Run stress tests
+/treasury/reports                   → Daily treasury reports
+/treasury/settings                  → Treasury settings
+
+# === COMPLIANCE ===
+/compliance                         → Compliance overview (alerts, cases, stats)
+/compliance/alerts                  → AML alerts queue
+/compliance/alerts/[id]             → Alert detail + investigation
+/compliance/sanctions               → Sanctions hits
+/compliance/sanctions/[id]          → Hit review (true positive / false positive)
+/compliance/cases                   → Case management
+/compliance/cases/[id]              → Case detail (escalate, file SAR)
+/compliance/kyc                     → KYC review queue
+/compliance/kyc/[id]                → Review KYC documents
+/compliance/kyb                     → KYB review queue
+/compliance/sar                     → SAR filings
+/compliance/audit                   → Regulatory audit exports
+/compliance/settings                → Compliance settings
+
+# === SUPPORT ===
+/support                            → Support overview (open tickets, search)
+/support/search                     → Global search (merchants, payments, payouts)
+/support/payments                   → Payment lookup + refund
+/support/webhooks                   → Webhook replay
+/support/audit                      → Audit trail viewer
+
+# === DEVELOPER PORTAL ===
+/developers                         → Developer overview
+/developers/docs                    → API documentation
+/developers/docs/[section]          → API doc section
+/developers/explorer                → Interactive API explorer
+/developers/webhooks                → Webhook tester
+/developers/sandbox                 → Sandbox environment
+/developers/sdk                     → SDK downloads (TS, Go, Python, Java, C#)
+/developers/openapi                 → OpenAPI spec viewer
+/developers/examples                → Example applications
+
+# === OPERATIONS ===
+/ops                                → Ops overview (system health, SLOs)
+/ops/health                         → Detailed health check
+/ops/connectors                     → Connector health + metrics
+/ops/circuit-breakers               → Circuit breaker states
+/ops/dr                             → Disaster recovery status
+/ops/deployments                    → Deployment history
+/ops/incidents                      → Incident management
+/ops/metrics                        → Prometheus metrics viewer
+
+# === ADMIN ===
+/admin                              → Admin overview (platform stats)
+/admin/waitlist                     → Waitlist management (approve/reject)
+/admin/users                        → User management
+/admin/users/[id]                   → User detail (roles, permissions)
+/admin/merchants                    → All merchants
+/admin/merchants/[id]               → Merchant detail (override, freeze)
+/admin/corridors                    → Corridor configuration
+/admin/feature-flags                → Feature flag management
+/admin/emergency                    → Emergency freeze controls
+/admin/audit                        → System-wide audit trail
+/admin/settings                     → Platform settings
 ```
-
-The solver **never** allocates more than Authorized Exposure.
-
-### 2.7 LP Reputation (continuously updated)
-
-Derived from: success rate, latency, proof quality, dispute outcomes, settlement consistency, uptime, liquidity availability.
-
-### 2.8 Expected Cost routing (replaces fee-based)
-
-The solver optimizes **Expected Cost**, not fee:
-
-```
-ExpectedCost = fee
-  + (expected_delay × capital_cost)
-  + (failure_probability × failure_cost)
-  + (manual_settlement_risk × manual_cost)
-  + (fx_risk × fx_volatility)
-  + (reputation_risk × reputation_penalty)
-  + (reserve_depletion × depletion_cost)
-  + (collateral_efficiency × opportunity_cost)
-```
-
-### 2.9 Hybrid Routing Candidates
-
-The solver compares **all** candidate route types:
-1. Reserve only
-2. LP only
-3. Reserve + LP
-4. Multiple LPs
-5. Stablecoin bridge
-6. Deferred settlement
-7. Net settlement
-8. Auction settlement
-
-### 2.10 Liquidity Auctions
-
-Instead of static LP selection, LPs answer liquidity requests:
-```
-Need: 25,000 GHS, deadline: 20s
-LP1: 5,000 @ 0.4%
-LP2: 12,000 @ 0.6%
-LP3: 8,000 @ 0.7%
-→ Solver builds optimal execution graph from auction responses
-```
-
-### 2.11 Net Settlement (corridor netting)
-
-Instead of settling every payment individually, maintain corridor obligations:
-```
-Kenya → Ghana: +1.2M
-Ghana → Kenya: -1.15M
-→ Only 50k needs settlement
-```
-The solver minimizes gross liquidity movement.
-
-### 2.12 Merchant LP Mode
-
-Merchants can opt into becoming LPs. Settlement proceeds can:
-- Enter reserves
-- Purchase Twin Tokens
-- Increase LP position
-- Increase collateral
-
-According to merchant preferences.
-
-### 2.13 Treasury (not free liquidity)
-
-When protocol reserves are insufficient, Treasury should:
-- Borrow LP liquidity
-- Purchase withdrawal positions
-- Rebalance reserves
-- Use stablecoins **only** when economically justified
-
-Treasury is never treated as free liquidity.
 
 ---
 
-## 3. Smart Contract Interfaces
+## 3. Role-Based Navigation Maps
 
-Refactor contracts into 8 verifiable settlement primitives. The runtime **never** manipulates blockchain state directly — it generates commands; smart contracts execute them.
+### Guest Navigation
+```
+Logo → /            Docs → /developers/docs        Login → /login
+Features → /#features   Pricing → /#pricing        Join Waitlist → /waitlist
+```
 
-### 3.1 Contract Manifest
+### Customer Navigation (sidebar)
+```
+Home → /portal
+Payments → /portal/payments
+Wallet → /portal/wallet
+Invoices → /portal/invoices
+Payment Methods → /portal/payment-methods
+Profile → /portal/profile
+```
 
-```typescript
-interface SmartContract {
-  contractId: string;
-  type: ContractType;
-  address: string;  // on-chain address (simulated in Digital Twin)
-  commands: string[];  // commands this contract accepts
-  verify: (transition: Transition) => boolean;  // verifiable proof
+### Merchant Navigation (sidebar — collapsible groups)
+```
+── Overview ──
+  Dashboard → /dashboard
+  Analytics → /dashboard/analytics
+  Reports → /dashboard/reports
+
+── Accept Payments ──
+  Payments → /dashboard/payments
+  Checkout Builder → /dashboard/checkout
+  Payment Links → /dashboard/payment-links
+  QR Payments → /dashboard/qr
+
+── Manage Business ──
+  Customers → /dashboard/customers
+  Products → /dashboard/products
+  Invoices → /dashboard/invoices
+  Subscriptions → /dashboard/subscriptions
+  Refunds → /dashboard/refunds
+
+── Payouts ──
+  Payouts → /dashboard/payouts
+  New Payout → /dashboard/payouts/new
+
+── Extensions ──
+  Marketplace → /dashboard/extensions
+
+── Settings ──
+  General → /dashboard/settings
+  Team → /dashboard/settings/team
+  API Keys → /dashboard/settings/api-keys
+  Webhooks → /dashboard/settings/webhooks
+  Branding → /dashboard/settings/branding
+```
+
+### LP Navigation (sidebar)
+```
+Overview → /lp
+Positions → /lp/positions
+Settlements → /lp/settlements
+Profitability → /lp/profitability
+Stake → /lp/stake
+Settings → /lp/settings
+```
+
+### Treasury Navigation (sidebar)
+```
+Overview → /treasury
+Reserves → /treasury/reserves
+Corridors → /treasury/corridors
+Limits → /treasury/limits
+Stress Tests → /treasury/stress-tests
+Reports → /treasury/reports
+Settings → /treasury/settings
+```
+
+### Compliance Navigation (sidebar)
+```
+Overview → /compliance
+AML Alerts → /compliance/alerts
+Sanctions → /compliance/sanctions
+Cases → /compliance/cases
+KYC Review → /compliance/kyc
+KYB Review → /compliance/kyb
+SARs → /compliance/sar
+Audit Exports → /compliance/audit
+Settings → /compliance/settings
+```
+
+### Support Navigation (sidebar)
+```
+Overview → /support
+Search → /support/search
+Payments → /support/payments
+Webhooks → /support/webhooks
+Audit Trail → /support/audit
+```
+
+### Developer Navigation (sidebar — external developers)
+```
+Overview → /developers
+API Docs → /developers/docs
+API Explorer → /developers/explorer
+Webhook Tester → /developers/webhooks
+Sandbox → /developers/sandbox
+SDKs → /developers/sdk
+OpenAPI → /developers/openapi
+Examples → /developers/examples
+```
+
+### Operations Navigation (sidebar)
+```
+Overview → /ops
+Health → /ops/health
+Connectors → /ops/connectors
+Circuit Breakers → /ops/circuit-breakers
+Disaster Recovery → /ops/dr
+Deployments → /ops/deployments
+Incidents → /ops/incidents
+Metrics → /ops/metrics
+```
+
+### Admin Navigation (sidebar)
+```
+── Platform ──
+  Overview → /admin
+  Waitlist → /admin/waitlist
+  Users → /admin/users
+  Merchants → /admin/merchants
+  Corridors → /admin/corridors
+
+── System ──
+  Feature Flags → /admin/feature-flags
+  Emergency → /admin/emergency
+  Audit Trail → /admin/audit
+  Settings → /admin/settings
+```
+
+---
+
+## 4. Permission Matrix
+
+| Action | Customer | Merchant | Staff (Developer) | Staff (Analyst) | Staff (Support) | LP | Treasury | Compliance | Ops | Admin |
+|--------|----------|----------|-------------------|-----------------|-----------------|-----|----------|------------|-----|-------|
+| View own payments | ✅ | — | — | — | — | — | — | — | — | ✅ |
+| Pay invoice | ✅ | — | — | — | — | — | — | — | — | — |
+| View merchant dashboard | — | ✅ | ✅ | ✅ | ✅ | — | — | — | — | ✅ |
+| Create payment | — | ✅ | ✅ | — | — | — | — | — | — | ✅ |
+| Process payout | — | ✅ | — | — | — | — | — | — | — | ✅ |
+| Approve large payout | — | — | — | — | — | — | ✅ | — | — | ✅ |
+| Manage API keys | — | ✅ | ✅ | — | — | — | — | — | — | ✅ |
+| Manage webhooks | — | ✅ | ✅ | — | — | — | — | — | — | ✅ |
+| View analytics | — | ✅ | — | ✅ | — | — | — | — | — | ✅ |
+| Process refund | — | ✅ | — | — | ✅ | — | — | — | — | ✅ |
+| Manage team | — | ✅ | — | — | — | — | — | — | — | ✅ |
+| View LP positions | — | — | — | — | — | ✅ | ✅ | — | — | ✅ |
+| Manage reserves | — | — | — | — | — | — | ✅ | — | — | ✅ |
+| Review AML alerts | — | — | — | — | — | — | — | ✅ | — | ✅ |
+| File SAR | — | — | — | — | — | — | — | ✅ | — | ✅ |
+| Approve waitlist | — | — | — | — | — | — | — | — | — | ✅ |
+| Emergency freeze | — | — | — | — | — | — | ✅ | ✅ | — | ✅ |
+| View system health | — | — | — | — | — | — | — | — | ✅ | ✅ |
+| Manage feature flags | — | — | — | — | — | — | — | — | — | ✅ |
+| Replay webhooks | — | ✅ | ✅ | — | ✅ | — | — | — | — | ✅ |
+
+---
+
+## 5. Database Schema Design
+
+### Strategy
+- **Provider**: PostgreSQL (Vercel Postgres / Neon in production; SQLite for local dev with PostgreSQL-compatible Prisma types)
+- **ORM**: Prisma
+- **Principles**: Normalized, soft deletes (`deletedAt`), audit fields (`createdAt`, `updatedAt`, `createdBy`), indexes on foreign keys + frequently queried fields, constraints (unique, check)
+
+### Core Models
+
+```
+// === AUTH ===
+model User {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  passwordHash    String?
+  name            String?
+  phone           String?
+  avatarUrl       String?
+  status          UserStatus @default(PENDING) // PENDING, ACTIVE, SUSPENDED, FROZEN
+  emailVerified   DateTime?
+  lastLoginAt     DateTime?
+  lastLoginIp     String?
+  mfaEnabled      Boolean  @default(false)
+  mfaSecret       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  roles           UserRole[]
+  accounts        Account[]
+  sessions        Session[]
+  auditLogs       AuditLog[]
+  
+  @@index([status])
+  @@index([email])
 }
 
-type ContractType =
-  | 'TwinToken'
-  | 'LiquidityPool'
-  | 'SettlementEscrow'
-  | 'CollateralVault'
-  | 'Governance'
-  | 'Treasury'
-  | 'LPRegistry'
-  | 'MerchantRegistry';
-```
+model UserRole {
+  id          String   @id @default(cuid())
+  userId      String
+  role        Role     // CUSTOMER, MERCHANT, MERCHANT_STAFF, LP, TREASURY, COMPLIANCE, SUPPORT, DEVELOPER, OPERATIONS, ADMIN, SUPER_ADMIN
+  merchantId  String?  // if role is MERCHANT or MERCHANT_STAFF
+  permissions Json?    // granular permissions override
+  createdAt   DateTime @default(now())
+  
+  user        User     @relation(fields: [userId], references: [id])
+  
+  @@unique([userId, role, merchantId])
+  @@index([merchantId])
+}
 
-### 3.2 Contract Responsibilities
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  token        String   @unique
+  expiresAt    DateTime
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+  
+  user         User     @relation(fields: [userId], references: [id])
+  
+  @@index([userId])
+  @@index([expiresAt])
+}
 
-| Contract | Owns | Commands |
-|---|---|---|
-| TwinToken | mint, burn, transfer, lock, unlock | MintAsset, BurnAsset, TransferLiquidity |
-| LiquidityPool | LP staking, pool accounting | StakeLP, UnstakeLP |
-| SettlementEscrow | frozen tokens, release, slash | FreezeEscrow, ReleaseEscrow, SlashEscrow |
-| CollateralVault | collateral lock, slash, release | LockCollateral, SlashCollateral, ReleaseCollateral |
-| Governance | proposals, voting, execution | CreateProposal, Vote, ExecuteProposal |
-| Treasury | vault balances, rebalance | Rebalance, Borrow, Purchase |
-| LPRegistry | LP registration, authorization, reputation | RegisterLP, UpdateExposure, UpdateReputation |
-| MerchantRegistry | merchant tiers, bonds, penalties | RegisterMerchant, UpdateTier, SlashBond |
+model WaitlistEntry {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  company      String?
+  phone        String?
+  country      String
+  businessType String?  // INDIVIDUAL, SMALL_BUSINESS, ENTERPRISE, STARTUP, NGO
+  status       WaitlistStatus @default(PENDING) // PENDING, APPROVED, REJECTED, CONVERTED
+  notes        String?
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  createdAt    DateTime @default(now())
+  
+  @@index([status])
+  @@index([country])
+}
 
-### 3.3 Settlement Proof Registry
+// === ACCOUNTS & MERCHANTS ===
+model Account {
+  id            String   @id @default(cuid())
+  userId        String
+  type          AccountType // CUSTOMER, MERCHANT, LP
+  status        AccountStatus @default(PENDING)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+  
+  user          User     @relation(fields: [userId], references: [id])
+  merchant      Merchant?
+  customer      Customer?
+  lpProfile     LPProfile?
+  wallets       Wallet[]
+  
+  @@index([userId])
+  @@index([type, status])
+}
 
-Every settlement produces a cryptographic attation recorded on-chain. The runtime generates the command; the contract records the proof. This enables:
-- Independent verification
-- Audit trail
-- Dispute evidence
-- Replay correctness
+model Merchant {
+  id              String   @id @default(cuid())
+  accountId       String   @unique
+  name            String
+  legalName       String?
+  email           String   @unique
+  phone           String?
+  country         String
+  currency        String   @default("GHS")
+  website         String?
+  logoUrl         String?
+  description     String?
+  businessType    String?
+  registrationNumber String?
+  taxId           String?
+  address         Json?
+  tier            MerchantTier @default(UNVERIFIED)
+  bond            Float    @default(0)
+  status          MerchantStatus @default(PENDING)
+  kycLevel        Int      @default(0)
+  settings        Json?    // checkout theme, auto-settle, etc.
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+  
+  account         Account  @relation(fields: [accountId], references: [id])
+  products        Product[]
+  customers       CustomerRecord[]
+  invoices        Invoice[]
+  payouts         Payout[]
+  refunds         Refund[]
+  subscriptions   Subscription[]
+  paymentLinks    PaymentLink[]
+  apiKeys         ApiKey[]
+  webhookEndpoints WebhookEndpoint[]
+  teamMembers     TeamMember[]
+  
+  @@index([status])
+  @@index([tier])
+  @@index([country])
+}
 
----
+model Customer {
+  id              String   @id @default(cuid())
+  accountId       String?  @unique  // null if guest checkout
+  merchantId      String?  // merchant-scoped customer record
+  name            String
+  email           String
+  phone           String?
+  country         String?
+  metadata        Json?
+  totalSpent      Float    @default(0)
+  transactionCount Int     @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+  
+  account         Account? @relation(fields: [accountId], references: [id])
+  merchant        Merchant? @relation(fields: [merchantId], references: [id])
+  payments        Payment[]
+  invoices        Invoice[]
+  
+  @@index([merchantId])
+  @@index([email])
+}
 
-## 4. Extension Platform Architecture
+model LPProfile {
+  id              String   @id @default(cuid())
+  accountId       String   @unique
+  name            String
+  country         String
+  currencies      String[] // supported currencies
+  tier            String   @default("verified")
+  stake           Float    @default(0)
+  collateral      Float    @default(0)
+  capacity        Json?    // per-corridor capacity
+  reputation      Float    @default(0.5)
+  status          String   @default("pending")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  account         Account  @relation(fields: [accountId], references: [id])
+  
+  @@index([status])
+}
 
-Extensions are the mechanism for adding financial capabilities (lottery, lending, trade finance, etc.) without touching the kernel.
+// === WALLETS ===
+model Wallet {
+  id              String   @id @default(cuid())
+  accountId       String
+  name            String
+  currency        String
+  balance         Float    @default(0)
+  pendingBalance  Float    @default(0)
+  lockedBalance   Float    @default(0)
+  isDefault       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  account         Account  @relation(fields: [accountId], references: [id])
+  transactions    WalletTransaction[]
+  
+  @@index([accountId])
+  @@unique([accountId, currency])
+}
 
-### 4.1 Extension Manifest
+model WalletTransaction {
+  id              String   @id @default(cuid())
+  walletId        String
+  type            String   // CREDIT, DEBIT, LOCK, UNLOCK
+  amount          Float
+  currency        String
+  counterparty    String?
+  reference       String?
+  txHash          String?
+  createdAt       DateTime @default(now())
+  
+  wallet          Wallet   @relation(fields: [walletId], references: [id])
+  
+  @@index([walletId])
+  @@index([createdAt])
+}
 
-```typescript
-interface ExtensionManifest {
-  // Identity
-  id: string;              // e.g. "payswap.lottery"
-  name: string;
-  version: string;
-  author: string;
-  description: string;
+// === PAYMENTS ===
+model Payment {
+  id              String   @id @default(cuid())
+  merchantId      String
+  customerId      String?
+  amount          Float
+  currency        String
+  sourceCurrency  String?
+  destinationCurrency String?
+  status          PaymentStatus @default(PENDING)
+  method          String?  // CARD, MOBILE_MONEY, BANK, QR, PAYMENT_LINK, CHECKOUT
+  corridor        String?  // e.g. "GHS-KES"
+  lpId            String?
+  fee             Float    @default(0)
+  netAmount       Float    @default(0)
+  fxRate          Float    @default(1)
+  txHash          String?
+  evidence        Json?
+  reference       String?
+  description     String?
+  metadata        Json?
+  failureReason   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  settledAt       DateTime?
+  
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  customer        Customer? @relation(fields: [customerId], references: [id])
+  refunds         Refund[]
+  
+  @@index([merchantId, status])
+  @@index([customerId])
+  @@index([createdAt])
+  @@index([corridor])
+}
 
-  // Capabilities this extension registers
-  capabilities: CapabilityDeclaration[];
+model Payout {
+  id              String   @id @default(cuid())
+  merchantId      String
+  method          String   // BANK, MOBILE_MONEY, ONCHAIN
+  sourceAmount    Float
+  sourceAsset     String
+  sourceCurrency  String
+  destinationCurrency String
+  destination     Json?    // bankAccount, phoneNumber, walletAddress
+  fxRate          Float    @default(1)
+  feeBps          Int      @default(50)
+  fee             Float    @default(0)
+  netAmount       Float    @default(0)
+  status          PayoutStatus @default(REQUESTED)
+  txHash          String?
+  evidence        Json?
+  reason          String?
+  failureReason   String?
+  approvedBy      String?
+  approvedAt      DateTime?
+  createdAt       DateTime @default(now())
+  processedAt     DateTime?
+  completedAt     DateTime?
+  
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  
+  @@index([merchantId, status])
+  @@index([createdAt])
+}
 
-  // Commands this extension handles
-  commands: CommandDeclaration[];
+model Refund {
+  id              String   @id @default(cuid())
+  merchantId      String
+  paymentId       String
+  amount          Float
+  type            String   // FULL, PARTIAL
+  reason          String?
+  status          String   @default("PENDING") // PENDING, APPROVED, PROCESSED, REJECTED
+  requestedBy     String
+  approvedBy      String?
+  processedAt     DateTime?
+  createdAt       DateTime @default(now())
+  
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  payment         Payment  @relation(fields: [paymentId], references: [id])
+  
+  @@index([merchantId])
+  @@index([paymentId])
+}
 
-  // Entities this extension creates
-  entities: EntityDeclaration[];
+// === PRODUCTS & INVOICES ===
+model Product {
+  id              String   @id @default(cuid())
+  merchantId      String
+  name            String
+  description     String?
+  price           Float
+  currency        String
+  type            String   @default("PHYSICAL") // PHYSICAL, DIGITAL, SERVICE
+  imageUrl        String?
+  metadata        Json?
+  status          String   @default("ACTIVE") // ACTIVE, INACTIVE, ARCHIVED
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+  
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  
+  @@index([merchantId, status])
+}
 
-  // Policies this extension enforces
-  policies: PolicyDeclaration[];
+model Invoice {
+  id              String   @id @default(cuid())
+  merchantId      String
+  customerId      String?
+  number          String   // INV-0001
+  items           Json     // [{description, quantity, unitPrice, total}]
+  subtotal        Float
+  tax             Float    @default(0)
+  total           Float
+  currency        String
+  status          String   @default("DRAFT") // DRAFT, SENT, PAID, OVERDUE, VOID
+  dueDate         DateTime?
+  sentAt          DateTime?
+  paidAt          DateTime?
+  paymentId       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  customer        Customer? @relation(fields: [customerId], references: [id])
+  
+  @@index([merchantId, status])
+  @@index([customerId])
+}
 
-  // Event subscriptions
-  events: EventSubscription[];
+model Subscription {
+  id              String   @id @default(cuid())
+  merchantId      String
+  customerId      String?
+  planName        String
+  amount          Float
+  currency        String
+  interval        String   // DAILY, WEEKLY, MONTHLY, YEARLY
+  status          String   @default("ACTIVE") // ACTIVE, PAST_DUE, CANCELED, TRIALING, PAUSED
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  trialEnd          DateTime?
+  canceledAt        DateTime?
+  lastPaymentAt     DateTime?
+  failedAttempts    Int     @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  
+  @@index([merchantId, status])
+}
 
-  // Smart contracts this extension deploys
-  contracts: ContractDeclaration[];
+model PaymentLink {
+  id              String   @id @default(cuid())
+  merchantId      String
+  amount          Float
+  currency        String
+  description     String?
+  reference       String?
+  status          String   @default("ACTIVE")
+  url             String   @unique
+  expiresAt       DateTime?
+  paymentCount    Int      @default(0)
+  totalCollected  Float    @default(0)
+  createdAt       DateTime @default(now())
+  
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  
+  @@index([merchantId])
+}
 
-  // State machines this extension defines
-  stateMachines: StateMachineDeclaration[];
+// === API & WEBHOOKS ===
+model ApiKey {
+  id              String   @id @default(cuid())
+  merchantId      String
+  label           String
+  keyPrefix       String   // psk_live_xxx or psk_test_xxx
+  keyHash         String   @unique // hashed full key
+  scopes          String[] // payments:read, payments:write, etc.
+  lastUsedAt      DateTime?
+  lastUsedIp      String?
+  status          String   @default("ACTIVE") // ACTIVE, REVOKED
+  expiresAt       DateTime?
+  createdAt       DateTime @default(now())
+  
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  
+  @@index([merchantId])
+}
 
-  // Permissions required
-  permissions: Permission[];
+model WebhookEndpoint {
+  id              String   @id @default(cuid())
+  merchantId      String
+  url             String
+  secretHash      String   // hashed webhook secret
+  events          String[] // subscribed event types
+  status          String   @default("ACTIVE")
+  createdAt       DateTime @default(now())
+  
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  deliveries      WebhookDelivery[]
+  
+  @@index([merchantId])
+}
 
-  // Resource limits
-  limits: {
-    maxEntities: number;
-    maxCommandsPerSecond: number;
-    maxStorageBytes: number;
-  };
+model WebhookDelivery {
+  id              String   @id @default(cuid())
+  endpointId      String
+  eventType       String
+  payload         Json
+  signature       String
+  status          String   @default("PENDING") // PENDING, DELIVERED, FAILED, RETRYING
+  attempts        Int      @default(0)
+  responseStatus  Int?
+  responseBody    String?
+  nextRetryAt     DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime @default(now())
+  
+  endpoint        WebhookEndpoint @relation(fields: [endpointId], references: [id])
+  
+  @@index([endpointId])
+  @@index([status])
+}
+
+model TeamMember {
+  id              String   @id @default(cuid())
+  merchantId      String
+  email           String
+  role            String   // OWNER, ADMIN, DEVELOPER, ANALYST, VIEWER, SUPPORT
+  status          String   @default("PENDING") // PENDING, ACTIVE, SUSPENDED
+  invitedAt       DateTime @default(now())
+  joinedAt        DateTime?
+  userId          String?  // linked user once accepted
+  
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  
+  @@index([merchantId])
+  @@unique([merchantId, email])
+}
+
+// === COMPLIANCE ===
+model ComplianceReview {
+  id              String   @id @default(cuid())
+  entityType      String   // MERCHANT, CUSTOMER, LP
+  entityId        String
+  type            String   // KYC, KYB, SANCTIONS, PEP, AML, RISK
+  status          String   @default("PENDING") // PENDING, APPROVED, REJECTED, REVIEW
+  data            Json?
+  reviewerId      String?
+  reviewedAt      DateTime?
+  notes           String?
+  createdAt       DateTime @default(now())
+  
+  @@index([entityType, entityId])
+  @@index([status])
+}
+
+model AMLAlert {
+  id              String   @id @default(cuid())
+  entityType      String
+  entityId        String
+  alertType       String   // STRUCTURING, VELOCITY, HIGH_RISK_CORRIDOR, PEP, SANCTIONS_HIT
+  severity        String   // LOW, MEDIUM, HIGH, CRITICAL
+  score           Float
+  details         Json?
+  status          String   @default("OPEN") // OPEN, INVESTIGATING, ESCALATED, CLOSED, SAR_FILED
+  assignedTo      String?
+  createdAt       DateTime @default(now())
+  closedAt        DateTime?
+  
+  @@index([status])
+  @@index([entityId])
+}
+
+model SAR {
+  id              String   @id @default(cuid())
+  caseId          String?
+  filedBy         String
+  narrative       String
+  amount          Float
+  entities        String[]
+  regulatoryRef   String?
+  status          String   @default("DRAFT") // DRAFT, FILED, ACKNOWLEDGED
+  filedAt         DateTime?
+  createdAt       DateTime @default(now())
+  
+  @@index([status])
+}
+
+// === AUDIT ===
+model AuditLog {
+  id              String   @id @default(cuid())
+  userId          String?
+  action          String
+  resourceType    String
+  resourceId      String?
+  result          String   // SUCCESS, DENIED, ERROR
+  ip              String?
+  userAgent       String?
+  details         Json?
+  createdAt       DateTime @default(now())
+  
+  user            User?    @relation(fields: [userId], references: [id])
+  
+  @@index([userId])
+  @@index([action])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+}
+
+// === ENUMS ===
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  FROZEN
+}
+
+enum Role {
+  CUSTOMER
+  MERCHANT
+  MERCHANT_STAFF
+  LP
+  TREASURY
+  COMPLIANCE
+  SUPPORT
+  DEVELOPER
+  OPERATIONS
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum AccountType {
+  CUSTOMER
+  MERCHANT
+  LP
+}
+
+enum AccountStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum MerchantTier {
+  UNVERIFIED
+  VERIFIED
+  TRUSTED
+  PREMIUM
+}
+
+enum MerchantStatus {
+  PENDING
+  VERIFIED
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SETTLING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum PayoutStatus {
+  REQUESTED
+  REVIEWING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum WaitlistStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CONVERTED
 }
 ```
 
-### 4.2 Extension Lifecycle
+---
 
+## 6. Authentication Flow
+
+### Signup (Waitlist)
 ```
-Submitted → Reviewed → Approved → Installed → Enabled → Running
-  ↓                                                ↓
-Rejected                                      Disabled
-                                                   ↓
-                                               Suspended
-                                                   ↓
-                                               Removed
-```
-
-State machine transitions are governed by the State Machine Engine (no special-case code).
-
-### 4.3 Extension Security Model
-
-**Principle**: Extensions NEVER manipulate balances directly. They submit Intents; the kernel converges.
-
-| Layer | Mechanism |
-|---|---|
-| Capability-based | Extensions can only exercise declared capabilities |
-| Permission-scoped | Each command requires a specific permission |
-| Resource-limited | Max entities, commands/sec, storage enforced |
-| Sandboxed | Extensions run in isolated context; cannot access other extensions' state |
-| Auditable | Every extension action is logged in the audit trail |
-| Constitution-bound | Extensions cannot override Constitution invariants |
-
-### 4.4 Extension SDK
-
-```typescript
-// The SDK extensions use to interact with the kernel
-interface ExtensionSDK {
-  // Submit an intent for convergence
-  converge(intent: ConvergenceIntent): Promise<SolverOutput>;
-
-  // Register entities
-  registerEntity(entity: Entity): void;
-
-  // Subscribe to events
-  on(eventType: string, handler: (event: WorldEvent) => void): void;
-
-  // Emit events
-  emit(event: { type: string; payload: Record<string, unknown> }): void;
-
-  // Query the world
-  query(filter: (e: Entity) => boolean): Entity[];
-
-  // Read-only access to capabilities registry
-  capabilities: CapabilityRegistry;
-}
+Guest → /waitlist → fills form (company, name, email, phone, country, business type)
+  → WaitlistEntry created (status: PENDING)
+  → Guest sees "You're on the waitlist" confirmation
+  → Admin reviews at /admin/waitlist
+  → Admin approves → status: APPROVED
+  → User receives email with signup link
+  → User sets password → User created (status: ACTIVE)
+  → User assigned role based on business type
 ```
 
-### 4.5 Event Contracts
-
-Extensions subscribe to a typed event stream. Every event has a contract:
-
-```typescript
-interface EventContract {
-  type: string;
-  schema: Record<string, SchemaField>;  // JSON schema for payload
-  version: string;
-  description: string;
-  producer: string;  // which extension/engine emits this
-  consumers: string[];  // which extensions subscribe
-}
+### Login
+```
+User → /login → enters email + password
+  → NextAuth credentials provider verifies
+  → If MFA enabled → prompts for TOTP code
+  → Session created (JWT + database session)
+  → Redirected to role-appropriate landing page
 ```
 
-### 4.6 Extension Communication
+### Demo Quick-Login
+```
+/login page has buttons for each demo role:
+  [Merchant] [Customer] [LP] [Treasury] [Compliance] [Support] [Developer] [Ops] [Admin]
+  → Each button logs in as a seeded demo account with realistic data
+  → Admin account: ekontetevi@gmail.com / Payswap123456
+```
 
-Extensions communicate **only** through:
-1. Events (pub/sub via the event store)
-2. Intents (submitted to the solver)
-3. Shared world state (read-only queries)
-
-Extensions **never** call each other directly. This prevents tight coupling and enables independent deployment.
+### Session Management
+- NextAuth JWT + database sessions
+- 24h session expiry
+- Sliding window (refresh on activity)
+- MFA support (TOTP)
+- Device tracking (IP + user agent)
 
 ---
 
-## 5. Mapping 20 Success Criteria to converge(intent)
+## 7. Design System
 
-Every workflow must execute through `converge(intent)` with no special-case code.
+### Color Palette
+- **Primary**: Emerald (financial, trustworthy) — `emerald-600`
+- **Accent**: Teal — `teal-500`
+- **Background**: `background` (white in light, `zinc-950` in dark)
+- **Surface**: `card` (slightly elevated)
+- **Border**: `border` (subtle)
+- **Text**: `foreground` (primary), `muted-foreground` (secondary)
+- **Status**: emerald (success), amber (warning), rose (error), sky (info)
+- **NO indigo or blue**
 
-| # | Workflow | Intent Type | Key Transitions |
-|---|---|---|---|
-| 1 | Domestic payment | `TransferLiquidity` | debit buyer → credit reserve → credit merchant |
-| 2 | Cross-border (reserves both) | `TransferLiquidity` | debit buyer → reserve A → escrow freeze → reserve B → credit merchant → escrow release |
-| 3 | Cross-border (source reserve only) | `TransferLiquidity` | debit buyer → reserve A → LP bridge → escrow → credit merchant |
-| 4 | Cross-border (dest reserve only) | `TransferLiquidity` | debit buyer → LP bridge → reserve B → credit merchant |
-| 5 | LP-only | `TransferLiquidity` | debit buyer → LP auction → escrow → credit merchant |
-| 6 | Reserve depletion + LP fallback | `TransferLiquidity` | reserve draw → insufficient → LP fallback (amendment) |
-| 7 | Liquidity auction (multiple LPs) | `TransferLiquidity` | auction request → LP bids → solver builds graph |
-| 8 | Manual settlement | `TransferLiquidity` | LP draw → WAITING_FOR_LP_SETTLEMENT → LP proof → merchant confirm |
-| 9 | Merchant dispute | `CreateClaim` | escrow freeze → evidence → voting → merchant wins → withdraw |
-| 10 | LP dispute | `CreateClaim` | escrow freeze → evidence → voting → LP wins → escrow return |
-| 11 | Merchant withdraws frozen tokens | `TransferLiquidity` | dispute won → escrow release to merchant |
-| 12 | Replacement LP settlement | `TransferLiquidity` | dispute won → merchant requests replacement → new LP settles → escrow transfers |
-| 13 | LP collateral slashing | `SlashCollateral` | fraud proven → collateral vault slash → reputation slash |
-| 14 | Merchant becomes LP | `StakeLP` | merchant opts in → stakes Twin Tokens → becomes LP entity |
-| 15 | LP withdrawal | `UnstakeLP` | LP requests → drain → withdraw → exit |
-| 16 | Treasury rebalance | `Rebalance` | reserve low → treasury borrows → rebalances |
-| 17 | Net settlement | `NetSettle` | corridor obligations netted → only delta settles |
-| 18 | Stablecoin-assisted | `ConvertStablecoin` | reserve unavailable → stablecoin bridge → settle |
-| 19 | Mass LP exit stress | `UnstakeLP` (batch) | multiple LPs exit → solver reroutes → constitution verified |
-| 20 | Complete replay | (replay) | time machine rewinds all transitions |
+### Typography
+- Sans: Geist Sans (loaded in layout)
+- Mono: Geist Mono (code, hashes, IDs)
+- Sizes: `text-xs` (labels), `text-sm` (body), `text-lg` (headings), `text-2xl` (page titles), `text-4xl` (hero)
 
-### Key insight: all 20 are the same problem
+### Spacing
+- Page padding: `p-6` (desktop), `p-4` (mobile)
+- Card padding: `p-4` or `p-6`
+- Section gap: `gap-6`
+- Element gap: `gap-2` or `gap-3`
 
-Every workflow is "given current world state and desired deltas, find the best sequence of valid transitions." The solver queries capabilities, the constitution validates, the executor applies transitions, the event store records truth. No special-case code needed — just different intent payloads.
+### Components (shadcn/ui — already installed)
+- **Layout**: Sidebar (726 LOC, unused!), Card, Separator, ScrollArea
+- **Navigation**: NavigationMenu, Breadcrumb, Tabs, Pagination
+- **Forms**: Input, Textarea, Select, Checkbox, Switch, Slider, Label
+- **Feedback**: Toast (sonner), Alert, Dialog, Progress, Skeleton
+- **Data**: Table, Badge, Avatar, Tooltip
+- **Actions**: Button, DropdownMenu, ContextMenu
 
----
+### Loading States
+- **Skeleton**: Use `<Skeleton>` for initial page load
+- **Spinner**: Inline loading for button actions
+- **Progress**: For multi-step operations
+- **Suspense**: Route-level loading.tsx files
 
-## 6. Design Challenges & Weaknesses
+### Empty States
+Every list view has a proper empty state:
+- Icon (large, muted)
+- Title (what's empty)
+- Description (what to do)
+- CTA button (primary action)
 
-### Challenge 1: Fiat observability gap
-**Problem**: The protocol models fiat as external, but the solver needs to know LP fiat capacity to route. If fiat disappears, the solver may produce infeasible plans.
+### Error States
+- **API errors**: Toast notification + inline error message
+- **404**: Custom not-found.tsx
+- **500**: Custom error.tsx
+- **Auth errors**: Redirect to /login
 
-**Mitigation**: FO attestations and LP proofs are first-class entities. The solver queries `canBridge` entities with a `fiatAttested` flag. If an attestation expires (TTL), the entity's capability is temporarily revoked. The constitution invariant "fiat availability" checks attestations.
-
-**Weakness**: Attestation TTL introduces a race condition. An LP may attest fiat, the solver builds a plan, but fiat disappears before execution completes.
-
-**Improvement**: Add a "fiat confirmation" transition in the execution graph. The executor pauses at this transition until the FO confirms fiat availability. If confirmation times out, the compensation transition fires (rollback + reroute).
-
-### Challenge 2: Escrow as insurance substitute
-**Problem**: Replacing insurance with escrow works for individual transactions, but what about systemic failures (mass LP exit, country outage)?
-
-**Mitigation**: Escrow handles per-transaction guarantees. Systemic failures are handled by the treasury (borrowing LP liquidity) and the constitution (circuit breakers that halt new transactions when reserve health drops below threshold).
-
-**Weakness**: If treasury is also depleted, there's no backstop.
-
-**Improvement**: Add a "protocol circuit breaker" as a constitution invariant. When aggregate exposure exceeds treasury capacity, new transactions are halted. This is a block-level invariant, not a policy.
-
-### Challenge 3: Auction latency vs settlement speed
-**Problem**: Liquidity auctions add latency (LPs need time to bid). Fastest routing preference conflicts with auctions.
-
-**Mitigation**: Auctions are one candidate type among 8. The solver compares auction vs static. For "fastest" preference, static routing wins; for "cheapest," auctions may win.
-
-**Weakness**: Auction deadline (20s) may be too slow for real-time payments.
-
-**Improvement**: Support "instant" auctions with pre-authorized LPs (LPs pre-commit to providing liquidity at a declared rate). The solver treats pre-authorized LPs as static candidates but still runs the auction in parallel for potential improvement.
-
-### Challenge 4: Net settlement complexity
-**Problem**: Net settlement requires maintaining corridor obligations over time — this is stateful and temporal, unlike the current stateless converge model.
-
-**Mitigation**: Corridor obligations are entities (type `corridor_obligation`) with balances. The solver queries these entities and produces a `NetSettle` command that only moves the delta.
-
-**Weakness**: Netting windows introduce a timing dependency. Obligations accrue between settlement windows.
-
-**Improvement**: Make netting windows configurable via Organization Policy. The solver includes net settlement as a candidate only when a netting window is open.
-
-### Challenge 5: Extension sandboxing
-**Problem**: Extensions run in the same process (Next.js). True sandboxing requires separate processes or WASM.
-
-**Mitigation**: Capability-based security prevents direct balance manipulation. Resource limits prevent abuse. Audit trail detects violations.
-
-**Weakness**: A malicious extension could still cause memory leaks or infinite loops.
-
-**Improvement**: For production, extensions should run in WASM modules or separate worker processes. For v1, capability-based security + resource limits + audit is sufficient. Document this as a known limitation.
-
-### Challenge 6: Reputation gaming
-**Problem**: LPs could game reputation by splitting transactions or creating shell merchants.
-
-**Mitigation**: Reputation is derived from multiple independent signals (success rate, latency, proof quality, dispute outcomes). Splitting transactions doesn't improve per-transaction success rate. Shell merchants have low trust tiers (low dispute weight).
-
-**Weakness**: Sybil attacks (creating many LP identities) could dilute reputation penalties.
-
-**Improvement**: LP registration requires collateral (staked Twin Tokens). The collateral creates a sybil-resistance cost. Reputation slashing affects staked collateral, making sybil attacks expensive.
-
-### Challenge 7: Expected Cost computation
-**Problem**: Expected Cost requires probabilities (failure_probability, fx_risk) that are hard to estimate for new corridors.
-
-**Mitigation**: Use historical data from the event store. For new corridors, default to conservative estimates that relax over time as data accumulates.
-
-**Weakness**: Cold-start problem — new LPs have no history.
-
-**Improvement**: New LPs start with a "probationary" reputation tier. Their authorized exposure is capped until they complete N successful settlements. The solver applies a "probationary penalty" to their expected cost.
+### Responsive Breakpoints
+- `sm` (640px): Mobile → tablet
+- `md` (768px): Tablet → desktop
+- `lg` (1024px): Desktop → wide
+- `xl` (1280px): Wide → ultrawide
+- Sidebar collapses to drawer on mobile
+- Tables become cards on mobile
+- Forms stack vertically on mobile
 
 ---
 
-## 7. Proposed Improvements
+## 8. Shared Component Inventory
 
-### Improvement 1: Protocol Circuit Breaker
-Add a constitution invariant that halts new transactions when:
-- Aggregate exposure > treasury capacity × 0.8
-- Reserve health < critical threshold in any corridor
-- LP mass exit rate > threshold
-
-This prevents cascading failures and protects the protocol from systemic risk.
-
-### Improvement 2: Fiat Attestation TTL
-Model FO attestations as entities with a TTL. The solver only considers LPs with valid (non-expired) attestations. The executor verifies attestation at execution time (not just planning time).
-
-### Improvement 3: Probationary LP Tier
-New LPs start probationary with capped exposure. After N successful settlements, they graduate to full LP status. This prevents sybil attacks and builds trust gradually.
-
-### Improvement 4: Pre-authorized Liquidity
-LPs can pre-commit to providing liquidity at declared rates. The solver treats these as static candidates (instant) while running auctions in parallel (potentially cheaper).
-
-### Improvement 5: Settlement Proof Chain
-Every settlement produces a cryptographic proof recorded on-chain. This creates an immutable audit trail that can be independently verified — essential for dispute resolution and regulatory compliance.
-
-### Improvement 6: Corridor Obligation Entities
-Model net settlement obligations as first-class entities. The solver queries corridor balances and produces net settlement commands. This makes netting a natural part of the capability graph.
-
-### Improvement 7: Merchant Bond Escrow
-When merchants file disputes, their bond is escrowed. If the dispute is fraudulent, the bond is slashed. This prevents frivolous disputes and aligns merchant incentives.
+| Component | Purpose | Used By |
+|-----------|---------|---------|
+| `AppShell` | Layout shell with sidebar + header | All authenticated pages |
+| `Sidebar` | Role-based navigation | All authenticated pages |
+| `PageHeader` | Page title + actions + breadcrumb | All pages |
+| `DataTable` | Sortable, paginated table | All list views |
+| `StatCard` | KPI card with label + value + trend | All dashboards |
+| `StatusBadge` | Colored status badge | Payments, payouts, etc. |
+| `AmountDisplay` | Currency-formatted amount | Everywhere money is shown |
+| `EmptyState` | Standard empty state | All list views |
+| `LoadingSkeleton` | Standard skeleton | All pages |
+| `ErrorBoundary` | Route-level error handler | All routes |
+| `ConfirmDialog` | Confirmation dialog | Destructive actions |
+| `SearchInput` | Debounced search | All list views |
+| `DateRangePicker` | Date filter | Analytics, reports |
+| `FileUpload` | File upload (KYC docs, logos) | KYC, settings |
+| `Toast` | Notification (sonner) | Everywhere |
+| `Modal` | Dialog wrapper | Forms, confirmations |
 
 ---
 
-## 8. Folder Structure
+## 9. Key Architecture Decisions
 
-```
-src/
-├── kernel/                          # FROZEN — no changes to runtime architecture
-│   ├── (existing 43 modules)        # World, Solver, Execution, Constitution, etc.
-│   └── index.ts                     # Public API (kernel.converge, etc.)
-│
-├── protocol/                        # NEW — PaySwap protocol economics
-│   ├── contracts/                   # Smart contract interfaces (8 contracts)
-│   │   ├── twin-token.ts            # Mint, burn, transfer, lock, unlock
-│   │   ├── liquidity-pool.ts        # LP staking, pool accounting
-│   │   ├── settlement-escrow.ts     # Freeze, release, slash (state machine)
-│   │   ├── collateral-vault.ts      # Lock, slash, release
-│   │   ├── governance.ts            # Proposals, voting, execution
-│   │   ├── treasury.ts              # Vault balances, rebalance, borrow
-│   │   ├── lp-registry.ts           # LP registration, exposure, reputation
-│   │   └── merchant-registry.ts     # Merchant tiers, bonds, penalties
-│   │
-│   ├── economics/                   # Protocol economic models
-│   │   ├── authorized-exposure.ts   # Dynamic LP exposure calculation
-│   │   ├── reputation.ts            # LP + merchant reputation scoring
-│   │   ├── expected-cost.ts         # Expected cost routing model
-│   │   ├── trust-tiers.ts           # Merchant trust tier system
-│   │   └── fraud-classification.ts  # Fraud detection + penalties
-│   │
-│   ├── settlement/                  # Settlement mechanisms
-│   │   ├── escrow.ts                # Escrow lifecycle
-│   │   ├── disputes.ts              # Dispute resolution flow
-│   │   ├── auctions.ts              # Liquidity auctions
-│   │   ├── net-settlement.ts        # Corridor netting
-│   │   └── manual-settlement.ts     # Manual settlement workflow
-│   │
-│   ├── routing/                     # Protocol-specific routing candidates
-│   │   ├── hybrid-router.ts         # 8 candidate types
-│   │   ├── auction-router.ts        # Auction-based candidate
-│   │   ├── net-router.ts            # Net settlement candidate
-│   │   └── deferred-router.ts       # Deferred settlement candidate
-│   │
-│   └── intents/                     # Protocol intent builders
-│       ├── payment.ts               # TransferLiquidity intent
-│       ├── dispute.ts               # CreateClaim intent
-│       ├── lp-stake.ts              # StakeLP / UnstakeLP intents
-│       ├── rebalance.ts             # Rebalance intent
-│       └── net-settle.ts            # NetSettle intent
-│
-├── extensions/                      # NEW — Extension Platform
-│   ├── platform/                    # Extension runtime
-│   │   ├── registry.ts              # Extension registration
-│   │   ├── lifecycle.ts             # Install/enable/disable/remove
-│   │   ├── sandbox.ts               # Capability-based sandboxing
-│   │   ├── sdk.ts                   # Extension SDK (converge, query, emit)
-│   │   └── manifest.ts              # Manifest validation
-│   │
-│   ├── contracts/                   # Extension event contracts
-│   │   └── event-contracts.ts       # Typed event schemas
-│   │
-│   └── built-in/                    # Built-in extensions (protocol as extension)
-│       ├── payments/                # Payment extension
-│       ├── lp-operations/           # LP staking/withdrawal extension
-│       ├── disputes/                # Dispute resolution extension
-│       ├── treasury/                # Treasury management extension
-│       └── governance/              # Governance extension
-│
-├── app/                             # Next.js app (unchanged structure)
-│   ├── page.tsx                     # Digital Twin UI
-│   └── api/                         # API routes
-│       ├── simulate/                # Kernel simulation
-│       └── scenarios/               # Scenario library
-│
-└── components/                      # UI components
-    ├── simulator/                   # Existing Digital Twin panels
-    └── protocol/                    # NEW — Protocol-specific panels
-        ├── escrow-panel.tsx
-        ├── dispute-panel.tsx
-        ├── reputation-panel.tsx
-        └── auction-panel.tsx
-```
-
-### Key structural principle
-
-The `kernel/` folder is **frozen** — zero changes. The `protocol/` folder implements the real PaySwap protocol as **data and capabilities** on top of the kernel. The `extensions/` folder provides the extension platform. Everything flows through `kernel.converge(intent)`.
-
----
-
-## 9. Implementation Plan (Phase 2)
-
-Phase 2 implements incrementally, verifying each subsystem before moving to the next.
-
-### Step 1: Protocol entities + contracts (foundation)
-- Add new entity types: `settlement_escrow`, `collateral_vault`, `liquidity_pool` (refactored)
-- Add new capabilities: `canFreeze, canRelease, canSlash, canLock, canAuction, canNetSettle`
-- Implement 8 smart contract interfaces as entity registries
-- Verify: entities + contracts register correctly
-
-### Step 2: Settlement escrow state machine
-- Add escrow state machine: `Created → Frozen → Releasing → Released | Disputed → ...`
-- Implement escrow freeze/release/slash as Transitions
-- Verify: escrow lifecycle transitions correctly
-
-### Step 3: Authorized exposure + reputation
-- Implement dynamic LP exposure calculation (10-factor model)
-- Implement LP reputation scoring
-- Implement merchant trust tiers
-- Verify: exposure/reputation updates on settlement events
-
-### Step 4: Expected cost routing
-- Implement Expected Cost model (8 components)
-- Replace fee-based scoring with expected cost in the solver
-- Verify: solver optimizes expected cost, not just fee
-
-### Step 5: Hybrid routing (8 candidates)
-- Implement all 8 candidate generators (reserve, LP, reserve+LP, multi-LP, stablecoin, deferred, net, auction)
-- Verify: solver compares all candidates
-
-### Step 6: Liquidity auctions
-- Implement auction entity + state machine
-- Implement auction candidate in solver
-- Verify: auction selects optimal LP combination
-
-### Step 7: Dispute resolution
-- Implement dispute state machine
-- Implement evidence collection + voting + adjudication
-- Implement escrow release/slash/transfer outcomes
-- Verify: all dispute paths work
-
-### Step 8: Net settlement
-- Implement corridor obligation entities
-- Implement net settlement candidate
-- Verify: corridor netting minimizes gross movement
-
-### Step 9: Manual settlement + collateral
-- Implement WAITING_FOR_LP_SETTLEMENT state
-- Implement LP proof submission + merchant confirmation
-- Implement collateral vault slash
-- Verify: manual settlement lifecycle
-
-### Step 10: Extension platform
-- Implement manifest validation
-- Implement extension lifecycle (install/enable/disable/remove)
-- Implement Extension SDK
-- Implement event contracts
-- Verify: extensions can register capabilities + submit intents
-
-### Step 11: 20 success criteria verification
-- Implement all 20 workflows as converge(intent) calls
-- Verify each via Agent Browser
-- No special-case code — all flow through the same pipeline
-
-### Step 12: Digital Twin expansion
-- Add protocol-specific UI panels (escrow, disputes, auctions, reputation)
-- Add stress test scenarios (mass LP exit, country outage, stablecoin depeg)
-- Verify: every scenario executes identically to production
-
----
-
-## Conclusion
-
-This design replaces placeholder financial logic with the real PaySwap protocol while keeping the frozen v1.0 runtime. The key insight is that **every protocol feature is expressed as data (entities, capabilities, policies) + intents** — no new architectural layers.
-
-The main risks are:
-1. Fiat observability gaps (mitigated by attestation TTL + execution-time verification)
-2. Escrow as insurance substitute (mitigated by circuit breakers + treasury backstop)
-3. Extension sandboxing (mitigated by capability-based security; WASM for production)
-
-The 20 success criteria validate that the architecture is genuinely general-purpose. If all 20 execute through `converge(intent)` with no special-case code, the architecture is proven.
-
-**Next**: Phase 2 — implement incrementally starting with protocol entities + contracts.
+1. **NextAuth credentials provider** — not OAuth (users can't self-signup; waitlist flow)
+2. **Database sessions** — not JWT-only (need to revoke sessions, track devices)
+3. **Role-based routing** — each role has its own layout group (`/dashboard/*`, `/treasury/*`, etc.)
+4. **Server Components by default** — client components only for interactive elements
+5. **API routes use server-side auth** — every API route checks session + permissions
+6. **Prisma for all data access** — no in-memory Maps for domain state
+7. **Soft deletes** — `deletedAt` field on all major models
+8. **Audit log** — every state-changing action logged to `AuditLog`
+9. **Feature flags** — gate new features, enable per-merchant
+10. **Design system** — consistent shadcn/ui usage, no custom CSS except theme tokens

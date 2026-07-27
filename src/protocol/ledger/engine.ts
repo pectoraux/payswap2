@@ -1,492 +1,425 @@
 /**
- * PaySwap Protocol — Double-Entry Ledger Engine.
- * -----------------------------------------------------------------------------
- * The LedgerEngine holds an append-only journal of balanced JournalEntry
- * objects and exposes derived views:
- *   - getJournal(filter?)            — filtered list of journal entries
- *   - getAccountBalance(code, ts?)   — per-currency + aggregate balance
- *   - getTrialBalance(ts?)           — per-currency trial balance (must sum to zero)
- *   - getBalanceSheet(ts?)           — assets = liabilities + equity
- *   - getIncomeStatement(from, to?)  — revenue − expenses
- *   - verifyIntegrity()              — recomputes the trial balance from the journal
+ * PaySwap Protocol — Ledger Engine.
  *
- * INVARIANTS:
- *   1. Every JournalEntry posted is balanced per currency (validated in entry.ts).
- *   2. The trial balance always sums to zero per currency.
- *   3. The journal is append-only — no in-place mutation of historical entries.
+ * The LedgerEngine is the protocol-layer double-entry accounting engine. It
+ * owns the journal of posted entries and exposes balance, trial-balance,
+ * balance-sheet, income-statement, and integrity queries.
  *
- * `post()` also emits a `ledger.posted` event through the kernel event bus so
- * other protocol modules can react (e.g. snapshot capture, reconciliation
- * triggers). The kernel is NOT mutated — only the event stream is appended to.
+ * Difference from the kernel's `LedgerEngine` (in `src/kernel/ledger.ts`):
+ *   - The kernel ledger is a simulation-state bookkeeping tool — single
+ *     PostInput legs, attached to a WorldState.
+ *   - This protocol ledger is the canonical financial book: balanced
+ *     JournalEntry postings, a chart of accounts, full reporting.
+ *
+ * The protocol ledger is what the reconciliation layer, the persistence
+ * layer, and external auditors consult. The kernel ledger feeds it via the
+ * projection layer (see `projection.ts`).
  */
-import { round } from '@/kernel/support';
+import { uid, nowTs, round } from '@/kernel/support';
 import { eventEngine } from '@/kernel/event';
-import { getAccount } from './accounts';
+import { accountType } from './accounts';
 import {
   createJournalEntry,
   validateBalanced,
   type JournalEntry,
-  type JournalLineInput,
+  type LedgerEntry,
+  type CreateJournalEntryParams,
+  type BalanceCheckResult,
 } from './entry';
 
+/** Filter for `getJournal()`. */
 export interface JournalFilter {
+  /** Filter by transaction id. */
   txId?: string;
+  /** Filter by account code (exact match on leg.accountCode). */
   accountCode?: string;
-  /** Inclusive lower bound (ms). */
+  /** Filter by currency. */
+  currency?: string;
+  /** Only entries at or after this timestamp. */
   fromTs?: number;
-  /** Inclusive upper bound (ms). */
+  /** Only entries at or before this timestamp. */
   toTs?: number;
-  /** Restrict to entries whose `frame` matches. */
-  frame?: number;
-  /** Substring match on description. */
-  descriptionContains?: string;
+  /** Only entries from this simulation frame onward. */
+  fromFrame?: number;
+  /** Only entries from this simulation frame or earlier. */
+  toFrame?: number;
 }
 
-export interface AccountBalanceResult {
-  accountCode: string;
-  /** Sum of all debit lines (across currencies, summed as raw numbers). */
+/** Trial balance for one account. */
+export interface AccountTrialBalance {
   debit: number;
-  /** Sum of all credit lines (across currencies, summed as raw numbers). */
   credit: number;
-  /** Signed balance: debit − credit (positive = debit balance, negative = credit balance). */
+  /** Signed balance: debit − credit (positive = debit-normal). */
   balance: number;
-  /** Per-currency breakdown. */
-  byCurrency: Record<string, { debit: number; credit: number; balance: number }>;
 }
 
-export interface TrialBalanceResult {
-  asOfTs: number | null;
-  byCurrency: Record<
-    string,
-    {
-      accounts: Array<{ accountCode: string; debit: number; credit: number; balance: number }>;
-      totalDebits: number;
-      totalCredits: number;
-      delta: number;
-      balanced: boolean;
-    }
-  >;
-  /** Global debit total (sum of every line's debit, across all currencies). */
+/** Trial balance for the whole ledger. */
+export interface TrialBalance {
   totalDebits: number;
-  /** Global credit total (sum of every line's credit, across all currencies). */
   totalCredits: number;
-  /** True iff every per-currency delta is within epsilon of zero. */
   balanced: boolean;
+  accounts: Record<string, AccountTrialBalance>;
 }
 
-export interface BalanceSheetResult {
-  asOfTs: number | null;
-  assets: AccountBalanceResult[];
-  liabilities: AccountBalanceResult[];
-  equity: AccountBalanceResult[];
-  /** Sum of asset balances (debit-positive). */
-  totalAssets: number;
-  /** Sum of liability balances (credit-positive). */
-  totalLiabilities: number;
-  /** Sum of equity balances (credit-positive). */
-  totalEquity: number;
-  /** assets − liabilities − equity (must be ~0). */
-  delta: number;
-  balanced: boolean;
+/** Balance sheet grouping. */
+export interface BalanceSheetGroup {
+  /** Account codes and their signed balances. */
+  accounts: Record<string, number>;
+  /** Sum of the group (with proper sign for the equation). */
+  total: number;
 }
 
-export interface IncomeStatementResult {
+export interface BalanceSheet {
+  assets: BalanceSheetGroup;
+  liabilities: BalanceSheetGroup;
+  equity: BalanceSheetGroup;
+  balanced: boolean;
+  /** Discrepancy between assets and (liabilities + equity). */
+  discrepancy: number;
+}
+
+/** Income statement. */
+export interface IncomeStatement {
   fromTs: number;
   toTs: number;
-  revenue: AccountBalanceResult[];
-  expenses: AccountBalanceResult[];
+  revenue: Record<string, number>;
+  expenses: Record<string, number>;
   totalRevenue: number;
   totalExpenses: number;
-  /** revenue − expenses. */
+  /** revenue − expenses (net income). */
   netIncome: number;
 }
 
-export interface IntegrityResult {
+/** Integrity verification result. */
+export interface IntegrityReport {
   balanced: boolean;
   totalDebits: number;
   totalCredits: number;
-  /** |totalDebits − totalCredits| — must be ~0. */
+  /** totalDebits − totalCredits (should be 0). */
   discrepancy: number;
-  /** Per-currency deltas. */
-  byCurrency: Record<string, number>;
+  /** Per-currency breakdown. */
+  currencies: BalanceCheckResult['currencies'];
+  /** Number of journal entries scanned. */
+  entryCount: number;
 }
 
-const EPSILON = 1e-6;
-
+/**
+ * LedgerEngine — owns the journal, validates postings, answers queries.
+ * Use the exported `ledgerEngine` singleton for the protocol-wide ledger.
+ */
 export class LedgerEngine {
-  /** Append-only journal of posted entries. */
-  private journal: JournalEntry[] = [];
-  /** Monotonic sequence counter — assigned to each line at post time. */
-  private nextSeq = 1;
+  private journals: JournalEntry[] = [];
+  private entries: LedgerEntry[] = [];
+  private nextSeq = 0;
 
-  /** Post a balanced journal entry. Emits `ledger.posted` event. */
-  post(entry: JournalEntry): JournalEntry {
-    // Re-validate the balance invariant — defense in depth.
-    const check = validateBalanced(entry);
+  /** Post a balanced journal entry. Validates balance, appends, emits `ledger.posted`. */
+  post(journal: JournalEntry): JournalEntry {
+    const check = validateBalanced(journal);
     if (!check.balanced) {
-      throw new Error(`Refusing to post unbalanced journal entry ${entry.id} — ${JSON.stringify(check.byCurrency)}`);
+      throw new Error(
+        `cannot post unbalanced journal entry ${journal.id} — ${check.mismatches
+          .map((m) => `currency ${m.currency}: debit ${m.totalDebit} ≠ credit ${m.totalCredit}`)
+          .join('; ')}`,
+      );
     }
-    // Stamp each line with a monotonic ledgerSeq. We clone the entry to avoid
-    // mutating the caller's frozen object.
-    const seqStart = this.nextSeq;
-    const stampedEntries = entry.entries.map((line, idx) => ({
-      ...line,
-      ledgerSeq: seqStart + idx,
-    }));
-    this.nextSeq += stampedEntries.length;
-    const stamped: JournalEntry = {
-      ...entry,
-      entries: stampedEntries,
-    };
-    this.journal.push(stamped);
 
-    // Notify the bus — purely additive, no kernel mutation.
+    // Assign canonical ledger sequences (the journal's legs may have been
+    // built with a tentative startSeq — overwrite with the real counter).
+    for (const leg of journal.entries) {
+      leg.ledgerSeq = this.nextSeq++;
+    }
+
+    this.journals.push(journal);
+    this.entries.push(...journal.entries);
+
     eventEngine.emit(
       'ledger.posted',
       {
-        journalId: stamped.id,
-        txId: stamped.txId,
-        description: stamped.description,
-        lineCount: stamped.entries.length,
-        totalDebit: round(stamped.entries.reduce((s, e) => s + e.debit, 0), 6),
-        totalCredit: round(stamped.entries.reduce((s, e) => s + e.credit, 0), 6),
-        currencies: [...new Set(stamped.entries.map((e) => e.currency))],
-        ts: stamped.ts,
-        frame: stamped.frame ?? 0,
+        journalId: journal.id,
+        txId: journal.txId,
+        description: journal.description,
+        legCount: journal.entries.length,
+        currencies: check.currencies.map((c) => c.currency),
+        ts: journal.ts,
+        frame: journal.frame ?? 0,
       },
-      stamped.frame ?? 0,
+      journal.frame ?? 0,
     );
 
-    return stamped;
+    return journal;
   }
 
-  /** Convenience: build + post in one call. */
-  postLines(params: {
-    txId?: string;
-    description: string;
-    ts?: number;
-    frame?: number;
-    lines: JournalLineInput[];
-    evidenceId?: string;
-  }): JournalEntry {
-    const entry = createJournalEntry(params);
-    return this.post(entry);
+  /** Convenience: build and post a journal entry from raw legs in one call. */
+  postFromLegs(params: Omit<CreateJournalEntryParams, 'startSeq'>): JournalEntry {
+    const journal = createJournalEntry({ ...params, startSeq: this.nextSeq });
+    return this.post(journal);
   }
 
-  /** All entries matching the filter (or all entries if no filter). */
+  /** Return journals matching the filter, in post order. */
   getJournal(filter?: JournalFilter): JournalEntry[] {
-    let list = [...this.journal];
-    if (filter?.txId) list = list.filter((j) => j.txId === filter.txId);
-    if (filter?.accountCode) {
-      list = list.filter((j) => j.entries.some((e) => e.accountCode === filter.accountCode));
-    }
-    if (filter?.fromTs != null) list = list.filter((j) => j.ts >= filter.fromTs!);
-    if (filter?.toTs != null) list = list.filter((j) => j.ts <= filter.toTs!);
-    if (filter?.frame != null) list = list.filter((j) => j.frame === filter.frame);
-    if (filter?.descriptionContains) {
-      const needle = filter.descriptionContains.toLowerCase();
-      list = list.filter((j) => j.description.toLowerCase().includes(needle));
-    }
-    return list.sort((a, b) => a.ts - b.ts);
+    if (!filter) return [...this.journals];
+    return this.journals.filter((j) => {
+      if (filter.txId && j.txId !== filter.txId) return false;
+      if (filter.fromTs != null && j.ts < filter.fromTs) return false;
+      if (filter.toTs != null && j.ts > filter.toTs) return false;
+      if (filter.fromFrame != null && (j.frame ?? 0) < filter.fromFrame) return false;
+      if (filter.toFrame != null && (j.frame ?? 0) > filter.toFrame) return false;
+      if (filter.accountCode || filter.currency) {
+        const legMatch = j.entries.some(
+          (e) =>
+            (!filter.accountCode || e.accountCode === filter.accountCode) &&
+            (!filter.currency || e.currency === filter.currency),
+        );
+        if (!legMatch) return false;
+      }
+      return true;
+    });
   }
 
-  /** All individual lines (flattened), optionally filtered. */
-  getLines(filter?: JournalFilter): Array<JournalEntry['entries'][number] & { journalId: string; description: string }> {
-    const out: Array<JournalEntry['entries'][number] & { journalId: string; description: string }> = [];
-    for (const j of this.getJournal(filter)) {
-      for (const line of j.entries) {
-        out.push({ ...line, journalId: j.id, description: j.description });
-      }
-    }
-    return out;
-  }
-
-  /** Compute the balance for an account (optionally up to asOfTs). */
-  getAccountBalance(accountCode: string, asOfTs?: number): AccountBalanceResult {
-    const byCurrency: Record<string, { debit: number; credit: number; balance: number }> = {};
-    let totalDebit = 0;
-    let totalCredit = 0;
-    for (const j of this.journal) {
-      if (asOfTs != null && j.ts > asOfTs) continue;
-      for (const line of j.entries) {
-        if (line.accountCode !== accountCode) continue;
-        if (!byCurrency[line.currency]) byCurrency[line.currency] = { debit: 0, credit: 0, balance: 0 };
-        byCurrency[line.currency].debit = round(byCurrency[line.currency].debit + line.debit, 6);
-        byCurrency[line.currency].credit = round(byCurrency[line.currency].credit + line.credit, 6);
-        totalDebit = round(totalDebit + line.debit, 6);
-        totalCredit = round(totalCredit + line.credit, 6);
-      }
-    }
-    for (const c of Object.keys(byCurrency)) {
-      byCurrency[c].balance = round(byCurrency[c].debit - byCurrency[c].credit, 6);
-    }
-    return {
-      accountCode,
-      debit: totalDebit,
-      credit: totalCredit,
-      balance: round(totalDebit - totalCredit, 6),
-      byCurrency,
-    };
+  /** Return all individual ledger legs (flat) matching the filter, in post order. */
+  getEntries(filter?: JournalFilter): LedgerEntry[] {
+    if (!filter) return [...this.entries];
+    return this.entries.filter((e) => {
+      if (filter.txId && e.txId !== filter.txId) return false;
+      if (filter.accountCode && e.accountCode !== filter.accountCode) return false;
+      if (filter.currency && e.currency !== filter.currency) return false;
+      if (filter.fromTs != null && e.ts < filter.fromTs) return false;
+      if (filter.toTs != null && e.ts > filter.toTs) return false;
+      if (filter.fromFrame != null && (e.frame ?? 0) < filter.fromFrame) return false;
+      if (filter.toFrame != null && (e.frame ?? 0) > filter.toFrame) return false;
+      return true;
+    });
   }
 
   /**
-   * Compute the aggregate balance for an account-code PREFIX.
-   * E.g. `twintoken:circulating:` sums every line whose accountCode starts
-   * with `twintoken:circulating:` (covers the parent + any holder sub-accounts).
+   * Compute the signed balance for an account at a point in time.
+   * Balance is debit − credit. For debit-normal accounts (asset, expense)
+   * this is a positive asset; for credit-normal accounts (liability, equity,
+   * revenue) a positive balance reflects a credit balance.
+   *
+   * Multi-currency accounts return the sum across currencies (callers
+   * filtering by currency should pass it in the filter or use getEntries).
    */
-  getAccountBalanceByPrefix(prefix: string, asOfTs?: number): AccountBalanceResult {
-    const byCurrency: Record<string, { debit: number; credit: number; balance: number }> = {};
-    let totalDebit = 0;
-    let totalCredit = 0;
-    let matchedCode = prefix;
-    for (const j of this.journal) {
-      if (asOfTs != null && j.ts > asOfTs) continue;
-      for (const line of j.entries) {
-        if (!line.accountCode.startsWith(prefix)) continue;
-        matchedCode = line.accountCode.slice(0, prefix.length);
-        if (!byCurrency[line.currency]) byCurrency[line.currency] = { debit: 0, credit: 0, balance: 0 };
-        byCurrency[line.currency].debit = round(byCurrency[line.currency].debit + line.debit, 6);
-        byCurrency[line.currency].credit = round(byCurrency[line.currency].credit + line.credit, 6);
-        totalDebit = round(totalDebit + line.debit, 6);
-        totalCredit = round(totalCredit + line.credit, 6);
-      }
+  getAccountBalance(accountCode: string, asOfTs?: number): number {
+    let balance = 0;
+    for (const e of this.entries) {
+      if (e.accountCode !== accountCode) continue;
+      if (asOfTs != null && e.ts > asOfTs) continue;
+      balance = round(balance + e.debit - e.credit, 6);
     }
-    for (const c of Object.keys(byCurrency)) {
-      byCurrency[c].balance = round(byCurrency[c].debit - byCurrency[c].credit, 6);
-    }
-    return {
-      accountCode: matchedCode,
-      debit: totalDebit,
-      credit: totalCredit,
-      balance: round(totalDebit - totalCredit, 6),
-      byCurrency,
-    };
+    return balance;
   }
 
-  /** All distinct account codes seen in the journal (optionally up to asOfTs). */
-  getAccountCodes(asOfTs?: number): string[] {
+  /** All account codes that have at least one leg, sorted alphabetically. */
+  activeAccounts(): string[] {
     const set = new Set<string>();
-    for (const j of this.journal) {
-      if (asOfTs != null && j.ts > asOfTs) continue;
-      for (const line of j.entries) set.add(line.accountCode);
-    }
+    for (const e of this.entries) set.add(e.accountCode);
     return [...set].sort();
   }
 
-  /** Trial balance: per-currency debits === credits (must sum to zero). */
-  getTrialBalance(asOfTs?: number): TrialBalanceResult {
-    interface CurrencyBucket {
-      accounts: Array<{ accountCode: string; debit: number; credit: number; balance: number }>;
-      totalDebits: number;
-      totalCredits: number;
-      delta: number;
-      balanced: boolean;
-    }
-    const acc: Record<string, CurrencyBucket> = {};
+  /** Total number of journal entries posted. */
+  count(): number {
+    return this.journals.length;
+  }
+
+  /** Total number of individual legs. */
+  legCount(): number {
+    return this.entries.length;
+  }
+
+  /** Compute a trial balance across all accounts (or up to `asOfTs`). */
+  getTrialBalance(asOfTs?: number): TrialBalance {
+    const accounts: Record<string, AccountTrialBalance> = {};
     let totalDebits = 0;
     let totalCredits = 0;
-
-    for (const code of this.getAccountCodes(asOfTs)) {
-      const bal = this.getAccountBalance(code, asOfTs);
-      for (const [currency, v] of Object.entries(bal.byCurrency)) {
-        if (v.debit === 0 && v.credit === 0) continue;
-        if (!acc[currency]) {
-          acc[currency] = {
-            accounts: [],
-            totalDebits: 0,
-            totalCredits: 0,
-            delta: 0,
-            balanced: false,
-          };
-        }
-        acc[currency].accounts.push({
-          accountCode: code,
-          debit: v.debit,
-          credit: v.credit,
-          balance: v.balance,
-        });
-        acc[currency].totalDebits = round(acc[currency].totalDebits + v.debit, 6);
-        acc[currency].totalCredits = round(acc[currency].totalCredits + v.credit, 6);
-        totalDebits = round(totalDebits + v.debit, 6);
-        totalCredits = round(totalCredits + v.credit, 6);
+    for (const e of this.entries) {
+      if (asOfTs != null && e.ts > asOfTs) continue;
+      let t = accounts[e.accountCode];
+      if (!t) {
+        t = { debit: 0, credit: 0, balance: 0 };
+        accounts[e.accountCode] = t;
       }
+      t.debit = round(t.debit + e.debit, 6);
+      t.credit = round(t.credit + e.credit, 6);
+      totalDebits = round(totalDebits + e.debit, 6);
+      totalCredits = round(totalCredits + e.credit, 6);
     }
-
-    let balanced = true;
-    for (const c of Object.keys(acc)) {
-      acc[c].delta = round(acc[c].totalDebits - acc[c].totalCredits, 6);
-      acc[c].balanced = Math.abs(acc[c].delta) < EPSILON;
-      if (!acc[c].balanced) balanced = false;
-      // Sort accounts within currency by code for determinism.
-      acc[c].accounts.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+    for (const code of Object.keys(accounts)) {
+      accounts[code].balance = round(accounts[code].debit - accounts[code].credit, 6);
     }
-
     return {
-      asOfTs: asOfTs ?? null,
-      byCurrency: acc,
       totalDebits,
       totalCredits,
-      balanced,
+      balanced: Math.abs(round(totalDebits - totalCredits, 6)) < 1e-6,
+      accounts,
     };
   }
 
-  /** Balance sheet: A = L + E (must hold).
-   *
-   * Revenue and expense accounts (the "nominal" accounts) are treated as
-   * current-period retained earnings — revenue (credit-normal) adds to
-   * equity, expense (debit-normal) subtracts. This is the standard
-   * "unclosed net income" treatment and makes the balance sheet balance
-   * without requiring an explicit period-close journal entry.
-   */
-  getBalanceSheet(asOfTs?: number): BalanceSheetResult {
-    const codes = this.getAccountCodes(asOfTs);
-    const assets: AccountBalanceResult[] = [];
-    const liabilities: AccountBalanceResult[] = [];
-    const equity: AccountBalanceResult[] = [];
-    let retainedRevenue = 0;
-    let retainedExpense = 0;
-    for (const code of codes) {
-      const bal = this.getAccountBalance(code, asOfTs);
-      // Skip accounts with zero net balance AND zero movement.
-      if (bal.debit === 0 && bal.credit === 0) continue;
-      const meta = getAccount(code);
-      switch (meta.type) {
+  /** Build a balance sheet: assets = liabilities + equity. */
+  getBalanceSheet(asOfTs?: number): BalanceSheet {
+    const tb = this.getTrialBalance(asOfTs);
+    const assets: Record<string, number> = {};
+    const liabilities: Record<string, number> = {};
+    const equity: Record<string, number> = {};
+
+    let assetTotal = 0;
+    let liabilityTotal = 0;
+    let equityTotal = 0;
+
+    for (const code of Object.keys(tb.accounts)) {
+      const t = tb.accounts[code];
+      const type = accountType(code);
+      // Convert to "natural" balance:
+      //   asset/expense → debit-positive
+      //   liability/equity/revenue → credit-positive
+      const natural = type === 'asset' || type === 'expense' ? t.balance : -t.balance;
+      switch (type) {
         case 'asset':
-          assets.push(bal);
+          assets[code] = natural;
+          assetTotal = round(assetTotal + natural, 6);
           break;
         case 'liability':
-          liabilities.push(bal);
+          liabilities[code] = natural;
+          liabilityTotal = round(liabilityTotal + natural, 6);
           break;
         case 'equity':
-          equity.push(bal);
-          break;
         case 'revenue':
-          // Revenue is credit-normal → balance (DR − CR) is negative when there's
-          // revenue. Negate to get the positive contribution to equity.
-          retainedRevenue = round(retainedRevenue - bal.balance, 6);
+          // Revenue closes into equity, so group it here for the balance sheet.
+          equity[code] = natural;
+          equityTotal = round(equityTotal + natural, 6);
           break;
         case 'expense':
-          // Expense is debit-normal → balance is positive when there's expense.
-          retainedExpense = round(retainedExpense + bal.balance, 6);
-          break;
-        default:
+          // Expenses reduce equity; subtract.
+          equity[code] = -natural;
+          equityTotal = round(equityTotal - natural, 6);
           break;
       }
     }
-    const totalAssets = round(assets.reduce((s, a) => s + a.balance, 0), 6);
-    // Liabilities and equity have credit-normal balances, so the "balance"
-    // (debit − credit) is negative when the account has its normal balance.
-    // We negate so that positive = liability/equity balance.
-    const totalLiabilities = round(liabilities.reduce((s, a) => s - a.balance, 0), 6);
-    const totalEquity = round(
-      equity.reduce((s, a) => s - a.balance, 0) + retainedRevenue - retainedExpense,
-      6,
-    );
-    const delta = round(totalAssets - totalLiabilities - totalEquity, 6);
+
+    const discrepancy = round(assetTotal - (liabilityTotal + equityTotal), 6);
     return {
-      asOfTs: asOfTs ?? null,
-      assets: assets.sort((a, b) => a.accountCode.localeCompare(b.accountCode)),
-      liabilities: liabilities.sort((a, b) => a.accountCode.localeCompare(b.accountCode)),
-      equity: equity.sort((a, b) => a.accountCode.localeCompare(b.accountCode)),
-      totalAssets,
-      totalLiabilities,
-      totalEquity,
-      delta,
-      balanced: Math.abs(delta) < EPSILON,
+      assets: { accounts: assets, total: assetTotal },
+      liabilities: { accounts: liabilities, total: liabilityTotal },
+      equity: { accounts: equity, total: equityTotal },
+      balanced: Math.abs(discrepancy) < 1e-6,
+      discrepancy,
     };
   }
 
-  /** Income statement: revenue − expenses for [fromTs, toTs]. */
-  getIncomeStatement(fromTs: number, toTs?: number): IncomeStatementResult {
-    const upper = toTs ?? Date.now();
-    const codes = this.getAccountCodes(upper);
-    const revenue: AccountBalanceResult[] = [];
-    const expenses: AccountBalanceResult[] = [];
-    for (const code of codes) {
-      const meta = getAccount(code);
-      if (meta.type !== 'revenue' && meta.type !== 'expense') continue;
-      // Recompute balance for the [fromTs, toTs] window.
-      const byCurrency: Record<string, { debit: number; credit: number; balance: number }> = {};
-      let totalDebit = 0;
-      let totalCredit = 0;
-      for (const j of this.journal) {
-        if (j.ts < fromTs || j.ts > upper) continue;
-        for (const line of j.entries) {
-          if (line.accountCode !== code) continue;
-          if (!byCurrency[line.currency]) byCurrency[line.currency] = { debit: 0, credit: 0, balance: 0 };
-          byCurrency[line.currency].debit = round(byCurrency[line.currency].debit + line.debit, 6);
-          byCurrency[line.currency].credit = round(byCurrency[line.currency].credit + line.credit, 6);
-          totalDebit = round(totalDebit + line.debit, 6);
-          totalCredit = round(totalCredit + line.credit, 6);
-        }
+  /** Build an income statement (revenue − expenses) for a period. */
+  getIncomeStatement(fromTs: number, toTs?: number): IncomeStatement {
+    const revenue: Record<string, number> = {};
+    const expenses: Record<string, number> = {};
+    let totalRevenue = 0;
+    let totalExpenses = 0;
+
+    for (const e of this.entries) {
+      if (e.ts < fromTs) continue;
+      if (toTs != null && e.ts > toTs) continue;
+      const type = accountType(e.accountCode);
+      // For revenue: credits increase (natural credit balance).
+      // For expense: debits increase (natural debit balance).
+      if (type === 'revenue') {
+        const amt = round(e.credit - e.debit, 6);
+        if (amt === 0) continue;
+        revenue[e.accountCode] = round((revenue[e.accountCode] ?? 0) + amt, 6);
+        totalRevenue = round(totalRevenue + amt, 6);
+      } else if (type === 'expense') {
+        const amt = round(e.debit - e.credit, 6);
+        if (amt === 0) continue;
+        expenses[e.accountCode] = round((expenses[e.accountCode] ?? 0) + amt, 6);
+        totalExpenses = round(totalExpenses + amt, 6);
       }
-      if (totalDebit === 0 && totalCredit === 0) continue;
-      for (const c of Object.keys(byCurrency)) {
-        byCurrency[c].balance = round(byCurrency[c].debit - byCurrency[c].credit, 6);
-      }
-      const bal: AccountBalanceResult = {
-        accountCode: code,
-        debit: totalDebit,
-        credit: totalCredit,
-        balance: round(totalDebit - totalCredit, 6),
-        byCurrency,
-      };
-      if (meta.type === 'revenue') revenue.push(bal);
-      else expenses.push(bal);
     }
-    const totalRevenue = round(revenue.reduce((s, r) => s - r.balance, 0), 6); // credit-normal: negate
-    const totalExpenses = round(expenses.reduce((s, e) => s + e.balance, 0), 6); // debit-normal: positive
+
     return {
       fromTs,
-      toTs: upper,
-      revenue: revenue.sort((a, b) => a.accountCode.localeCompare(b.accountCode)),
-      expenses: expenses.sort((a, b) => a.accountCode.localeCompare(b.accountCode)),
+      toTs: toTs ?? nowTs(),
+      revenue,
+      expenses,
       totalRevenue,
       totalExpenses,
       netIncome: round(totalRevenue - totalExpenses, 6),
     };
   }
 
-  /** Recompute the trial balance from the journal and assert it balances. */
-  verifyIntegrity(): IntegrityResult {
+  /** Verify ledger integrity: total debits must equal total credits. */
+  verifyIntegrity(): IntegrityReport {
     const tb = this.getTrialBalance();
-    const byCurrency: Record<string, number> = {};
-    for (const [c, v] of Object.entries(tb.byCurrency)) byCurrency[c] = v.delta;
+    const check = validateBalancedInner(this.entries);
     return {
       balanced: tb.balanced,
       totalDebits: tb.totalDebits,
       totalCredits: tb.totalCredits,
-      discrepancy: round(Math.abs(tb.totalDebits - tb.totalCredits), 6),
-      byCurrency,
+      discrepancy: round(tb.totalDebits - tb.totalCredits, 6),
+      currencies: check.currencies,
+      entryCount: this.journals.length,
     };
   }
 
-  /** Number of journal entries posted. */
-  size(): number {
-    return this.journal.length;
-  }
-
-  /** Total number of debit/credit lines. */
-  lineCount(): number {
-    return this.journal.reduce((s, j) => s + j.entries.length, 0);
-  }
-
-  /** Reset the engine (clears the journal). Mainly for tests / rebuilds. */
+  /** Reset the engine — clears all journals and legs. */
   reset(): void {
-    this.journal = [];
-    this.nextSeq = 1;
+    this.journals = [];
+    this.entries = [];
+    this.nextSeq = 0;
   }
 
-  /** Internal: assign a deterministic id-seed for reproducible projections. */
-  _seedSeq(seed: number): void {
-    this.nextSeq = seed;
+  /** Current next-sequence counter (useful for snapshots). */
+  currentSeq(): number {
+    return this.nextSeq;
   }
 }
 
-/** Singleton instance — used by callers who want a shared ledger.
- *  The event-projection rebuild path creates fresh instances. */
+/** Internal: per-currency debit/credit balance check over raw legs. */
+function validateBalancedInner(entries: LedgerEntry[]): BalanceCheckResult {
+  const totals = new Map<string, { debit: number; credit: number }>();
+  for (const e of entries) {
+    let t = totals.get(e.currency);
+    if (!t) {
+      t = { debit: 0, credit: 0 };
+      totals.set(e.currency, t);
+    }
+    t.debit = round(t.debit + e.debit, 6);
+    t.credit = round(t.credit + e.credit, 6);
+  }
+
+  const currencies: BalanceCheckResult['currencies'] = [];
+  const mismatches: BalanceCheckResult['mismatches'] = [];
+  for (const [currency, t] of totals) {
+    const diff = round(t.debit - t.credit, 6);
+    currencies.push({
+      currency,
+      totalDebit: t.debit,
+      totalCredit: t.credit,
+      difference: diff,
+    });
+    if (Math.abs(diff) > 1e-6) {
+      mismatches.push({
+        currency,
+        totalDebit: t.debit,
+        totalCredit: t.credit,
+        difference: diff,
+      });
+    }
+  }
+
+  return { balanced: mismatches.length === 0, currencies, mismatches };
+}
+
+/**
+ * Singleton protocol ledger engine.
+ *
+ * Use this for the canonical protocol ledger. Per-simulation instances can be
+ * constructed directly with `new LedgerEngine()` (e.g. for parallel replays).
+ */
 export const ledgerEngine = new LedgerEngine();
 
-/** Re-export types & helpers for callers. */
-export { createJournalEntry, validateBalanced };
-export type { JournalEntry, JournalLineInput, LedgerEntry } from './entry';
+/** Re-exported factory for new engines. */
+export function createLedgerEngine(): LedgerEngine {
+  return new LedgerEngine();
+}
+
+/** Unique-id helper, exported for downstream callers. */
+export function newLedgerId(prefix: string): string {
+  return uid(prefix);
+}

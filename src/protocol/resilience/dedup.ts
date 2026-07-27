@@ -1,273 +1,214 @@
 /**
- * PaySwap Protocol — Resilience / Duplicate Detection + Idempotency.
- * -----------------------------------------------------------------------------
- * The DedupStore is the cornerstone of retry safety. Every state-mutating
- * operation in PaySwap is keyed by a content-hash idempotency key. Before
- * executing a side-effecting operation, the caller calls `checkOrMark`:
+ * PaySwap Protocol — Resilience — Dedup / Idempotency Store.
  *
- *   - If the key is NOT in the store: run the function, mark the key with the
- *     result, return `{ fromCache: false, result }`.
- *   - If the key IS in the store: return the cached result WITHOUT re-running
- *     the function: `{ fromCache: true, result }`.
+ * Two layers of duplicate-suppression:
  *
- * This guarantees INVARIANT #1: "A retried operation NEVER executes its side
- * effect twice." Even if the caller retries 100 times with the same key, the
- * side effect runs EXACTLY ONCE. Subsequent retries receive the cached result.
+ *   1. `DedupStore` — an in-memory TTL-bounded key→result cache. Used by
+ *      anything that wants to detect a previously-seen request and replay
+ *      the original result instead of re-executing the side effect.
  *
- * TTLs:
- *   - Default 24h for payments, 7d for webhooks. TTL-based eviction prevents
- *     unbounded memory growth in production.
- *   - TTL is checked lazily on read; an expired entry is treated as "not seen"
- *     (so a re-run IS allowed after TTL expiry — this is intentional: a
- *     7-day-old webhook retry is treated as a new event).
+ *   2. `idempotencyKey(params)` — a deterministic hash of a JSON-serialisable
+ *      parameter object. Stable key generation means the same logical request
+ *      (e.g. "pay merchant X invoice Y amount Z") always maps to the same
+ *      dedup key, even if the caller re-sends from a different retry.
  *
- * Key derivation:
- *   - For payments: hash of (intentHash, sourceAmount, sourceCurrency,
- *     destinationCurrency, senderId, receiverId).
- *   - For payouts: hash of (merchantId, sourceAmount, method, destination).
- *   - For webhooks: the eventId (already globally unique).
- *   - For arbitrary API requests: hash of (route, method, body).
+ * The store is single-process and in-memory; a multi-replica deployment would
+ * swap this for a Redis-backed implementation behind the same interface.
  *
- * The store is in-memory. In production this would be Redis (with the same
- * `checkOrMark` API) so dedup works across multiple instances.
+ * The kernel is FROZEN — this module imports only from `@/kernel/support`.
  */
-import { createHash } from 'crypto';
+import { nowTs } from '@/kernel/support';
 
-/** Scope of a dedup key. */
-export type DedupScope = 'payment' | 'payout' | 'webhook' | 'api_request';
+/** Default TTL for cached entries (24 hours). */
+export const DEFAULT_DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** A dedup key — scope + content hash. */
-export interface DedupKey {
-  scope: DedupScope;
-  /** Content hash or unique id. */
-  key: string;
-}
-
-/** Result of a `check()` call. */
-export interface DedupCheckResult {
-  seen: boolean;
-  firstSeenTs?: number;
-  /** The original result cached against this key (if any). */
-  originalResult?: unknown;
-  /** TTL expiry timestamp (ms). */
-  expiresAt?: number;
-}
-
-/** Default TTLs per scope. */
-export const DEFAULT_TTL_MS: Record<DedupScope, number> = {
-  payment: 24 * 60 * 60 * 1000, // 24h
-  payout: 24 * 60 * 60 * 1000, // 24h
-  webhook: 7 * 24 * 60 * 60 * 1000, // 7d
-  api_request: 60 * 60 * 1000, // 1h
-};
-
+/** A cached dedup entry. */
 interface DedupEntry {
-  scope: DedupScope;
-  key: string;
+  /** ts the key was first seen. */
   firstSeenTs: number;
+  /** ts the entry expires. */
   expiresAt: number;
-  result?: unknown;
+  /** Cached result, if one was stored. */
+  result: unknown;
+  /** Whether a result was stored alongside the key. */
   hasResult: boolean;
 }
 
-/** Composite key for the internal map. */
-function compositeKey(scope: DedupScope, key: string): string {
-  return `${scope}:${key}`;
+/** Result of a `check` — never throws. */
+export interface DedupCheckResult {
+  /** True if the key was seen before (and is still within its TTL). */
+  seen: boolean;
+  /** ts the key was first marked, or undefined if unseen. */
+  firstSeenTs?: number;
+  /** The original result cached against the key, if any. */
+  originalResult?: unknown;
 }
 
 /**
- * Derive a deterministic idempotency key from request parameters.
+ * In-memory TTL-bounded dedup store.
  *
- * Stable across calls with the same parameters — required for idempotency.
- * The hash is SHA-256 hex of a canonical JSON encoding of the input.
- */
-export function idempotencyKey(params: Record<string, unknown>): string {
-  // Canonicalise: sort keys recursively for deterministic encoding.
-  const canonical = canonicalize(params);
-  return 'idem_' + createHash('sha256').update(canonical).digest('hex').slice(0, 32);
-}
-
-/** Canonical JSON encoding (sorted keys, no whitespace). */
-function canonicalize(value: unknown): string {
-  if (value === null) return 'null';
-  if (typeof value === 'string') return JSON.stringify(value);
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) {
-    return '[' + value.map(canonicalize).join(',') + ']';
-  }
-  if (typeof value === 'object' && value !== undefined) {
-    const keys = Object.keys(value as Record<string, unknown>).sort();
-    const pairs = keys.map((k) => JSON.stringify(k) + ':' + canonicalize((value as Record<string, unknown>)[k]));
-    return '{' + pairs.join(',') + '}';
-  }
-  return 'null';
-}
-
-/**
- * In-memory dedup store with TTL-based eviction.
- *
- * API:
- *   - `check(key)`      → `{ seen, firstSeenTs?, originalResult? }`
- *   - `mark(key, result?, ttlMs?)` → records the key
- *   - `checkOrMark(key, fn, ttlMs?)` → atomic check-and-mark
- *
- * All operations are synchronous (in-memory). A Redis-backed implementation
- * would use `SET ... NX` for `checkOrMark`.
+ * Lookups lazily evict expired entries; `prune()` is available for an
+ * opportunistic sweep.
  */
 export class DedupStore {
-  private entries: Map<string, DedupEntry> = new Map();
-  /** Pending in-flight checkOrMark calls — prevents duplicate execution. */
-  private pending: Map<string, Promise<unknown>> = new Map();
+  private readonly store = new Map<string, DedupEntry>();
+  private readonly defaultTtlMs: number;
 
-  /** Check whether a key has been seen (and not expired). */
-  check(key: DedupKey): DedupCheckResult {
-    const entry = this.entries.get(compositeKey(key.scope, key.key));
-    if (!entry) return { seen: false };
-    if (Date.now() >= entry.expiresAt) {
-      // Expired — treat as not seen.
-      this.entries.delete(compositeKey(key.scope, key.key));
-      return { seen: false };
-    }
-    return {
-      seen: true,
-      firstSeenTs: entry.firstSeenTs,
-      originalResult: entry.hasResult ? entry.result : undefined,
-      expiresAt: entry.expiresAt,
-    };
+  constructor(defaultTtlMs: number = DEFAULT_DEDUP_TTL_MS) {
+    this.defaultTtlMs = defaultTtlMs;
   }
 
-  /** Mark a key as seen, optionally caching the result. */
-  mark(key: DedupKey, result?: unknown, ttlMs?: number): void {
-    const ttl = ttlMs ?? DEFAULT_TTL_MS[key.scope];
-    const now = Date.now();
-    this.entries.set(compositeKey(key.scope, key.key), {
-      scope: key.scope,
-      key: key.key,
-      firstSeenTs: now,
-      expiresAt: now + ttl,
+  // ------------------------------------------------------------- check / mark
+  /** Check whether `key` has been seen. Does NOT mutate the store. */
+  check(key: string): DedupCheckResult {
+    const entry = this.store.get(key);
+    if (!entry) return { seen: false };
+    if (nowTs() >= entry.expiresAt) {
+      // Expired — clean up and report as unseen.
+      this.store.delete(key);
+      return { seen: false };
+    }
+    const result: DedupCheckResult = {
+      seen: true,
+      firstSeenTs: entry.firstSeenTs,
+    };
+    if (entry.hasResult) result.originalResult = entry.result;
+    return result;
+  }
+
+  /**
+   * Mark `key` as seen, optionally caching a result. Re-marking an existing
+   * (non-expired) key refreshes its TTL but does NOT overwrite the original
+   * result — once a result is cached, it is sticky until expiry.
+   */
+  mark(key: string, result?: unknown, ttlMs: number = this.defaultTtlMs): void {
+    if (ttlMs <= 0) return;
+    const existing = this.store.get(key);
+    const ts = nowTs();
+    if (existing && nowTs() < existing.expiresAt) {
+      // Refresh TTL, preserve original firstSeenTs and original result.
+      existing.expiresAt = ts + ttlMs;
+      if (result !== undefined && !existing.hasResult) {
+        existing.result = result;
+        existing.hasResult = true;
+      }
+      return;
+    }
+    this.store.set(key, {
+      firstSeenTs: ts,
+      expiresAt: ts + ttlMs,
       result,
       hasResult: result !== undefined,
     });
   }
 
   /**
-   * Atomic check-and-mark.
+   * Atomic check-and-execute:
+   *   - If `key` has been seen, return the cached result (or undefined if no
+   *     result was stored).
+   *   - Otherwise, run `fn`, mark `key` with the result + TTL, and return it.
    *
-   * If the key has been seen, returns the cached result with `fromCache: true`.
-   * If the key has NOT been seen, runs `fn`, marks the key with the result,
-   * and returns `{ fromCache: false, result }`.
-   *
-   * If `fn` throws, the key is NOT marked — so a future retry will re-run `fn`.
-   * This is the correct behaviour: a failure leaves no cached result.
-   *
-   * CONCURRENCY: if two `checkOrMark` calls for the same key arrive before the
-   * first completes, the second awaits the first's promise and returns the
-   * same result with `fromCache: true`. This guarantees the side effect runs
-   * EXACTLY ONCE even under concurrent retries.
+   * The check-then-mark is atomic at the level of this single-threaded
+   * runtime: there is no `await` between the check and the mark for the
+   * cache-hit path, and for the cache-miss path the key is marked immediately
+   * after `fn` resolves.
    */
   async checkOrMark<T>(
-    key: DedupKey,
+    key: string,
     fn: () => Promise<T>,
-    ttlMs?: number,
-  ): Promise<{ result: T; fromCache: boolean }> {
-    const ck = compositeKey(key.scope, key.key);
-    const existing = this.check(key);
-    if (existing.seen) {
-      return { result: existing.originalResult as T, fromCache: true };
+    ttlMs: number = this.defaultTtlMs,
+  ): Promise<T> {
+    const hit = this.check(key);
+    if (hit.seen && hit.originalResult !== undefined) {
+      return hit.originalResult as T;
     }
-    // If a call for this key is already in flight, await it.
-    const pendingPromise = this.pending.get(ck);
-    if (pendingPromise) {
-      const result = (await pendingPromise) as T;
-      return { result, fromCache: true };
-    }
-    // Claim the key synchronously by recording the in-flight promise.
-    const promise = (async () => {
-      const result = await fn();
-      this.mark(key, result, ttlMs);
-      return result as unknown;
-    })();
-    this.pending.set(ck, promise);
-    try {
-      const result = (await promise) as T;
-      return { result, fromCache: false };
-    } finally {
-      this.pending.delete(ck);
-    }
+    const value = await fn();
+    this.mark(key, value, ttlMs);
+    return value;
   }
 
-  /** Synchronous variant — for non-async functions. */
-  checkOrMarkSync<T>(
-    key: DedupKey,
-    fn: () => T,
-    ttlMs?: number,
-  ): { result: T; fromCache: boolean } {
-    const existing = this.check(key);
-    if (existing.seen) {
-      return { result: existing.originalResult as T, fromCache: true };
-    }
-    const result = fn();
-    this.mark(key, result, ttlMs);
-    return { result, fromCache: false };
+  // ----------------------------------------------------------------- utility
+  /** Drop a single key (e.g. after an explicit invalidate). */
+  forget(key: string): boolean {
+    return this.store.delete(key);
   }
 
-  /** Remove a key (e.g. on explicit cancellation). */
-  remove(key: DedupKey): boolean {
-    return this.entries.delete(compositeKey(key.scope, key.key));
-  }
-
-  /** Number of entries currently in the store. */
-  size(): number {
-    return this.entries.size;
-  }
-
-  /** Evict all expired entries. Returns the count evicted. */
-  evictExpired(): number {
-    const now = Date.now();
-    let evicted = 0;
-    for (const [k, entry] of this.entries) {
+  /** Sweep all expired entries. Returns the count removed. */
+  prune(): number {
+    const now = nowTs();
+    let removed = 0;
+    for (const [key, entry] of this.store) {
       if (now >= entry.expiresAt) {
-        this.entries.delete(k);
-        evicted++;
+        this.store.delete(key);
+        removed += 1;
       }
     }
-    return evicted;
+    return removed;
   }
 
-  /** Clear all entries (mainly for tests). */
-  reset(): void {
-    this.entries.clear();
-    this.pending.clear();
+  /** Number of entries currently cached (including possibly-expired ones). */
+  size(): number {
+    return this.store.size;
+  }
+
+  /** Remove all entries. */
+  clear(): void {
+    this.store.clear();
   }
 }
-
-/** Singleton dedup store. */
-export const dedupStore = new DedupStore();
-
-// ─── Convenience helpers ─────────────────────────────────────────────────────
 
 /**
- * Build a DedupKey for a payment, scoped by the payment's intent hash.
- *
- * The intentHash should already encode (sourceAmount, sourceCurrency,
- * destinationAmount, destinationCurrency, senderId, receiverId). Callers can
- * use `idempotencyKey(...)` to derive it.
+ * Build a deterministic idempotency key from a JSON-serialisable parameter
+ * object. Object key order does NOT affect the hash — keys are sorted
+ * recursively before serialisation. This means two calls with the same
+ * parameters in a different order produce the same key.
  */
-export function dedupPayment(intentHash: string): DedupKey {
-  return { scope: 'payment', key: intentHash };
+export function idempotencyKey(params: unknown): string {
+  const canonical = canonicalise(params);
+  return `idem_${fnv1a(canonical)}`;
 }
 
-/** Build a DedupKey for a webhook delivery, scoped by the event id. */
-export function dedupWebhook(eventId: string): DedupKey {
-  return { scope: 'webhook', key: eventId };
+// --------------------------------------------------------------- key helpers
+
+/**
+ * Canonicalise a value for deterministic JSON serialisation. Object keys are
+ * sorted recursively; primitives, arrays and `null` pass through unchanged.
+ */
+function canonicalise(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value === 'undefined') return 'undef';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'bigint') return `${value}n`;
+  if (typeof value === 'symbol') return value.toString();
+  if (typeof value === 'function') return 'fn';
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalise).join(',')}]`;
+  }
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj).sort();
+    const pairs = keys.map((k) => `${JSON.stringify(k)}:${canonicalise(obj[k])}`);
+    return `{${pairs.join(',')}}`;
+  }
+  return 'unknown';
 }
 
-/** Build a DedupKey for a payout request, scoped by the request content hash. */
-export function dedupPayout(requestHash: string): DedupKey {
-  return { scope: 'payout', key: requestHash };
+/** 32-bit FNV-1a hash — fast, deterministic, no dependencies. */
+function fnv1a(input: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
 }
 
-/** Build a DedupKey for an arbitrary API request, scoped by the content hash. */
-export function dedupApiRequest(contentHash: string): DedupKey {
-  return { scope: 'api_request', key: contentHash };
+// Global singleton — survives Next.js dev module re-instantiation.
+const _globalForDedup =
+  globalThis as unknown as { __PAYSWAP_DEDUP_STORE?: DedupStore };
+export const dedupStore: DedupStore =
+  _globalForDedup.__PAYSWAP_DEDUP_STORE ?? new DedupStore();
+if (!_globalForDedup.__PAYSWAP_DEDUP_STORE) {
+  _globalForDedup.__PAYSWAP_DEDUP_STORE = dedupStore;
 }

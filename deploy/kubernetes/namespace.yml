@@ -1,0 +1,14 @@
+# =============================================================================
+# PaySwap — Kubernetes Namespace
+# =============================================================================
+# All PaySwap resources live in the `payswap` namespace so they can be
+# queried, quota'd, and torn down as a unit.
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: payswap
+  labels:
+    app.kubernetes.io/name: payswap
+    app.kubernetes.io/part-of: payswap-platform
+    environment: production

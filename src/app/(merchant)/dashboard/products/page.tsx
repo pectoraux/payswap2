@@ -1,92 +1,69 @@
-import { redirect } from 'next/navigation';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { Plus, Package } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/page-header';
+import { EmptyState } from '@/components/empty-state';
+import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
-import { getEnvironment } from '@/lib/environment';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import { StatusBadge } from '@/components/status-badge';
-import { Package } from 'lucide-react';
-import { CreateProductDialog } from '@/components/merchant/create-product-dialog';
+import { formatCurrency, statusBadgeClass } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
 export default async function ProductsPage() {
-  const session = await getServerSession(authOptions);
-  if (!session) redirect('/login');
-  const userId = (session?.user as any)?.id;
-  const userRole = await db.userRole.findFirst({
-    where: { userId, role: { in: ['MERCHANT', 'MERCHANT_STAFF'] } },
-  });
-  const merchantId = userRole?.merchantId;
-  if (!merchantId) redirect('/unauthorized');
+  const { merchant } = await requireMerchant();
 
-  const merchant = await db.merchant.findUnique({ where: { id: merchantId } });
-  const env = await getEnvironment();
   const products = await db.product.findMany({
-    where: { merchantId, deletedAt: null, environment: env },
+    where: { merchantId: merchant.id, deletedAt: null },
     orderBy: { createdAt: 'desc' },
+    take: 200,
   });
-
-  const fmt = (n: number, c: string = merchant?.currency || 'GHS') =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: c }).format(n);
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Products</h1>
-          <p className="text-sm text-muted-foreground">
-            Catalog items your customers can purchase.
-          </p>
-        </div>
-        <CreateProductDialog />
-      </div>
+      <PageHeader
+        title="Products"
+        description="Items you sell. Generate checkout links or QR codes from any product."
+        actions={
+          <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
+            <Plus className="h-4 w-4" /> New Product
+          </Button>
+        }
+      />
 
       {products.length === 0 ? (
         <Card>
-          <CardContent className="p-0">
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <Package className="h-10 w-10 text-muted-foreground/50 mb-3" />
-              <p className="text-sm font-medium">No products yet</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Click <span className="font-medium text-foreground">New Product</span> above to add
-                your first catalog item.
-              </p>
-            </div>
-          </CardContent>
+          <EmptyState
+            icon={<Package className="h-5 w-5" />}
+            title="No products yet"
+            description="Add your first product to start generating payment links, QR codes, and checkout URLs."
+            action={{ label: 'New product', href: '/dashboard/products' }}
+          />
         </Card>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {products.map((p) => (
-            <Card key={p.id} className="overflow-hidden">
-              <CardHeader>
-                <div className="flex items-start justify-between gap-2">
-                  <CardTitle className="text-base">{p.name}</CardTitle>
-                  <StatusBadge status={p.status} />
+            <Card key={p.id} className="overflow-hidden transition-colors hover:border-emerald-500/30">
+              <CardContent className="space-y-3 p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold">{p.name}</div>
+                    <div className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+                      {p.type.replace(/_/g, ' ')}
+                    </div>
+                  </div>
+                  <Badge variant="outline" className={statusBadgeClass(p.status)}>
+                    {p.status}
+                  </Badge>
                 </div>
-                <CardDescription className="line-clamp-2 min-h-[2.5rem]">
-                  {p.description || 'No description provided.'}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-end justify-between">
-                  <div>
-                    <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                      Price
-                    </div>
-                    <div className="text-xl font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-                      {fmt(p.price, p.currency)}
-                    </div>
+                <p className="line-clamp-2 min-h-[2.5rem] text-xs text-muted-foreground">
+                  {p.description ?? 'No description provided.'}
+                </p>
+                <div className="flex items-center justify-between border-t pt-3">
+                  <div className="text-lg font-semibold">
+                    {formatCurrency(p.price, p.currency)}
                   </div>
-                  <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                    {p.type}
-                  </div>
+                  <Button size="sm" variant="outline">Share</Button>
                 </div>
               </CardContent>
             </Card>

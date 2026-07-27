@@ -4,20 +4,37 @@ import "./globals.css";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "next-themes";
 import { AuthSessionProvider } from "@/components/auth-session-provider";
-import "@/services/projections"; // Register event projections (audit, webhooks, analytics)
 
-const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
-const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
 
 export const metadata: Metadata = {
   title: "PaySwap — Cross-border Settlement Network",
-  description: "Accept payments, manage payouts, and settle across borders with PaySwap's protocol-layer financial infrastructure.",
+  description:
+    "Accept payments, manage payouts, and settle across borders with PaySwap's protocol-layer financial infrastructure.",
+  keywords: ["PaySwap", "Payments", "Cross-border", "Settlement", "Fintech", "Africa"],
+  icons: {
+    icon: "/logo.svg",
+  },
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
+      >
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
           <AuthSessionProvider>
             {children}

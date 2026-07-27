@@ -1,0 +1,64 @@
+# =============================================================================
+# PaySwap — Kubernetes Horizontal Pod Autoscaler
+# =============================================================================
+# Scales the payswap-api deployment based on CPU utilisation and custom
+# metrics (requests-per-second). Matches the autoscaling policy in
+# `src/protocol/deployment/autoscaling.ts` (target CPU 70%, 2-20 replicas).
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: payswap-api
+  namespace: payswap
+  labels:
+    app.kubernetes.io/name: payswap
+    app.kubernetes.io/component: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: payswap-api
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    # CPU — scale up above 70% average utilisation.
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    # Memory — scale up above 80% average utilisation (secondary signal).
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    # Custom metric — requests-per-second across all pods. Requires the
+    # Prometheus Adapter to expose this as a custom metric.
+    - type: Pods
+      pods:
+        metric:
+          name: http_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: "100"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+      selectPolicy: Min

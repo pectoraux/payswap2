@@ -1,145 +1,133 @@
 /**
- * PaySwap Protocol — Chain Abstraction Layer barrel.
+ * PaySwap Protocol — Chain Adapter Registry (Barrel).
  *
- * Auto-registers Stellar as the default chain on import. Ethereum, Base,
- * and Polygon stubs are also exported (but NOT auto-registered — register
- * them explicitly when their implementations come online).
+ * Exports the rich `ChainAdapter` interface, the `ChainRegistry`, and all
+ * per-chain adapters (Stellar production-grade + EVM stubs). On import,
+ * auto-registers Stellar as the default chain.
  *
- * Usage:
- *   import { chainRegistry, stellarChainAdapter } from '@/protocol/chains';
- *   const adapter = chainRegistry.default();        // → stellarChainAdapter
- *   await adapter.transfer({ assetCode: 'TWINGHS', issuer, amount, from, to });
+ * ## Quick start
+ *
+ *   import { chainRegistry, configureStellarLive } from '@/protocol/chains';
+ *
+ *   // Default mode is 'simulation' — safe, no network calls.
+ *   const adapter = chainRegistry.get('stellar');
+ *   await adapter.transfer({ ... });
+ *
+ *   // Flip to live mode (requires stellar-sdk + secret key):
+ *   await configureStellarLive({
+ *     network: 'testnet',
+ *     secretKey: process.env.STELLAR_SECRET_KEY,
+ *   });
+ *
+ *   // Or broadcast a mode switch to every registered chain:
+ *   await chainRegistry.setMode('live');
  */
-import type { ChainAdapter } from './adapter';
-import { chainRegistry } from './registry';
-import { stellarChainAdapter, StellarAdapter, stellarNetwork, StellarNetwork } from './stellar/adapter';
-import {
-  twinTokenCode,
-  nativeAsset,
-  isTwinToken,
-  twinTokenCurrency,
-  assetMetadata,
-  stellarAssetKey,
-  parseStellarAssetKey,
-  isValidAssetCode,
-  syntheticIssuerAddress,
-  NATIVE_ASSET_CODE,
-} from './stellar/assets';
-import {
-  settleTwinTokenTransfer,
-  settleTwinTokenBurn,
-  settleTwinTokenMint,
-  settleWithClaimableBalance,
-  verifySettlement,
-  settleNativeTransfer,
-} from './stellar/settlement';
-import { EthereumAdapter, ethereumChainAdapter } from './ethereum/adapter';
-import { BaseAdapter, baseChainAdapter } from './base/adapter';
-import { PolygonAdapter, polygonChainAdapter } from './polygon/adapter';
 
-/* ============================================================================
- * Auto-register Stellar as the default chain on first import.
- * Idempotent — safe to import from multiple modules.
- * ========================================================================== */
-if (!chainRegistry.isRegistered('stellar')) {
-  chainRegistry.register(stellarChainAdapter);
-}
-
-/* ============================================================================
- * Re-exports.
- * ========================================================================== */
+// Core interface + types ----------------------------------------------------
 export type {
-  ChainAdapter,
+  ChainMode,
+  ChainNetwork,
+  ChainMemo,
+  ChainMemoKind,
   ChainAccount,
   ChainAsset,
-  ChainMemo,
-  ChainOperation,
+  ChainSigner,
   ChainTransaction,
-  ChainResult,
-  AccountResult,
-  BalanceResult,
-  BalancesResult,
-  TxResult,
-  VerifyResult,
-  EscrowResult,
-  ClaimableBalanceResult,
-  ClaimableBalancesResult,
-  SequenceResult,
-  LedgerResult,
-  LedgerEntryResult,
-  HealthResult,
-  PathPaymentResult,
+  ChainOperation,
   ClaimPredicate,
-  MemoType,
-  LedgerStreamCallback,
-  CreateAccountParams,
-  FundAccountParams,
-  RegisterAssetParams,
-  IssueAssetParams,
-  BurnAssetParams,
-  CreateTrustlineParams,
-  TransferParams,
-  PathPaymentParams,
-  CreateClaimableBalanceParams,
-  CreateEscrowAccountParams,
-  ReleaseEscrowParams,
-  SponsorReserveParams,
-  FeeBumpParams,
-  AddSignerParams,
-  RemoveSignerParams,
-  SetThresholdsParams,
-  GetBalanceParams,
-  VerifyTransactionParams,
-  GetLedgerEntryParams,
+  ChainResult,
+  ChainVerifyResult,
+  ChainBalanceResult,
+  ChainHealthResult,
+  ChainAdapter,
+  ChainAdapterConfig,
 } from './adapter';
-export { assetKey, makeAsset } from './adapter';
-export { chainRegistry } from './registry';
+
+// Registry ------------------------------------------------------------------
 export {
+  ChainRegistry,
+  chainRegistry,
+  STELLAR_CHAIN,
+  ETHEREUM_CHAIN,
+  BASE_CHAIN,
+  POLYGON_CHAIN,
+} from './registry';
+
+// Stellar adapter -----------------------------------------------------------
+export {
+  StellarChainAdapter,
   stellarChainAdapter,
-  StellarAdapter,
-  stellarNetwork,
-  StellarNetwork,
+  configureStellarLive,
+  loadStellarSdk,
+  _resetStellarSdkCache,
 } from './stellar/adapter';
+export type { StellarAdapterConfig } from './stellar/adapter';
+
+// Stellar asset helpers -----------------------------------------------------
 export {
+  NATIVE_ASSET_CODE,
+  NATIVE_ISSUER,
+  TWIN_TOKEN_PREFIX,
   twinTokenCode,
+  currencyFromTwinToken,
   nativeAsset,
   isTwinToken,
-  twinTokenCurrency,
+  isNative,
+  assetKey,
   assetMetadata,
-  stellarAssetKey,
-  parseStellarAssetKey,
-  isValidAssetCode,
-  syntheticIssuerAddress,
-  NATIVE_ASSET_CODE,
+  horizonAssetType,
 } from './stellar/assets';
-export type { StellarAssetMetadata } from './stellar/assets';
+
+// Stellar settlement helpers ------------------------------------------------
 export {
   settleTwinTokenTransfer,
   settleTwinTokenBurn,
   settleTwinTokenMint,
   settleWithClaimableBalance,
+  claimSettlementBalance,
   verifySettlement,
-  settleNativeTransfer,
+  reconcileSettlement,
+  twinAssetCode,
+  isTwinAsset,
 } from './stellar/settlement';
-export type {
-  SettlementResult,
-  TwinTokenTransferParams,
-  TwinTokenBurnParams,
-  TwinTokenMintParams,
-  ClaimableBalanceSettlementParams,
-} from './stellar/settlement';
-export { EthereumAdapter, ethereumChainAdapter } from './ethereum/adapter';
-export { BaseAdapter, baseChainAdapter } from './base/adapter';
-export { PolygonAdapter, polygonChainAdapter } from './polygon/adapter';
+export type { SettlementResult } from './stellar/settlement';
 
-/** Convenience — registered adapter for a chain (or Stellar by default). */
-export function getChainAdapter(chain?: string): ChainAdapter {
-  if (!chain) {
-    const def = chainRegistry.default();
-    if (!def) throw new Error('No chain adapter registered');
-    return def;
-  }
-  const a = chainRegistry.get(chain);
-  if (!a) throw new Error(`Chain adapter not registered: ${chain}`);
-  return a;
-}
+// Stellar Horizon sync ------------------------------------------------------
+export { HorizonSync, horizonSync } from './stellar/horizon';
+export type {
+  LedgerCloseEvent,
+  AccountEffect,
+  TransactionEffect,
+} from './stellar/horizon';
+
+// EVM stubs -----------------------------------------------------------------
+export { EthereumChainAdapter, ethereumChainAdapter } from './ethereum/adapter';
+export { BaseChainAdapter, baseChainAdapter } from './base/adapter';
+export { PolygonChainAdapter, polygonChainAdapter } from './polygon/adapter';
+
+// ============================================================================
+// Auto-registration: Stellar is the default chain.
+// ============================================================================
+//
+// This side-effect runs on first import. It registers the Stellar adapter
+// (simulation mode by default) plus the EVM stubs. Higher-level protocol
+// modules can then call `chainRegistry.get('stellar')` without needing to
+// wire registration themselves.
+
+import { chainRegistry, STELLAR_CHAIN } from './registry';
+import { stellarChainAdapter } from './stellar/adapter';
+import { ethereumChainAdapter } from './ethereum/adapter';
+import { baseChainAdapter } from './base/adapter';
+import { polygonChainAdapter } from './polygon/adapter';
+
+chainRegistry.register(stellarChainAdapter);
+chainRegistry.register(ethereumChainAdapter);
+chainRegistry.register(baseChainAdapter);
+chainRegistry.register(polygonChainAdapter);
+// Stellar is the default chain — `chainRegistry.default()` returns it.
+chainRegistry.setDefault(STELLAR_CHAIN);
+
+// Re-export the config type for callers that want to construct their own
+// adapter instance.
+export type { ChainAdapterConfig as StellarChainAdapterConfig } from './adapter';
+export type { ChainAdapterConfig as EvmChainAdapterConfig } from './adapter';

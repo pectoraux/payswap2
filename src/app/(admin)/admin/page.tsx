@@ -1,149 +1,118 @@
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { db } from '@/lib/db';
+import Link from 'next/link';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/page-header';
+import { StatCard } from '@/components/stat-card';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
-import { StatusBadge } from '@/components/status-badge';
+import { EmptyState } from '@/components/empty-state';
 import {
-  Building2,
-  Users,
-  CreditCard,
-  Clock,
-  TrendingUp,
+  Users, Building2, CreditCard, DollarSign, ArrowRight, Clock,
 } from 'lucide-react';
+import { requireAdmin } from '@/lib/auth-guards';
+import { adminOverviewReadModel } from '@/runtime';
+import { formatCurrency, formatDate, formatNumber, statusBadgeClass } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
 export default async function AdminOverviewPage() {
-  const session = await getServerSession(authOptions);
+  await requireAdmin();
 
-  const [merchants, users, payments, pendingWaitlist, volumeAgg, recentWaitlist] =
-    await Promise.all([
-      db.merchant.count(),
-      db.user.count(),
-      db.payment.count(),
-      db.waitlistEntry.count({ where: { status: 'PENDING' } }),
-      db.payment.aggregate({
-        where: { status: 'COMPLETED' },
-        _sum: { amount: true },
-      }),
-      db.waitlistEntry.findMany({
-        orderBy: { createdAt: 'desc' },
-        take: 6,
-      }),
-    ]);
-
-  const volume = volumeAgg._sum.amount || 0;
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'GHS',
-      maximumFractionDigits: 0,
-    }).format(n);
-  const fmtDate = (d: Date) =>
-    new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-
-  const kpis = [
-    {
-      label: 'Merchants',
-      value: merchants.toLocaleString(),
-      icon: <Building2 className="h-4 w-4 text-emerald-500" />,
-      hint: 'Onboarded accounts',
-    },
-    {
-      label: 'Users',
-      value: users.toLocaleString(),
-      icon: <Users className="h-4 w-4 text-teal-500" />,
-      hint: 'Registered accounts',
-    },
-    {
-      label: 'Payments',
-      value: payments.toLocaleString(),
-      icon: <CreditCard className="h-4 w-4 text-emerald-500" />,
-      hint: 'Total transactions',
-    },
-    {
-      label: 'Pending waitlist',
-      value: pendingWaitlist.toLocaleString(),
-      icon: <Clock className="h-4 w-4 text-amber-500" />,
-      hint: 'Awaiting review',
-    },
-  ];
+  const overview = await adminOverviewReadModel.get();
+  const { merchantCount, userCount, paymentCount, totalVolume, pendingWaitlistCount, recentWaitlist } = overview;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Admin overview</h1>
-        <p className="text-sm text-muted-foreground">
-          Platform health and onboarding pipeline at a glance.
-        </p>
-      </div>
+      <PageHeader
+        title="Platform overview"
+        description="Top-level stats across all merchants, users and payments on PaySwap."
+        actions={
+          <Button asChild className="bg-emerald-600 text-white hover:bg-emerald-700">
+            <Link href="/admin/waitlist">
+              Review waitlist <ArrowRight className="h-4 w-4" />
+            </Link>
+          </Button>
+        }
+      />
 
+      {/* KPIs */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {kpis.map((k) => (
-          <Card key={k.label}>
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  {k.label}
-                </span>
-                {k.icon}
-              </div>
-              <div className="mt-2 text-2xl font-bold tabular-nums">{k.value}</div>
-              <div className="text-[10px] text-muted-foreground mt-1">{k.hint}</div>
-            </CardContent>
-          </Card>
-        ))}
+        <StatCard
+          label="Merchants"
+          value={formatNumber(merchantCount)}
+          icon={<Building2 className="h-5 w-5" />}
+          hint="All statuses"
+          color="emerald"
+        />
+        <StatCard
+          label="Users"
+          value={formatNumber(userCount)}
+          icon={<Users className="h-5 w-5" />}
+          hint="Total sign-ups"
+          color="teal"
+        />
+        <StatCard
+          label="Payments"
+          value={formatNumber(paymentCount)}
+          icon={<CreditCard className="h-5 w-5" />}
+          hint="All-time"
+          color="sky"
+        />
+        <StatCard
+          label="Volume (completed)"
+          value={formatCurrency(totalVolume, 'USD')}
+          icon={<DollarSign className="h-5 w-5" />}
+          hint="Settled"
+          color="violet"
+        />
       </div>
 
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              <TrendingUp className="h-4 w-4" />
-            </div>
-            <div>
-              <CardTitle className="text-base">Processed volume</CardTitle>
-              <CardDescription>Total completed payment value</CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="text-3xl font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-            {fmt(volume)}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Recent waitlist entries</CardTitle>
-          <CardDescription>Latest sign-ups awaiting review</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {recentWaitlist.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10">
-                <Clock className="h-6 w-6 text-emerald-500" />
+      {/* Pending waitlist alert */}
+      {pendingWaitlistCount > 0 && (
+        <Card className="border-amber-500/20 bg-amber-500/5">
+          <CardContent className="flex items-center justify-between gap-4 p-5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                <Clock className="h-4 w-4" />
               </div>
-              <h3 className="mt-4 text-sm font-semibold">No waitlist entries</h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                New sign-ups will show up here for review.
-              </p>
+              <div>
+                <div className="text-sm font-semibold">
+                  {pendingWaitlistCount} waitlist {pendingWaitlistCount === 1 ? 'entry' : 'entries'} pending review
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Approve or reject applicants to convert them into merchants.
+                </div>
+              </div>
             </div>
+            <Button asChild size="sm" className="bg-emerald-600 text-white hover:bg-emerald-700">
+              <Link href="/admin/waitlist">Review <ArrowRight className="h-3.5 w-3.5" /></Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Recent waitlist */}
+      <Card>
+        <CardHeader className="flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle className="text-base">Recent waitlist entries</CardTitle>
+            <CardDescription>Most recent applications to join PaySwap</CardDescription>
+          </div>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/waitlist">
+              View all <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </Button>
+        </CardHeader>
+        <CardContent className="p-0">
+          {recentWaitlist.length === 0 ? (
+            <EmptyState
+              icon={<Users className="h-5 w-5" />}
+              title="No waitlist entries"
+              description="When prospective merchants sign up via the waitlist, they'll appear here."
+            />
           ) : (
             <Table>
               <TableHeader>
@@ -153,27 +122,23 @@ export default async function AdminOverviewPage() {
                   <TableHead>Company</TableHead>
                   <TableHead>Country</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Date</TableHead>
+                  <TableHead className="text-right">Applied</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {recentWaitlist.map((w) => (
                   <TableRow key={w.id}>
                     <TableCell className="font-medium">{w.name}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {w.email}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {w.company || '—'}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {w.country}
-                    </TableCell>
+                    <TableCell className="text-muted-foreground">{w.email}</TableCell>
+                    <TableCell className="text-muted-foreground">{w.company ?? '—'}</TableCell>
+                    <TableCell className="text-muted-foreground">{w.country}</TableCell>
                     <TableCell>
-                      <StatusBadge status={w.status} />
+                      <Badge variant="outline" className={statusBadgeClass(w.status)}>
+                        {w.status}
+                      </Badge>
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {fmtDate(w.createdAt)}
+                    <TableCell className="text-right text-muted-foreground">
+                      {formatDate(w.createdAt, true)}
                     </TableCell>
                   </TableRow>
                 ))}

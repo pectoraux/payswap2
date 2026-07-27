@@ -1,348 +1,438 @@
 /**
- * PaySwap Protocol — Operational Readiness — Prometheus-style Metrics Registry.
+ * PaySwap Protocol — Ops Module — Prometheus-style Metrics Registry.
  *
- * Implements the Prometheus metric model (counter / gauge / histogram) with
- * label cardinality, a `MetricsRegistry` that owns all metrics, and an
- * `expose()` method that emits the standard Prometheus text exposition
- * format. The API surface mirrors `prom-client` so swapping to the real
- * package later is mechanical:
+ * A self-contained, dependency-light metrics registry that mirrors the
+ * Prometheus data model:
  *
- *   import { Counter, Registry } from 'prom-client';
- *   const c = new Counter({ name: 'foo_total', help: '...', labelNames: ['bar'] });
- *   c.inc({ bar: 'baz' });
+ *   - Counter   : monotonic, `inc()` only
+ *   - Gauge     : `set()` / `inc()` / `dec()`
+ *   - Histogram : `observe()` into fixed buckets; `percentile(p)` via
+ *                  nearest-rank interpolation across all observations
  *
- * Maps directly to:
+ * The registry produces two wire formats:
+ *   - `expose()` → Prometheus text exposition format
+ *   - `json()`   → plain JSON snapshot for dashboards / API routes
  *
- *   import { metricsRegistry } from '@/protocol/ops/metrics';
- *   const c = metricsRegistry.registerCounter('foo_total', '...', ['bar']);
- *   c.inc({ bar: 'baz' });
- *
- * Buckets are cumulative (Prometheus convention): a sample with value v
- * increments every bucket whose `le` >= v. `+Inf` is implicit and equals
- * the total observation count.
- *
- * Pre-registered metrics: see `registerStandardMetrics()` at the bottom.
+ * The kernel is FROZEN. This module imports only `round` from
+ * `@/kernel/support` and stays entirely inside `src/protocol/ops/`.
  */
-import { eventEngine } from '@/kernel/event';
+import { round } from '@/kernel/support';
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+/** Label set — keys are label names, values are stringified. */
+export type LabelSet = Record<string, string>;
 
+/** Metric kind tag. */
 export type MetricType = 'counter' | 'gauge' | 'histogram';
 
-/** Label values passed to inc/set/observe — a plain string→string map. */
-export type LabelValues = Record<string, string | number>;
-
-/** A single bucket of a histogram (cumulative count of observations ≤ le). */
-export interface HistogramBucket {
-  le: number;
-  count: number;
-}
-
-/** The observed state of a histogram for a given label set. */
-export interface HistogramValue {
-  count: number;
-  sum: number;
-  buckets: HistogramBucket[];
-}
-
-/** A metric data record — the storage shape (no methods). */
-export interface Metric {
+/** Shared descriptor fields every metric exposes. */
+export interface MetricDescriptor {
   name: string;
-  type: MetricType;
   help: string;
+  type: MetricType;
   labels: string[];
-  values: Map<string, number | HistogramValue>;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+/** Default histogram bucket boundaries (latency in ms). */
+export const DEFAULT_BUCKETS_MS = [
+  5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 30_000, 60_000,
+];
 
-/**
- * Build the canonical Prometheus label-key for a label-value map.
- * Labels are sorted alphabetically by name and rendered as
- * `name1="val1",name2="val2"`. An empty (or no-label) metric returns ''.
- */
-export function labelKey(names: string[], values?: LabelValues): string {
-  if (!values) return '';
-  const present = names.filter((n) => values[n] !== undefined && values[n] !== null);
-  if (present.length === 0) return '';
-  return [...present]
-    .sort()
-    .map((n) => `${n}="${String(values[n])}"`)
-    .join(',');
+/** A single observed value plus its label set. */
+export interface MetricEntry {
+  labels: LabelSet;
+  value: number;
 }
 
-/** Parse a label-key string back into a label-value map. */
-export function parseLabelKey(key: string): LabelValues {
-  const out: LabelValues = {};
-  if (!key) return out;
-  // Split on commas that are NOT inside quotes.
-  const parts = key.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
-  for (const p of parts) {
-    const m = p.match(/^([^=]+)="(.*)"$/);
-    if (m) out[m[1]] = m[2];
-  }
-  return out;
+/** One histogram bucket plus its cumulative count. */
+export interface HistogramBucket {
+  /** Upper bound (inclusive); `Infinity` represents the +Inf bucket. */
+  le: number;
+  /** Cumulative observations ≤ le. */
+  count: number;
+}
+
+/** Aggregated histogram snapshot for one label set. */
+export interface HistogramSnapshot {
+  labels: LabelSet;
+  buckets: HistogramBucket[];
+  sum: number;
+  count: number;
 }
 
 /**
- * Sum a counter's values, optionally filtered by a label predicate.
- * Generic helper used by the alerts + SLO modules.
+ * Canonical serialization key for a label set. Uses the metric's declared
+ * label names when available so missing labels sort deterministically.
  */
-export function counterSum(
-  registry: MetricsRegistry,
-  metricName: string,
-  labelFilter?: (labels: Record<string, string | number>) => boolean,
-): number {
-  const m = registry.getCounter(metricName);
-  if (!m) return 0;
-  let sum = 0;
-  for (const [key, v] of m.values.entries()) {
-    if (typeof v !== 'number') continue;
-    if (labelFilter) {
-      const labels = parseLabelKey(key);
-      if (!labelFilter(labels)) continue;
-    }
-    sum += v;
-  }
-  return sum;
+function labelKey(declared: string[], labels?: LabelSet): string {
+  const l = labels ?? {};
+  const names = declared.length > 0 ? declared : Object.keys(l).sort();
+  return names.map((k) => `${k}=${l[k] ?? ''}`).join('|');
 }
 
-/**
- * Compute a percentile from a histogram value via linear interpolation
- * between bucket boundaries (the standard Prometheus `histogram_quantile`
- * algorithm). Returns 0 if no observations.
- */
-export function histogramPercentile(hv: HistogramValue, p: number): number {
-  if (hv.count === 0) return 0;
-  const clamped = Math.max(0, Math.min(1, p));
-  const target = Math.ceil(hv.count * clamped);
-  let prevCount = 0;
-  let prevLe = 0;
-  for (const b of hv.buckets) {
-    if (b.count >= target) {
-      const bucketCount = b.count - prevCount;
-      if (bucketCount === 0) return b.le;
-      const fraction = (target - prevCount) / bucketCount;
-      return prevLe + (b.le - prevLe) * fraction;
-    }
-    prevCount = b.count;
-    prevLe = b.le;
-  }
-  // Target is above every bucket — return the largest bucket boundary.
-  return hv.buckets.length > 0 ? hv.buckets[hv.buckets.length - 1].le : 0;
+/** Pretty-print a label set for the Prometheus exposition format. */
+function renderLabels(labels: LabelSet, extra?: Record<string, string>): string {
+  const merged: LabelSet = { ...labels, ...(extra ?? {}) };
+  const keys = Object.keys(merged).sort();
+  if (keys.length === 0) return '';
+  return (
+    '{' +
+    keys
+      .map((k) => `${k}="${String(merged[k]).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
+      .join(',') +
+    '}'
+  );
 }
 
-// ─── Counter ──────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Counter
+// ---------------------------------------------------------------------------
 
-/** A monotonically-increasing counter. */
-export class Counter implements Metric {
+/** Monotonic counter — only increments. */
+export class Counter implements MetricDescriptor {
   readonly type: MetricType = 'counter';
-  values: Map<string, number> = new Map();
+  readonly name: string;
+  readonly help: string;
+  readonly labels: string[];
+  private entries = new Map<string, { labels: LabelSet; value: number }>();
 
-  constructor(
-    public name: string,
-    public help: string,
-    public labels: string[] = [],
-  ) {}
-
-  /** Increment by `value` (default 1). Negative values are ignored. */
-  inc(labels?: LabelValues, value = 1): void {
-    if (value < 0) return; // counters must be monotonically non-decreasing
-    const key = labelKey(this.labels, labels);
-    this.values.set(key, (this.values.get(key) ?? 0) + value);
+  constructor(name: string, help: string, labels: string[] = []) {
+    this.name = name;
+    this.help = help;
+    this.labels = labels;
   }
 
-  /** Current value for the given label set (0 if not set). */
-  get(labels?: LabelValues): number {
-    return this.values.get(labelKey(this.labels, labels)) ?? 0;
+  /** Increment the counter for a label set. `value` must be ≥ 0. */
+  inc(labels?: LabelSet, value = 1): void {
+    if (value < 0) {
+      throw new Error(`Counter ${this.name}.inc: value must be non-negative (got ${value})`);
+    }
+    const k = labelKey(this.labels, labels);
+    const e = this.entries.get(k);
+    if (e) e.value += value;
+    else this.entries.set(k, { labels: labels ?? {}, value });
   }
 
-  /** Reset all label values to 0. */
+  /** Current counter value for a label set (0 if never incremented). */
+  get(labels?: LabelSet): number {
+    return this.entries.get(labelKey(this.labels, labels))?.value ?? 0;
+  }
+
+  /** Sum of all label combinations — useful for "total" alerts. */
+  total(): number {
+    let s = 0;
+    for (const e of this.entries.values()) s += e.value;
+    return s;
+  }
+
+  /** All label/value pairs. */
+  all(): MetricEntry[] {
+    return [...this.entries.values()].map((e) => ({ labels: e.labels, value: e.value }));
+  }
+
+  /** Number of distinct label combinations. */
+  size(): number {
+    return this.entries.size;
+  }
+
+  /** Reset all values (testing only). */
   reset(): void {
-    this.values.clear();
+    this.entries.clear();
   }
 }
 
-// ─── Gauge ───────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Gauge
+// ---------------------------------------------------------------------------
 
-/** A gauge — value can go up or down. */
-export class Gauge implements Metric {
+/** Gauge — set, inc, or dec. */
+export class Gauge implements MetricDescriptor {
   readonly type: MetricType = 'gauge';
-  values: Map<string, number> = new Map();
+  readonly name: string;
+  readonly help: string;
+  readonly labels: string[];
+  private entries = new Map<string, { labels: LabelSet; value: number }>();
 
-  constructor(
-    public name: string,
-    public help: string,
-    public labels: string[] = [],
-  ) {}
-
-  /** Set the gauge to an absolute value. */
-  set(labels: LabelValues | undefined, value: number): void;
-  set(value: number): void;
-  set(arg1: LabelValues | number | undefined, arg2?: number): void {
-    if (typeof arg1 === 'number') {
-      this.values.set('', arg1);
-    } else {
-      this.values.set(labelKey(this.labels, arg1), arg2 ?? 0);
-    }
+  constructor(name: string, help: string, labels: string[] = []) {
+    this.name = name;
+    this.help = help;
+    this.labels = labels;
   }
 
-  /** Increment by `value` (default 1). */
-  inc(labels?: LabelValues, value = 1): void {
-    const key = labelKey(this.labels, labels);
-    this.values.set(key, (this.values.get(key) ?? 0) + value);
+  /** Set the gauge to an absolute value (defaults to 0 when omitted). */
+  set(labels?: LabelSet, value: number = 0): void {
+    const k = labelKey(this.labels, labels);
+    const e = this.entries.get(k);
+    if (e) e.value = value;
+    else this.entries.set(k, { labels: labels ?? {}, value });
   }
 
-  /** Decrement by `value` (default 1). */
-  dec(labels?: LabelValues, value = 1): void {
-    const key = labelKey(this.labels, labels);
-    this.values.set(key, (this.values.get(key) ?? 0) - value);
+  /** Increment the gauge by `value` (default 1). */
+  inc(labels?: LabelSet, value = 1): void {
+    const k = labelKey(this.labels, labels);
+    const e = this.entries.get(k);
+    if (e) e.value += value;
+    else this.entries.set(k, { labels: labels ?? {}, value });
   }
 
-  /** Current value for the given label set (0 if not set). */
-  get(labels?: LabelValues): number {
-    return this.values.get(labelKey(this.labels, labels)) ?? 0;
+  /** Decrement the gauge by `value` (default 1). */
+  dec(labels?: LabelSet, value = 1): void {
+    this.inc(labels, -value);
   }
 
-  /** Reset all label values to 0. */
+  /** Current gauge value for a label set (0 if never set). */
+  get(labels?: LabelSet): number {
+    return this.entries.get(labelKey(this.labels, labels))?.value ?? 0;
+  }
+
+  /** True if the gauge has ever been set for this label combination. */
+  has(labels?: LabelSet): boolean {
+    return this.entries.has(labelKey(this.labels, labels));
+  }
+
+  /** Sum across all label combinations. */
+  total(): number {
+    let s = 0;
+    for (const e of this.entries.values()) s += e.value;
+    return s;
+  }
+
+  /** All label/value pairs. */
+  all(): MetricEntry[] {
+    return [...this.entries.values()].map((e) => ({ labels: e.labels, value: e.value }));
+  }
+
+  /** Reset all values (testing only). */
   reset(): void {
-    this.values.clear();
+    this.entries.clear();
   }
 }
 
-// ─── Histogram ───────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Histogram
+// ---------------------------------------------------------------------------
 
-/** A histogram — buckets observations into cumulative buckets. */
-export class Histogram implements Metric {
+/** Histogram — observations bucketed into fixed boundaries. */
+export class Histogram implements MetricDescriptor {
   readonly type: MetricType = 'histogram';
-  values: Map<string, HistogramValue> = new Map();
+  readonly name: string;
+  readonly help: string;
+  readonly labels: string[];
+  readonly buckets: number[];
+
+  // Per-label-set state.
+  private entries = new Map<
+    string,
+    {
+      labels: LabelSet;
+      bucketCounts: number[];
+      sum: number;
+      count: number;
+      values: number[];
+    }
+  >();
+
+  // Global aggregate across every label set (drives `percentile(p)`).
+  private globalValues: number[] = [];
+  private globalSum = 0;
+  private globalCount = 0;
+  private globalBuckets: number[];
 
   constructor(
-    public name: string,
-    public help: string,
-    public labels: string[] = [],
-    public buckets: number[] = [],
+    name: string,
+    help: string,
+    labels: string[] = [],
+    buckets: number[] = DEFAULT_BUCKETS_MS,
   ) {
-    // Buckets must be sorted ascending; +Inf is implicit.
-    this.buckets = [...buckets].sort((a, b) => a - b);
+    this.name = name;
+    this.help = help;
+    this.labels = labels;
+    // De-dupe + sort the bucket upper bounds.
+    const uniq = Array.from(new Set(buckets)).sort((a, b) => a - b);
+    this.buckets = uniq;
+    this.globalBuckets = uniq.map(() => 0);
   }
 
-  /** Observe a value. */
-  observe(labels: LabelValues | undefined, value: number): void;
-  observe(value: number): void;
-  observe(arg1: LabelValues | number | undefined, arg2?: number): void {
-    let labels: LabelValues | undefined;
-    let value: number;
-    if (typeof arg1 === 'number') {
-      labels = undefined;
-      value = arg1;
-    } else {
-      labels = arg1;
-      value = arg2 ?? 0;
-    }
-    const key = labelKey(this.labels, labels);
-    let hv = this.values.get(key);
-    if (!hv) {
-      hv = {
-        count: 0,
+  /** Record an observation (defaults to 0 when omitted). */
+  observe(labels?: LabelSet, value: number = 0): void {
+    if (!Number.isFinite(value)) return;
+    const k = labelKey(this.labels, labels);
+    let e = this.entries.get(k);
+    if (!e) {
+      e = {
+        labels: labels ?? {},
+        bucketCounts: this.buckets.map(() => 0),
         sum: 0,
-        buckets: this.buckets.map((le) => ({ le, count: 0 })),
+        count: 0,
+        values: [],
       };
-      this.values.set(key, hv);
+      this.entries.set(k, e);
     }
-    hv.count += 1;
-    hv.sum += value;
-    for (const b of hv.buckets) {
-      if (value <= b.le) b.count += 1;
+    e.sum += value;
+    e.count += 1;
+    e.values.push(value);
+    for (let i = 0; i < this.buckets.length; i++) {
+      if (value <= this.buckets[i]) e.bucketCounts[i] += 1;
+    }
+    // Global aggregates.
+    this.globalSum += value;
+    this.globalCount += 1;
+    this.globalValues.push(value);
+    for (let i = 0; i < this.buckets.length; i++) {
+      if (value <= this.buckets[i]) this.globalBuckets[i] += 1;
     }
   }
 
-  /** Histogram value for the given label set (or undefined). */
-  get(labels?: LabelValues): HistogramValue | undefined {
-    return this.values.get(labelKey(this.labels, labels));
+  /**
+   * Nearest-rank percentile across ALL observations (ignoring labels).
+   * `p` ∈ [0,1]. Returns 0 when no observations have been recorded.
+   */
+  percentile(p: number): number {
+    const n = this.globalValues.length;
+    if (n === 0) return 0;
+    const clamped = Math.min(1, Math.max(0, p));
+    const sorted = [...this.globalValues].sort((a, b) => a - b);
+    const rank = Math.max(1, Math.ceil(clamped * n));
+    return sorted[Math.min(rank - 1, n - 1)];
   }
 
-  /** Percentile for the given label set (0 if no observations). */
-  percentile(labels: LabelValues | undefined, p: number): number {
-    const hv = this.get(labels);
-    if (!hv) return 0;
-    return histogramPercentile(hv, p);
+  /** Percentile restricted to a single label set. */
+  percentileFor(p: number, labels?: LabelSet): number {
+    const e = this.entries.get(labelKey(this.labels, labels));
+    if (!e || e.values.length === 0) return 0;
+    const clamped = Math.min(1, Math.max(0, p));
+    const sorted = [...e.values].sort((a, b) => a - b);
+    const rank = Math.max(1, Math.ceil(clamped * sorted.length));
+    return sorted[Math.min(rank - 1, sorted.length - 1)];
   }
 
-  /** Reset all observations. */
+  /** Global observation count. */
+  count(): number {
+    return this.globalCount;
+  }
+
+  /** Global sum of all observations. */
+  sum(): number {
+    return this.globalSum;
+  }
+
+  /** Global average (0 if no observations). */
+  avg(): number {
+    return this.globalCount === 0 ? 0 : round(this.globalSum / this.globalCount, 4);
+  }
+
+  /** Per-label-set histogram snapshots. */
+  snapshots(): HistogramSnapshot[] {
+    return [...this.entries.values()].map((e) => {
+      const buckets: HistogramBucket[] = e.bucketCounts.map((c, i) => ({
+        le: this.buckets[i],
+        count: c, // bucketCounts are already cumulative (every bucket ≤ value is incremented)
+      }));
+      buckets.push({ le: Infinity, count: e.count });
+      return { labels: e.labels, buckets, sum: round(e.sum, 6), count: e.count };
+    });
+  }
+
+  /** Global histogram snapshot (aggregated across labels). */
+  globalSnapshot(): HistogramSnapshot {
+    const buckets: HistogramBucket[] = this.globalBuckets.map((c, i) => ({
+      le: this.buckets[i],
+      count: c,
+    }));
+    buckets.push({ le: Infinity, count: this.globalCount });
+    return { labels: {}, buckets, sum: round(this.globalSum, 6), count: this.globalCount };
+  }
+
+  /** Reset all observations (testing only). */
   reset(): void {
-    this.values.clear();
+    this.entries.clear();
+    this.globalValues = [];
+    this.globalSum = 0;
+    this.globalCount = 0;
+    this.globalBuckets = this.buckets.map(() => 0);
   }
 }
 
-// ─── MetricsRegistry ──────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Registry
+// ---------------------------------------------------------------------------
 
-/** Union of all metric class types. */
+/** Union type for any registered metric. */
 export type AnyMetric = Counter | Gauge | Histogram;
 
+/** JSON-serializable metric snapshot returned by `MetricsRegistry.json()`. */
+export interface MetricJsonSnapshot {
+  name: string;
+  help: string;
+  type: MetricType;
+  labels: string[];
+  entries?: MetricEntry[]; // present for counter / gauge
+  histogram?: HistogramSnapshot[]; // present for histogram
+  total?: number; // counter/gauge sum
+  count?: number; // histogram observation count
+  sum?: number; // histogram observation sum
+  avg?: number; // histogram average
+  p50?: number; // histogram global percentiles
+  p95?: number;
+  p99?: number;
+}
+
 /**
- * Owns all metrics. Provides registration, lookup, exposition (Prometheus
- * text format), and JSON snapshot.
+ * Prometheus-style registry. Owns all metrics by name. Pre-loaded with the
+ * PaySwap operational metric set on construction.
  */
 export class MetricsRegistry {
-  private metrics: Map<string, AnyMetric> = new Map();
+  private metrics = new Map<string, AnyMetric>();
 
-  /** Register a counter. Returns the counter (for direct inc/get calls). */
-  registerCounter(name: string, help = '', labels: string[] = []): Counter {
-    if (this.metrics.has(name)) {
-      const m = this.metrics.get(name)!;
-      if (m instanceof Counter) return m;
-    }
+  /** Register (or return an existing) counter. */
+  registerCounter(name: string, help: string, labels: string[] = []): Counter {
+    const existing = this.metrics.get(name);
+    if (existing instanceof Counter) return existing;
     const c = new Counter(name, help, labels);
     this.metrics.set(name, c);
     return c;
   }
 
-  /** Register a gauge. Returns the gauge. */
-  registerGauge(name: string, help = '', labels: string[] = []): Gauge {
-    if (this.metrics.has(name)) {
-      const m = this.metrics.get(name)!;
-      if (m instanceof Gauge) return m;
-    }
+  /** Register (or return an existing) gauge. */
+  registerGauge(name: string, help: string, labels: string[] = []): Gauge {
+    const existing = this.metrics.get(name);
+    if (existing instanceof Gauge) return existing;
     const g = new Gauge(name, help, labels);
     this.metrics.set(name, g);
     return g;
   }
 
-  /** Register a histogram. Returns the histogram. */
+  /** Register (or return an existing) histogram. */
   registerHistogram(
     name: string,
-    help = '',
+    help: string,
     labels: string[] = [],
-    buckets: number[] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+    buckets: number[] = DEFAULT_BUCKETS_MS,
   ): Histogram {
-    if (this.metrics.has(name)) {
-      const m = this.metrics.get(name)!;
-      if (m instanceof Histogram) return m;
-    }
+    const existing = this.metrics.get(name);
+    if (existing instanceof Histogram) return existing;
     const h = new Histogram(name, help, labels, buckets);
     this.metrics.set(name, h);
     return h;
   }
 
-  /** Look up a metric by name (returns undefined if not registered). */
+  /** Fetch a metric by name. */
   get(name: string): AnyMetric | undefined {
     return this.metrics.get(name);
   }
 
-  /** Convenience: get a registered Counter (undefined if not a counter). */
+  /** Fetch a typed counter (undefined if missing or wrong type). */
   getCounter(name: string): Counter | undefined {
     const m = this.metrics.get(name);
     return m instanceof Counter ? m : undefined;
   }
 
-  /** Convenience: get a registered Gauge. */
+  /** Fetch a typed gauge (undefined if missing or wrong type). */
   getGauge(name: string): Gauge | undefined {
     const m = this.metrics.get(name);
     return m instanceof Gauge ? m : undefined;
   }
 
-  /** Convenience: get a registered Histogram. */
+  /** Fetch a typed histogram (undefined if missing or wrong type). */
   getHistogram(name: string): Histogram | undefined {
     const m = this.metrics.get(name);
     return m instanceof Histogram ? m : undefined;
@@ -353,193 +443,158 @@ export class MetricsRegistry {
     return [...this.metrics.values()];
   }
 
+  /** Metric names. */
+  names(): string[] {
+    return [...this.metrics.keys()];
+  }
+
+  /** True if a metric with `name` is registered. */
+  has(name: string): boolean {
+    return this.metrics.has(name);
+  }
+
   /**
-   * Emit the standard Prometheus text exposition format:
-   *
-   *   # HELP metric_name help text
-   *   # TYPE metric_name counter|gauge|histogram
-   *   metric_name{label="value"} 42
-   *   metric_name_bucket{label="value",le="100"} 5
-   *   metric_name_sum{label="value"} 1234.5
-   *   metric_name_count{label="value"} 10
-   *
-   * Suitable for scraping via `/api/metrics` or feeding to a
-   * Prometheus-bridge.
+   * Prometheus text exposition format. Counters/gauges render one line per
+   * label set; histograms render `_bucket{le=…}`, `_sum`, and `_count` lines
+   * per label set.
    */
   expose(): string {
     const lines: string[] = [];
     for (const m of this.metrics.values()) {
       lines.push(`# HELP ${m.name} ${m.help}`);
       lines.push(`# TYPE ${m.name} ${m.type}`);
-      if (m instanceof Histogram) {
-        for (const [key, hv] of m.values.entries()) {
-          const prefix = key ? `${key},` : '';
-          for (const b of hv.buckets) {
-            lines.push(`${m.name}_bucket{${prefix}le="${b.le}"} ${b.count}`);
+      if (m instanceof Counter || m instanceof Gauge) {
+        const entries = m.all();
+        if (entries.length === 0) {
+          lines.push(`${m.name} 0`);
+        } else {
+          for (const e of entries) {
+            lines.push(`${m.name}${renderLabels(e.labels)} ${e.value}`);
           }
-          lines.push(`${m.name}_bucket{${prefix}le="+Inf"} ${hv.count}`);
-          lines.push(`${m.name}_sum${key ? `{${key}}` : ''} ${hv.sum}`);
-          lines.push(`${m.name}_count${key ? `{${key}}` : ''} ${hv.count}`);
         }
-      } else {
-        for (const [key, value] of m.values.entries()) {
-          lines.push(`${m.name}${key ? `{${key}}` : ''} ${value}`);
+      } else if (m instanceof Histogram) {
+        const snaps = m.snapshots();
+        if (snaps.length === 0) {
+          for (const le of m.buckets) {
+            lines.push(`${m.name}_bucket{le="${le}"} 0`);
+          }
+          lines.push(`${m.name}_bucket{le="+Inf"} 0`);
+          lines.push(`${m.name}_sum 0`);
+          lines.push(`${m.name}_count 0`);
+        } else {
+          for (const s of snaps) {
+            for (const b of s.buckets) {
+              const leStr = b.le === Infinity ? '+Inf' : String(b.le);
+              lines.push(`${m.name}_bucket${renderLabels(s.labels, { le: leStr })} ${b.count}`);
+            }
+            lines.push(`${m.name}_sum${renderLabels(s.labels)} ${s.sum}`);
+            lines.push(`${m.name}_count${renderLabels(s.labels)} ${s.count}`);
+          }
         }
       }
     }
-    return lines.join('\n');
+    return lines.join('\n') + '\n';
   }
 
-  /**
-   * JSON snapshot — every metric, every label set, with type info.
-   * Useful for dashboards that don't speak Prometheus text format.
-   */
-  json(): Record<string, unknown> {
-    const out: Record<string, unknown> = {};
+  /** JSON snapshot of every metric. */
+  json(): Record<string, MetricJsonSnapshot> {
+    const out: Record<string, MetricJsonSnapshot> = {};
     for (const m of this.metrics.values()) {
-      const entries: Record<string, unknown> = {};
-      for (const [key, value] of m.values.entries()) {
-        entries[key || '_'] = value;
+      if (m instanceof Counter || m instanceof Gauge) {
+        out[m.name] = {
+          name: m.name,
+          help: m.help,
+          type: m.type,
+          labels: m.labels,
+          entries: m.all(),
+          total: m.total(),
+        };
+      } else if (m instanceof Histogram) {
+        out[m.name] = {
+          name: m.name,
+          help: m.help,
+          type: m.type,
+          labels: m.labels,
+          histogram: m.snapshots(),
+          count: m.count(),
+          sum: m.sum(),
+          avg: m.avg(),
+          p50: m.percentile(0.5),
+          p95: m.percentile(0.95),
+          p99: m.percentile(0.99),
+        };
       }
-      out[m.name] = {
-        type: m.type,
-        help: m.help,
-        labels: m.labels,
-        ...(m instanceof Histogram ? { buckets: m.buckets } : {}),
-        values: entries,
-      };
     }
     return out;
   }
 
-  /** Reset every metric (clears all label values). */
+  /** Reset every metric (testing only). */
   reset(): void {
-    for (const m of this.metrics.values()) m.reset();
-  }
-
-  /**
-   * Record a connector outcome into the standard connector metrics.
-   * Helper used by the ops dashboard + alerting — keeps the metric
-   * emission format consistent with `connectors-v2/metrics.ts`.
-   */
-  recordConnectorRequest(
-    connector: string,
-    status: 'success' | 'failed' | 'rate_limited' | 'error',
-    latencyMs: number,
-  ): void {
-    const total = this.getCounter('payswap_connector_requests_total');
-    const latency = this.getHistogram('payswap_connector_latency_ms');
-    total?.inc({ connector, status });
-    latency?.observe({ connector }, latencyMs);
-    eventEngine.emit('ops.metric_recorded', {
-      metric: 'payswap_connector_requests_total',
-      connector,
-      status,
-      latencyMs,
-    });
+    for (const m of this.metrics.values()) {
+      m.reset();
+    }
   }
 }
 
-// ─── Singleton + Standard Metrics ─────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Pre-registered operational metrics + singleton
+// ---------------------------------------------------------------------------
 
-/** Singleton metrics registry — shared by the entire PaySwap runtime. */
-export const metricsRegistry = new MetricsRegistry();
+/** Metric names used across the ops module. */
+export const METRIC_NAMES = {
+  paymentsTotal: 'payswap_payments_total',
+  payoutsTotal: 'payswap_payouts_total',
+  settlementDurationMs: 'payswap_settlement_duration_ms',
+  connectorRequestsTotal: 'payswap_connector_requests_total',
+  twinTokensSupply: 'payswap_twin_tokens_supply',
+  ledgerPostedTotal: 'payswap_ledger_posted_total',
+  eventsPersistedTotal: 'payswap_events_persisted_total',
+  treasuryReserveRatio: 'payswap_treasury_reserve_ratio',
+} as const;
 
-/**
- * Pre-register the standard PaySwap operational metrics. Called once at
- * module load. Idempotent (calling twice is a no-op — `registerX` returns
- * the existing metric if already registered).
- */
-export function registerStandardMetrics(registry: MetricsRegistry = metricsRegistry): void {
-  // Payments
-  registry.registerCounter(
-    'payswap_payments_total',
-    'Total payments processed, by status/currency/corridor.',
-    ['status', 'currency', 'corridor'],
-  );
-  // Payouts
-  registry.registerCounter(
-    'payswap_payouts_total',
-    'Total payouts processed, by method/status.',
-    ['method', 'status'],
-  );
-  // Settlement duration
-  registry.registerHistogram(
-    'payswap_settlement_duration_ms',
-    'Time from payment intent to final settlement, by corridor.',
+/** Build a registry with the PaySwap operational metric set pre-registered. */
+function createDefaultRegistry(): MetricsRegistry {
+  const r = new MetricsRegistry();
+  r.registerCounter(METRIC_NAMES.paymentsTotal, 'Total payments processed, by status.', ['status']);
+  r.registerCounter(METRIC_NAMES.payoutsTotal, 'Total payouts initiated, by state.', ['state']);
+  r.registerHistogram(
+    METRIC_NAMES.settlementDurationMs,
+    'Settlement duration in milliseconds.',
     ['corridor'],
-    [100, 500, 1000, 5000, 10000, 30000, 60000],
+    DEFAULT_BUCKETS_MS,
   );
-  // Planner latency
-  registry.registerHistogram(
-    'payswap_planner_latency_ms',
-    'Solver/planner latency per plan.',
-    [],
-    [1, 5, 10, 25, 50, 100, 250],
-  );
-  // Connector latency
-  registry.registerHistogram(
-    'payswap_connector_latency_ms',
-    'Per-connector request latency.',
-    ['connector'],
-    [10, 50, 100, 250, 500, 1000, 5000],
-  );
-  // Connector requests
-  registry.registerCounter(
-    'payswap_connector_requests_total',
-    'Total connector requests, by connector/status.',
+  r.registerCounter(
+    METRIC_NAMES.connectorRequestsTotal,
+    'Total connector requests, by connector and outcome.',
     ['connector', 'status'],
   );
-  // Twin token supply
-  registry.registerGauge(
-    'payswap_twin_tokens_supply',
-    'Circulating Twin Token supply, by asset.',
+  r.registerGauge(
+    METRIC_NAMES.twinTokensSupply,
+    'Current Twin Token total supply, by asset code.',
     ['asset'],
   );
-  // Twin token escrow
-  registry.registerGauge(
-    'payswap_twin_tokens_escrowed',
-    'Twin Tokens currently escrowed (in-flight), by asset.',
-    ['asset'],
+  r.registerCounter(METRIC_NAMES.ledgerPostedTotal, 'Total ledger journal entries posted.');
+  r.registerCounter(
+    METRIC_NAMES.eventsPersistedTotal,
+    'Total events persisted to the event store.',
   );
-  // LP active count
-  registry.registerGauge(
-    'payswap_lp_active_count',
-    'Number of active liquidity providers.',
-    [],
+  r.registerGauge(
+    METRIC_NAMES.treasuryReserveRatio,
+    'Treasury reserve ratio (total reserves / twin token liability).',
   );
-  // LP capacity
-  registry.registerGauge(
-    'payswap_lp_capacity_available',
-    'Available LP capacity, by corridor.',
-    ['corridor'],
-  );
-  // Ledger posts
-  registry.registerCounter(
-    'payswap_ledger_posted_total',
-    'Total ledger entries posted.',
-    [],
-  );
-  // Webhook deliveries
-  registry.registerCounter(
-    'payswap_webhook_deliveries_total',
-    'Total webhook deliveries, by status.',
-    ['status'],
-  );
-  // Treasury reserve ratio
-  registry.registerGauge(
-    'payswap_treasury_reserve_ratio',
-    'Per-currency treasury reserve ratio (reserve / circulating).',
-    ['currency'],
-  );
-  // DB query duration
-  registry.registerHistogram(
-    'payswap_db_query_duration_ms',
-    'Database query duration.',
-    [],
-    [1, 5, 10, 25, 50, 100],
-  );
+  return r;
 }
 
-// Register on module load.
-registerStandardMetrics();
+/**
+ * Singleton metrics registry, pre-loaded with the operational metric set.
+ * Stashed on `globalThis` so Next.js dev module re-instantiation does not
+ * create duplicate singletons (same pattern as `eventEngine`).
+ */
+const _globalForMetrics = globalThis as unknown as {
+  __PAYSWAP_METRICS_REGISTRY?: MetricsRegistry;
+};
+export const metricsRegistry: MetricsRegistry =
+  _globalForMetrics.__PAYSWAP_METRICS_REGISTRY ?? createDefaultRegistry();
+if (!_globalForMetrics.__PAYSWAP_METRICS_REGISTRY) {
+  _globalForMetrics.__PAYSWAP_METRICS_REGISTRY = metricsRegistry;
+}

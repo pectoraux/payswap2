@@ -1,180 +1,176 @@
 /**
- * PaySwap Protocol — QR Payment System.
+ * PaySwap Protocol — QR Code Service.
  *
- * Users can scan QR codes to pay:
- *   - Scan another user's QR → account-to-account payment
- *   - Scan merchant QR → merchant payment
- *   - Scan invoice QR → invoice payment
+ * Six QR code types covering the full merchant surface area:
  *
- * QR payload contains only payment metadata — no private information.
- * After scanning, a normal Payment Intent is created and flows through
- * the standard protocol runtime.
+ *   static       — reusable merchant identity QR (no amount, no expiry)
+ *   dynamic      — one-shot payment QR with amount + optional reference
+ *   invoice      — dynamic QR tied to a specific invoice reference
+ *   donation     — open-amount QR for civic / charity flows
+ *   subscription — recurring payment QR with interval (daily/weekly/monthly)
+ *   checkout     — short-lived session QR for online checkout handoff
+ *
+ * The `encoded` field is a URL-safe base64 of the JSON payload — production
+ * renders this into an actual image at the edge. The QR record itself is
+ * stored in-process so merchants can poll status / inspect generated codes.
  */
-import { uid } from '@/kernel/support';
+import { uid, nowTs } from '@/kernel/support';
 
 export type QRType = 'static' | 'dynamic' | 'invoice' | 'donation' | 'subscription' | 'checkout';
 
-export interface QRPayload {
-  v: 1; // version
-  type: QRType;
-  merchant?: string;
-  wallet?: string;
-  account?: string;
-  currency: string;
-  amount?: number;
-  reference?: string;
-  expires?: number;
-  metadata?: Record<string, string>;
-}
+export type QRInterval = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 export interface QRCode {
   id: string;
   type: QRType;
-  payload: QRPayload;
+  merchant: string;
+  wallet?: string;
+  currency: string;
+  amount?: number;
+  reference?: string;
+  interval?: QRInterval;
+  payload: Record<string, unknown>;
   encoded: string;
   createdAt: number;
   expiresAt: number | null;
-  used: boolean;
-  usedAt: number | null;
-  paymentId?: string;
 }
 
+const DEFAULT_DYNAMIC_EXPIRY_MS = 5 * 60 * 1000;     // 5 minutes
+const DEFAULT_CHECKOUT_EXPIRY_MS = 10 * 60 * 1000;   // 10 minutes
+const DEFAULT_INVOICE_EXPIRY_MS  = 24 * 60 * 60 * 1000; // 24 hours
+
 export class QRService {
-  private codes: Map<string, QRCode> = new Map();
+  private codes = new Map<string, QRCode>();
 
-  /** Generate a static QR (reusable, no expiry). */
-  generateStatic(params: {
-    merchant?: string; wallet?: string; account?: string; currency: string;
-  }): QRCode {
-    return this.create({
-      type: 'static',
-      payload: { v: 1, type: 'static', merchant: params.merchant, wallet: params.wallet, account: params.account, currency: params.currency },
-      expiresAt: null,
-    });
+  // ----------------------------------------------------------- generateStatic
+  generateStatic(params: { merchant: string; wallet: string; currency: string }): QRCode {
+    const { merchant, wallet, currency } = params;
+    const id = uid('qr');
+    const payload = { id, type: 'static', merchant, wallet, currency };
+    const qr: QRCode = {
+      id, type: 'static', merchant, wallet, currency,
+      payload, encoded: this.encode(payload),
+      createdAt: nowTs(), expiresAt: null,
+    };
+    this.codes.set(id, qr);
+    return qr;
   }
 
-  /** Generate a dynamic QR (one-time, with expiry). */
+  // ---------------------------------------------------------- generateDynamic
   generateDynamic(params: {
-    merchant?: string; wallet?: string; account?: string;
-    currency: string; amount: number; reference?: string; expiresMs?: number;
+    merchant: string; wallet: string; currency: string;
+    amount: number; reference?: string; expiresMs?: number;
   }): QRCode {
-    return this.create({
-      type: 'dynamic',
-      payload: {
-        v: 1, type: 'dynamic',
-        merchant: params.merchant, wallet: params.wallet, account: params.account,
-        currency: params.currency, amount: params.amount, reference: params.reference,
-        expires: Date.now() + (params.expiresMs ?? 300000),
-      },
-      expiresAt: Date.now() + (params.expiresMs ?? 300000),
-    });
+    const { merchant, wallet, currency, amount, reference, expiresMs } = params;
+    if (amount <= 0) throw new Error('amount must be positive for dynamic QR');
+    const id = uid('qr');
+    const createdAt = nowTs();
+    const expiresAt = createdAt + (expiresMs ?? DEFAULT_DYNAMIC_EXPIRY_MS);
+    const payload = { id, type: 'dynamic', merchant, wallet, currency, amount, reference };
+    const qr: QRCode = {
+      id, type: 'dynamic', merchant, wallet, currency, amount, reference,
+      payload, encoded: this.encode(payload),
+      createdAt, expiresAt,
+    };
+    this.codes.set(id, qr);
+    return qr;
   }
 
-  /** Generate an invoice QR. */
+  // ----------------------------------------------------------- generateInvoice
   generateInvoice(params: {
     merchant: string; currency: string; amount: number;
     reference: string; expiresMs?: number;
   }): QRCode {
-    return this.create({
-      type: 'invoice',
-      payload: {
-        v: 1, type: 'invoice', merchant: params.merchant,
-        currency: params.currency, amount: params.amount, reference: params.reference,
-        expires: Date.now() + (params.expiresMs ?? 86400000),
-      },
-      expiresAt: Date.now() + (params.expiresMs ?? 86400000),
-    });
+    const { merchant, currency, amount, reference, expiresMs } = params;
+    if (amount <= 0) throw new Error('amount must be positive for invoice QR');
+    if (!reference) throw new Error('reference is required for invoice QR');
+    const id = uid('qr');
+    const createdAt = nowTs();
+    const expiresAt = createdAt + (expiresMs ?? DEFAULT_INVOICE_EXPIRY_MS);
+    const payload = { id, type: 'invoice', merchant, currency, amount, reference };
+    const qr: QRCode = {
+      id, type: 'invoice', merchant, currency, amount, reference,
+      payload, encoded: this.encode(payload),
+      createdAt, expiresAt,
+    };
+    this.codes.set(id, qr);
+    return qr;
   }
 
-  /** Generate a donation QR (no fixed amount). */
+  // --------------------------------------------------------- generateDonation
   generateDonation(params: {
     merchant: string; currency: string; reference?: string;
   }): QRCode {
-    return this.create({
-      type: 'donation',
-      payload: {
-        v: 1, type: 'donation', merchant: params.merchant,
-        currency: params.currency, reference: params.reference,
-      },
-      expiresAt: null,
-    });
+    const { merchant, currency, reference } = params;
+    const id = uid('qr');
+    const payload = { id, type: 'donation', merchant, currency, reference };
+    const qr: QRCode = {
+      id, type: 'donation', merchant, currency, reference,
+      payload, encoded: this.encode(payload),
+      createdAt: nowTs(), expiresAt: null,
+    };
+    this.codes.set(id, qr);
+    return qr;
   }
 
-  /** Generate a subscription QR. */
+  // ----------------------------------------------------- generateSubscription
   generateSubscription(params: {
     merchant: string; currency: string; amount: number;
-    reference: string; interval: 'daily' | 'weekly' | 'monthly';
+    reference: string; interval: QRInterval;
   }): QRCode {
-    return this.create({
-      type: 'subscription',
-      payload: {
-        v: 1, type: 'subscription', merchant: params.merchant,
-        currency: params.currency, amount: params.amount, reference: params.reference,
-        metadata: { interval: params.interval },
-      },
-      expiresAt: null,
-    });
+    const { merchant, currency, amount, reference, interval } = params;
+    if (amount <= 0) throw new Error('amount must be positive for subscription QR');
+    if (!reference) throw new Error('reference is required for subscription QR');
+    const id = uid('qr');
+    const payload = { id, type: 'subscription', merchant, currency, amount, reference, interval };
+    const qr: QRCode = {
+      id, type: 'subscription', merchant, currency, amount, reference, interval,
+      payload, encoded: this.encode(payload),
+      createdAt: nowTs(), expiresAt: null,
+    };
+    this.codes.set(id, qr);
+    return qr;
   }
 
-  /** Generate a checkout QR (for website POS). */
+  // ----------------------------------------------------------- generateCheckout
   generateCheckout(params: {
     merchant: string; currency: string; amount: number;
     reference?: string; expiresMs?: number;
   }): QRCode {
-    return this.create({
-      type: 'checkout',
-      payload: {
-        v: 1, type: 'checkout', merchant: params.merchant,
-        currency: params.currency, amount: params.amount, reference: params.reference,
-        expires: Date.now() + (params.expiresMs ?? 600000),
-      },
-      expiresAt: Date.now() + (params.expiresMs ?? 600000),
-    });
+    const { merchant, currency, amount, reference, expiresMs } = params;
+    if (amount <= 0) throw new Error('amount must be positive for checkout QR');
+    const id = uid('qr');
+    const createdAt = nowTs();
+    const expiresAt = createdAt + (expiresMs ?? DEFAULT_CHECKOUT_EXPIRY_MS);
+    const payload = { id, type: 'checkout', merchant, currency, amount, reference };
+    const qr: QRCode = {
+      id, type: 'checkout', merchant, currency, amount, reference,
+      payload, encoded: this.encode(payload),
+      createdAt, expiresAt,
+    };
+    this.codes.set(id, qr);
+    return qr;
   }
 
-  /** Decode a scanned QR string. */
-  decode(encoded: string): QRPayload | null {
-    try {
-      const payload = JSON.parse(Buffer.from(encoded, 'base64').toString('utf-8')) as QRPayload;
-      if (payload.v !== 1) return null;
-      if (payload.expires && Date.now() > payload.expires) return null;
-      return payload;
-    } catch {
-      return null;
-    }
-  }
-
-  /** Resolve a QR code to a payment intent (creates intent via TransactionEngine). */
-  resolve(qrId: string): { payload: QRPayload; expired: boolean; used: boolean } | null {
-    const qr = this.codes.get(qrId);
-    if (!qr) return null;
-    const expired = qr.expiresAt !== null && Date.now() > qr.expiresAt;
-    return { payload: qr.payload, expired, used: qr.used };
-  }
-
-  /** Mark QR as used (after payment created). */
-  markUsed(qrId: string, paymentId: string): void {
-    const qr = this.codes.get(qrId);
-    if (qr) { qr.used = true; qr.usedAt = Date.now(); qr.paymentId = paymentId; }
-  }
-
-  get(qrId: string): QRCode | undefined { return this.codes.get(qrId); }
+  // ----------------------------------------------------------------- queries
   all(): QRCode[] { return [...this.codes.values()]; }
 
-  reset(): void { this.codes.clear(); }
+  get(id: string): QRCode | undefined { return this.codes.get(id); }
 
-  private create(params: { type: QRType; payload: QRPayload; expiresAt: number | null }): QRCode {
-    const qr: QRCode = {
-      id: uid('qr'),
-      type: params.type,
-      payload: params.payload,
-      encoded: Buffer.from(JSON.stringify(params.payload)).toString('base64'),
-      createdAt: Date.now(),
-      expiresAt: params.expiresAt,
-      used: false, usedAt: null,
-    };
-    this.codes.set(qr.id, qr);
-    return qr;
+  /** True if the QR exists and is still within its validity window. */
+  isValid(id: string, now: number = nowTs()): boolean {
+    const qr = this.codes.get(id);
+    if (!qr) return false;
+    if (qr.expiresAt === null) return true;
+    return now < qr.expiresAt;
+  }
+
+  // ----------------------------------------------------------------- helpers
+  private encode(payload: Record<string, unknown>): string {
+    // URL-safe base64 of UTF-8 JSON.
+    const json = JSON.stringify(payload);
+    const b64 = Buffer.from(json, 'utf8').toString('base64');
+    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
   }
 }
 

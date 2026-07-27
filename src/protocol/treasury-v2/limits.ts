@@ -1,316 +1,359 @@
 /**
- * Treasury v2 — Mint / burn limit engines.
+ * PaySwap Protocol — Treasury Operations Center (v2) — Mint/Burn Limits.
  *
- * Two parallel engines: `MintLimitEngine` and `BurnLimitEngine`. Each enforces:
- *   - A daily cap (rolling 24h window): no mint/burn can push dailyUsed above
- *     `dailyLimit`.
- *   - A per-tx cap: no single mint/burn can exceed `perTxLimit`.
- *   - (Mint only) A cooldown: minimum milliseconds between mints to the same
- *     recipient. Set to 0 to disable.
+ * Enforces hard caps on Twin Token issuance (mint) and redemption
+ * (burn). Every mint goes through `checkMint()` before it is
+ * recorded; the protocol's `preMintHook` calls this in order:
  *
- * Window roll-over: when the time since `windowStartTs` exceeds 24h, the window
- * rolls over — `dailyUsed` resets to 0 and `windowStartTs` advances to now.
- * This is checked lazily on every `checkMint` / `recordMint` / `checkBurn` /
- * `recordBurn` call.
+ *   1. daily limit (24h rolling window)
+ *   2. per-tx limit
+ *   3. cooldown (mints only)
+ *   4. (backing sufficiency is checked separately by BackingVerifier)
  *
- * Invariants:
- *  - No mint can exceed the daily limit or per-tx limit (checkMint returns
- *    `{ allowed: false, reason }` and the caller MUST honor it).
- *  - `recordMint(assetCode, amount)` does NOT check limits — it assumes the
- *    caller has already called `checkMint` and honored the result. It only
- *    increments `dailyUsed` and updates `lastMintTs`. This separation makes
- *    "check then record" patterns explicit and audit-friendly.
- *  - Burns are bounded because unbounded burns could mask insolvency (burning
- *    destroys the protocol's liability to redeem, so an attacker who could
- *    burn unbounded tokens could hide a shortfall). The same daily + per-tx
- *    caps apply.
+ * Pre-configured defaults:
+ *   - TWINGHS:  daily 100_000, per-tx 50_000, cooldown 0ms
+ *   - TWINKES:  daily 200_000, per-tx 100_000, cooldown 0ms
+ *
+ * The 24h rolling window resets when `now - windowStartTs >= 24h`.
+ * After reset, `dailyUsed` returns to 0 and `windowStartTs` advances
+ * to `now`. The window is "rolling" in the sense that any recordMint
+ * call first rolls the window forward if it has expired.
+ *
+ * Events emitted on the kernel `eventEngine`:
+ *  - `treasury.mint_blocked`   — when a mint is denied (with reason).
+ *  - `treasury.mint_recorded`  — when a mint is recorded against the limit.
+ *  - `treasury.burn_blocked`   — when a burn is denied (with reason).
+ *  - `treasury.burn_recorded`  — when a burn is recorded against the limit.
+ *
+ * The kernel is FROZEN — this module imports only `nowTs` from
+ * `@/kernel/support` and `eventEngine` from `@/kernel/event`.
  */
+import { nowTs } from '@/kernel/support';
 import { eventEngine } from '@/kernel/event';
-import { round } from '@/kernel/support';
-import type {
-  BurnLimit,
-  BurnLimitConfig,
-  LimitCheckResult,
-  MintLimit,
-  MintLimitConfig,
-} from './types';
-import {
-  DAY_MS,
-  DEFAULT_DAILY_BURN_LIMIT,
-  DEFAULT_DAILY_MINT_LIMIT,
-  DEFAULT_PER_TX_BURN_LIMIT,
-  DEFAULT_PER_TX_MINT_LIMIT,
-  DEFAULT_MINT_COOLDOWN_MS,
-} from './types';
+import type { BurnLimit, LimitCheckResult, MintLimit } from './types';
 
-/* ========================================================================== */
-/* MintLimitEngine                                                             */
-/* ========================================================================== */
+/** Configuration for a mint limit. */
+export interface MintLimitConfig {
+  dailyLimit: number;
+  perTxLimit: number;
+  cooldownMs?: number;
+}
 
+/** Configuration for a burn limit. */
+export interface BurnLimitConfig {
+  dailyLimit: number;
+  perTxLimit: number;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Default mint limits per asset code. */
+export const DEFAULT_MINT_LIMITS: Record<string, MintLimitConfig> = {
+  TWINGHS: { dailyLimit: 100_000, perTxLimit: 50_000, cooldownMs: 0 },
+  TWINKES: { dailyLimit: 200_000, perTxLimit: 100_000, cooldownMs: 0 },
+};
+
+/** Default burn limits per asset code (mirrors mint defaults). */
+export const DEFAULT_BURN_LIMITS: Record<string, BurnLimitConfig> = {
+  TWINGHS: { dailyLimit: 100_000, perTxLimit: 50_000 },
+  TWINKES: { dailyLimit: 200_000, perTxLimit: 100_000 },
+};
+
+/**
+ * Mint limit engine — enforces per-asset daily + per-tx + cooldown
+ * limits on Twin Token minting.
+ */
 export class MintLimitEngine {
-  private limits: Map<string, MintLimit> = new Map();
+  private limits = new Map<string, MintLimit>();
 
-  /**
-   * Configure mint limits for an asset. If limits already exist for this
-   * assetCode, the dailyUsed / windowStartTs are preserved (so re-configuring
-   * mid-window doesn't reset the running tally).
-   */
-  configure(config: MintLimitConfig): MintLimit {
-    const existing = this.limits.get(config.assetCode);
+  /** Configure (or reconfigure) the mint limit for an asset. */
+  configure(assetCode: string, config: MintLimitConfig): MintLimit {
+    const existing = this.limits.get(assetCode);
     const limit: MintLimit = {
-      assetCode: config.assetCode,
+      assetCode,
       dailyLimit: config.dailyLimit,
       perTxLimit: config.perTxLimit,
-      cooldownMs: config.cooldownMs ?? DEFAULT_MINT_COOLDOWN_MS,
+      cooldownMs: config.cooldownMs ?? 0,
       dailyUsed: existing?.dailyUsed ?? 0,
-      windowStartTs: existing?.windowStartTs ?? Date.now(),
+      windowStartTs: existing?.windowStartTs ?? nowTs(),
       lastMintTs: existing?.lastMintTs ?? 0,
     };
-    this.limits.set(config.assetCode, limit);
+    this.limits.set(assetCode, limit);
     return limit;
   }
 
-  /** Get the current mint limit config for an asset. Undefined if not configured. */
+  /** Get the current mint limit state for an asset (or undefined). */
   get(assetCode: string): MintLimit | undefined {
-    this.resetIfWindowExpired(assetCode);
     return this.limits.get(assetCode);
   }
 
   /** All configured mint limits. */
   all(): MintLimit[] {
-    for (const assetCode of this.limits.keys()) this.resetIfWindowExpired(assetCode);
     return [...this.limits.values()];
   }
 
   /**
-   * Check whether a mint of `amount` units of `assetCode` is allowed.
-   *
-   * Returns `{ allowed: true, remainingDaily }` if allowed, or
-   * `{ allowed: false, reason }` if denied. Reasons:
-   *   - `not_configured` : no limit set for this asset (denied by default)
-   *   - `per_tx_exceeded`: amount > perTxLimit
-   *   - `daily_exceeded` : dailyUsed + amount > dailyLimit
-   *   - `cooldown_active`: lastMintTs + cooldownMs > now (recipient must wait)
-   *
-   * `remainingDaily` is always returned when allowed (and may be 0 if the
-   * mint exactly hits the cap).
+   * Roll the 24h window forward if it has expired. Mutates the
+   * limit record in place.
    */
-  checkMint(assetCode: string, amount: number, now: number = Date.now()): LimitCheckResult {
-    this.resetIfWindowExpired(assetCode, now);
+  private rollWindow(limit: MintLimit, now: number): void {
+    if (now - limit.windowStartTs >= DAY_MS) {
+      limit.windowStartTs = now;
+      limit.dailyUsed = 0;
+    }
+  }
+
+  /**
+   * Check whether a mint of `amount` would be allowed under the
+   * configured limits. Does NOT record the mint — call
+   * `recordMint()` after the mint succeeds.
+   *
+   * Checks (in order):
+   *   1. asset is configured (denies if not)
+   *   2. amount > 0
+   *   3. per-tx limit
+   *   4. cooldown (mints only)
+   *   5. daily limit (remaining headroom)
+   */
+  checkMint(assetCode: string, amount: number): LimitCheckResult {
     const limit = this.limits.get(assetCode);
-    if (!limit) return { allowed: false, reason: 'not_configured' };
-    if (amount <= 0) return { allowed: false, reason: 'amount_must_be_positive' };
+    if (!limit) {
+      return { allowed: false, reason: `no_mint_limit_configured:${assetCode}` };
+    }
+    if (amount <= 0) {
+      return { allowed: false, reason: 'non_positive_amount', remainingDaily: Math.max(0, limit.dailyLimit - limit.dailyUsed) };
+    }
+    const now = nowTs();
+    this.rollWindow(limit, now);
+    const remainingDaily = Math.max(0, limit.dailyLimit - limit.dailyUsed);
 
     if (amount > limit.perTxLimit) {
-      return { allowed: false, reason: 'per_tx_exceeded', remainingDaily: this.remainingDaily(assetCode) };
-    }
-
-    if (limit.dailyUsed + amount > limit.dailyLimit) {
-      return { allowed: false, reason: 'daily_exceeded', remainingDaily: this.remainingDaily(assetCode) };
+      eventEngine.emit('treasury.mint_blocked', {
+        assetCode, amount, reason: 'per_tx_limit_exceeded',
+        perTxLimit: limit.perTxLimit,
+      });
+      return {
+        allowed: false,
+        reason: `per_tx_limit_exceeded:${amount}>${limit.perTxLimit}`,
+        remainingDaily,
+      };
     }
 
     if (limit.cooldownMs > 0 && limit.lastMintTs > 0) {
       const elapsed = now - limit.lastMintTs;
       if (elapsed < limit.cooldownMs) {
+        const nextAllowedTs = limit.lastMintTs + limit.cooldownMs;
+        eventEngine.emit('treasury.mint_blocked', {
+          assetCode, amount, reason: 'cooldown_active',
+          nextAllowedTs, cooldownMs: limit.cooldownMs,
+        });
         return {
           allowed: false,
-          reason: 'cooldown_active',
-          remainingDaily: this.remainingDaily(assetCode),
+          reason: `cooldown_active:${nextAllowedTs - now}ms_remaining`,
+          remainingDaily,
+          nextAllowedTs,
         };
       }
     }
 
-    return {
-      allowed: true,
-      remainingDaily: round(limit.dailyLimit - limit.dailyUsed - amount, 6),
-    };
+    if (amount > remainingDaily) {
+      eventEngine.emit('treasury.mint_blocked', {
+        assetCode, amount, reason: 'daily_limit_exceeded',
+        dailyLimit: limit.dailyLimit, dailyUsed: limit.dailyUsed,
+      });
+      return {
+        allowed: false,
+        reason: `daily_limit_exceeded:${amount}>${remainingDaily}`,
+        remainingDaily,
+      };
+    }
+
+    return { allowed: true, remainingDaily: remainingDaily - amount };
   }
 
   /**
-   * Record a successful mint of `amount` units of `assetCode`. Does NOT check
-   * limits — the caller MUST call `checkMint` first and honor the result.
+   * Record a successful mint against the limit. The caller MUST
+   * have called `checkMint()` first and confirmed `allowed === true`.
    *
-   * Increments `dailyUsed` and updates `lastMintTs`. Rolls over the window if
-   * expired. Emits a `treasury.mint_recorded` event.
+   * Returns the updated limit record. Throws if the mint would
+   * exceed any limit (defence in depth).
    */
-  recordMint(assetCode: string, amount: number, now: number = Date.now()): MintLimit | undefined {
-    this.resetIfWindowExpired(assetCode, now);
+  recordMint(assetCode: string, amount: number): MintLimit {
     const limit = this.limits.get(assetCode);
-    if (!limit) return undefined;
-    limit.dailyUsed = round(limit.dailyUsed + amount, 6);
+    if (!limit) {
+      throw new Error(`no_mint_limit_configured:${assetCode}`);
+    }
+    const now = nowTs();
+    this.rollWindow(limit, now);
+    const check = this.checkMint(assetCode, amount);
+    if (!check.allowed) {
+      throw new Error(`mint_blocked:${check.reason}`);
+    }
+    limit.dailyUsed += amount;
     limit.lastMintTs = now;
     eventEngine.emit('treasury.mint_recorded', {
-      assetCode,
-      amount,
-      dailyUsed: limit.dailyUsed,
+      assetCode, amount, dailyUsed: limit.dailyUsed,
       dailyLimit: limit.dailyLimit,
-      remaining: round(limit.dailyLimit - limit.dailyUsed, 6),
-    }, 0);
+      windowStartTs: limit.windowStartTs,
+    });
     return limit;
   }
 
-  /** Remaining daily allowance for an asset (after window roll-over). */
-  remainingDaily(assetCode: string, now: number = Date.now()): number {
-    this.resetIfWindowExpired(assetCode, now);
+  /** Remaining daily headroom for an asset (after rolling window). */
+  remainingDaily(assetCode: string): number {
     const limit = this.limits.get(assetCode);
     if (!limit) return 0;
-    return round(Math.max(0, limit.dailyLimit - limit.dailyUsed), 6);
+    this.rollWindow(limit, nowTs());
+    return Math.max(0, limit.dailyLimit - limit.dailyUsed);
   }
 
-  /**
-   * Roll over the daily window if 24h have elapsed since `windowStartTs`.
-   * Resets `dailyUsed` to 0 and advances `windowStartTs` to now.
-   */
-  resetIfWindowExpired(assetCode: string, now: number = Date.now()): boolean {
-    const limit = this.limits.get(assetCode);
-    if (!limit) return false;
-    if (now - limit.windowStartTs >= DAY_MS) {
-      limit.windowStartTs = now;
-      limit.dailyUsed = 0;
-      eventEngine.emit('treasury.mint_window_rolled', { assetCode, newWindowStart: now }, 0);
-      return true;
-    }
-    return false;
-  }
-
-  /** Reset all state (test helper). */
+  /** Reset all mint limits (used in tests / treasury reset). */
   reset(): void {
     this.limits.clear();
   }
 }
 
-/* ========================================================================== */
-/* BurnLimitEngine                                                             */
-/* ========================================================================== */
-
+/**
+ * Burn limit engine — enforces per-asset daily + per-tx limits on
+ * Twin Token redemption. Identically-shaped to `MintLimitEngine`
+ * minus the cooldown (burns have no cooldown).
+ */
 export class BurnLimitEngine {
-  private limits: Map<string, BurnLimit> = new Map();
+  private limits = new Map<string, BurnLimit>();
 
-  /** Configure burn limits for an asset. Preserves running tallies if re-set. */
-  configure(config: BurnLimitConfig): BurnLimit {
-    const existing = this.limits.get(config.assetCode);
+  /** Configure (or reconfigure) the burn limit for an asset. */
+  configure(assetCode: string, config: BurnLimitConfig): BurnLimit {
+    const existing = this.limits.get(assetCode);
     const limit: BurnLimit = {
-      assetCode: config.assetCode,
+      assetCode,
       dailyLimit: config.dailyLimit,
       perTxLimit: config.perTxLimit,
       dailyUsed: existing?.dailyUsed ?? 0,
-      windowStartTs: existing?.windowStartTs ?? Date.now(),
+      windowStartTs: existing?.windowStartTs ?? nowTs(),
     };
-    this.limits.set(config.assetCode, limit);
+    this.limits.set(assetCode, limit);
     return limit;
   }
 
-  /** Get the current burn limit config for an asset. */
+  /** Get the current burn limit state for an asset (or undefined). */
   get(assetCode: string): BurnLimit | undefined {
-    this.resetIfWindowExpired(assetCode);
     return this.limits.get(assetCode);
   }
 
   /** All configured burn limits. */
   all(): BurnLimit[] {
-    for (const assetCode of this.limits.keys()) this.resetIfWindowExpired(assetCode);
     return [...this.limits.values()];
   }
 
-  /** Check whether a burn of `amount` units of `assetCode` is allowed. */
-  checkBurn(assetCode: string, amount: number, now: number = Date.now()): LimitCheckResult {
-    this.resetIfWindowExpired(assetCode, now);
-    const limit = this.limits.get(assetCode);
-    if (!limit) return { allowed: false, reason: 'not_configured' };
-    if (amount <= 0) return { allowed: false, reason: 'amount_must_be_positive' };
-
-    if (amount > limit.perTxLimit) {
-      return { allowed: false, reason: 'per_tx_exceeded', remainingDaily: this.remainingDaily(assetCode) };
-    }
-
-    if (limit.dailyUsed + amount > limit.dailyLimit) {
-      return { allowed: false, reason: 'daily_exceeded', remainingDaily: this.remainingDaily(assetCode) };
-    }
-
-    return {
-      allowed: true,
-      remainingDaily: round(limit.dailyLimit - limit.dailyUsed - amount, 6),
-    };
-  }
-
-  /** Record a successful burn of `amount` units of `assetCode`. */
-  recordBurn(assetCode: string, amount: number, now: number = Date.now()): BurnLimit | undefined {
-    this.resetIfWindowExpired(assetCode, now);
-    const limit = this.limits.get(assetCode);
-    if (!limit) return undefined;
-    limit.dailyUsed = round(limit.dailyUsed + amount, 6);
-    eventEngine.emit('treasury.burn_recorded', {
-      assetCode,
-      amount,
-      dailyUsed: limit.dailyUsed,
-      dailyLimit: limit.dailyLimit,
-      remaining: round(limit.dailyLimit - limit.dailyUsed, 6),
-    }, 0);
-    return limit;
-  }
-
-  /** Remaining daily burn allowance for an asset. */
-  remainingDaily(assetCode: string, now: number = Date.now()): number {
-    this.resetIfWindowExpired(assetCode, now);
-    const limit = this.limits.get(assetCode);
-    if (!limit) return 0;
-    return round(Math.max(0, limit.dailyLimit - limit.dailyUsed), 6);
-  }
-
-  /** Roll over the daily window if 24h have elapsed. */
-  resetIfWindowExpired(assetCode: string, now: number = Date.now()): boolean {
-    const limit = this.limits.get(assetCode);
-    if (!limit) return false;
+  private rollWindow(limit: BurnLimit, now: number): void {
     if (now - limit.windowStartTs >= DAY_MS) {
       limit.windowStartTs = now;
       limit.dailyUsed = 0;
-      eventEngine.emit('treasury.burn_window_rolled', { assetCode, newWindowStart: now }, 0);
-      return true;
     }
-    return false;
   }
 
-  /** Reset all state (test helper). */
+  /**
+   * Check whether a burn of `amount` would be allowed. Does NOT
+   * record the burn — call `recordBurn()` after the burn succeeds.
+   */
+  checkBurn(assetCode: string, amount: number): LimitCheckResult {
+    const limit = this.limits.get(assetCode);
+    if (!limit) {
+      return { allowed: false, reason: `no_burn_limit_configured:${assetCode}` };
+    }
+    if (amount <= 0) {
+      return { allowed: false, reason: 'non_positive_amount', remainingDaily: Math.max(0, limit.dailyLimit - limit.dailyUsed) };
+    }
+    const now = nowTs();
+    this.rollWindow(limit, now);
+    const remainingDaily = Math.max(0, limit.dailyLimit - limit.dailyUsed);
+
+    if (amount > limit.perTxLimit) {
+      eventEngine.emit('treasury.burn_blocked', {
+        assetCode, amount, reason: 'per_tx_limit_exceeded',
+        perTxLimit: limit.perTxLimit,
+      });
+      return {
+        allowed: false,
+        reason: `per_tx_limit_exceeded:${amount}>${limit.perTxLimit}`,
+        remainingDaily,
+      };
+    }
+    if (amount > remainingDaily) {
+      eventEngine.emit('treasury.burn_blocked', {
+        assetCode, amount, reason: 'daily_limit_exceeded',
+        dailyLimit: limit.dailyLimit, dailyUsed: limit.dailyUsed,
+      });
+      return {
+        allowed: false,
+        reason: `daily_limit_exceeded:${amount}>${remainingDaily}`,
+        remainingDaily,
+      };
+    }
+    return { allowed: true, remainingDaily: remainingDaily - amount };
+  }
+
+  /** Record a successful burn against the limit. */
+  recordBurn(assetCode: string, amount: number): BurnLimit {
+    const limit = this.limits.get(assetCode);
+    if (!limit) {
+      throw new Error(`no_burn_limit_configured:${assetCode}`);
+    }
+    const now = nowTs();
+    this.rollWindow(limit, now);
+    const check = this.checkBurn(assetCode, amount);
+    if (!check.allowed) {
+      throw new Error(`burn_blocked:${check.reason}`);
+    }
+    limit.dailyUsed += amount;
+    eventEngine.emit('treasury.burn_recorded', {
+      assetCode, amount, dailyUsed: limit.dailyUsed,
+      dailyLimit: limit.dailyLimit,
+      windowStartTs: limit.windowStartTs,
+    });
+    return limit;
+  }
+
+  /** Remaining daily burn headroom. */
+  remainingDaily(assetCode: string): number {
+    const limit = this.limits.get(assetCode);
+    if (!limit) return 0;
+    this.rollWindow(limit, nowTs());
+    return Math.max(0, limit.dailyLimit - limit.dailyUsed);
+  }
+
+  /** Reset all burn limits. */
   reset(): void {
     this.limits.clear();
   }
 }
 
-/* ========================================================================== */
-/* Singletons                                                                  */
-/* ========================================================================== */
+// ---------------------------------------------------------------------------
+// Singletons (with default configs pre-loaded)
+// ---------------------------------------------------------------------------
 
-/** Singleton mint limit engine. */
-export const mintLimitEngine = new MintLimitEngine();
+declare global {
+  var __PAYSWAP_MINT_LIMIT_ENGINE: MintLimitEngine | undefined;
+  var __PAYSWAP_BURN_LIMIT_ENGINE: BurnLimitEngine | undefined;
+}
 
-/** Singleton burn limit engine. */
-export const burnLimitEngine = new BurnLimitEngine();
+export const mintLimitEngine: MintLimitEngine =
+  globalThis.__PAYSWAP_MINT_LIMIT_ENGINE ?? new MintLimitEngine();
 
-/* ========================================================================== */
-/* Defaults helper — bootstrap common asset limits in one call                */
-/* ========================================================================== */
+if (!globalThis.__PAYSWAP_MINT_LIMIT_ENGINE) {
+  globalThis.__PAYSWAP_MINT_LIMIT_ENGINE = mintLimitEngine;
+  // Pre-configure defaults.
+  for (const [asset, cfg] of Object.entries(DEFAULT_MINT_LIMITS)) {
+    mintLimitEngine.configure(asset, cfg);
+  }
+}
 
-/**
- * Bootstrap default mint + burn limits for a list of asset codes. Useful at
- * treasury init time so every registered Twin Token has sane limits.
- */
-export function bootstrapDefaultLimits(
-  assetCodes: string[],
-  opts?: {
-    dailyMint?: number;
-    perTxMint?: number;
-    cooldownMs?: number;
-    dailyBurn?: number;
-    perTxBurn?: number;
-  },
-): void {
-  const dailyMint = opts?.dailyMint ?? DEFAULT_DAILY_MINT_LIMIT;
-  const perTxMint = opts?.perTxMint ?? DEFAULT_PER_TX_MINT_LIMIT;
-  const cooldownMs = opts?.cooldownMs ?? DEFAULT_MINT_COOLDOWN_MS;
-  const dailyBurn = opts?.dailyBurn ?? DEFAULT_DAILY_BURN_LIMIT;
-  const perTxBurn = opts?.perTxBurn ?? DEFAULT_PER_TX_BURN_LIMIT;
-  for (const code of assetCodes) {
-    mintLimitEngine.configure({ assetCode: code, dailyLimit: dailyMint, perTxLimit: perTxMint, cooldownMs });
-    burnLimitEngine.configure({ assetCode: code, dailyLimit: dailyBurn, perTxLimit: perTxBurn });
+export const burnLimitEngine: BurnLimitEngine =
+  globalThis.__PAYSWAP_BURN_LIMIT_ENGINE ?? new BurnLimitEngine();
+
+if (!globalThis.__PAYSWAP_BURN_LIMIT_ENGINE) {
+  globalThis.__PAYSWAP_BURN_LIMIT_ENGINE = burnLimitEngine;
+  for (const [asset, cfg] of Object.entries(DEFAULT_BURN_LIMITS)) {
+    burnLimitEngine.configure(asset, cfg);
   }
 }

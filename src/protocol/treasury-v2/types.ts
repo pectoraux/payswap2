@@ -1,49 +1,57 @@
 /**
- * PaySwap Protocol — Treasury v2 (Task 3-E).
+ * PaySwap Protocol — Treasury Operations Center (v2) — Types.
  *
- * Core types for the production treasury operations module. This module
- * SUPERSEDES the old src/protocol/treasury.ts (which is left 100% intact).
- * All NEW code lives in src/protocol/treasury-v2/.
+ * The treasury is PaySwap's financial control tower. It:
+ *   - Monitors reserves in real time (per currency)
+ *   - Enforces mint/burn limits (24h rolling window + per-tx + cooldown)
+ *   - Verifies stablecoin backing (TWIN<CCY> 1:1 fiat-backed invariant)
+ *   - Forecasts corridor liquidity (moving average + trend)
+ *   - Manages corridor funding (auto-rebalance between corridors)
+ *   - Tracks LP profitability (volume / revenue / cost / PnL / margin / APY)
+ *   - Stress-tests reserve resilience (corridor drain, LP default, depeg, reserve loss)
+ *   - Generates daily treasury reports
  *
- * Treasury v2 governs:
- *   - Reserve monitoring (per currency / asset, on-chain synchronized)
- *   - Twin Token backing verification (circulating + escrowed ≤ reserve)
- *   - Mint / burn limits (daily cap, per-tx cap, cooldown)
- *   - Emergency freezes (account / asset / corridor — auditable)
- *   - Reserve alerts (low_reserve, backing_mismatch, mint_limit_exceeded,
- *     freeze_triggered, rebalance_needed)
- *   - Yield accounting (gross / net / APY per asset)
- *   - Capital efficiency (reserve ratio, utilization, velocity, composite)
- *   - Automatic corridor balancing (pull liquidity from over-reserved corridors)
- *   - Daily treasury reports (full state snapshot)
+ * Every mint goes through `preMintHook` which checks (in order):
+ *   1. daily limit (24h rolling)
+ *   2. per-tx limit
+ *   3. backing sufficiency
+ *   4. freeze status
+ * If any check fails, the mint is blocked.
  *
- * Constraints honored:
- *  - Kernel is FROZEN — only imports `eventEngine`, `evidence` primitives,
- *    `uid`, `round`, `nowTs` from kernel. No kernel state is mutated.
- *  - Old src/protocol/treasury.ts is left 100% intact.
- *  - All NEW files live in src/protocol/treasury-v2/.
+ * Design notes:
+ *  - All identifiers are opaque strings (`assetCode`, `currency`, `lpId`,
+ *    `corridorId`, …).
+ *  - Timestamps are epoch milliseconds (`Date.now()`).
+ *  - All monetary amounts are plain numbers in the smallest representable
+ *    unit (currency-native; e.g. GHS amount `100.50` = 100.50 GHS).
+ *  - Status / state unions are string-literal types so the audit trail is
+ *    self-describing.
+ *
+ * The kernel is FROZEN — this module imports only `uid`, `nowTs`, `round`
+ * from `@/kernel/support` and `eventEngine` from `@/kernel/event`. No
+ * kernel files are modified.
  */
 
-/** A corridor — directed currency pair, mirroring liquidity-network's Corridor. */
-export interface TreasuryCorridor {
-  from: string;
-  to: string;
-}
+// ---------------------------------------------------------------------------
+// Reserve accounts
+// ---------------------------------------------------------------------------
 
 /**
- * ReserveAccount — the treasury's view of reserves for one currency / asset.
+ * A reserve account is the treasury's holdings of a single currency.
  *
- *   - `balance`     : total reserve currently held (fiat + stablecoin + on-chain)
- *   - `reserved`    : portion already committed to in-flight Twin Tokens
- *                     (escrowed + circulating liabilities ≤ balance)
- *   - `available`   : balance - reserved (free for new mints)
- *   - `backingRatio`: reserve.available / (circulating + escrowed) — must be ≥ 1.0
- *                     for full backing. If circulating + escrowed = 0, ratio = 1
- *                     (no liabilities, fully backed trivially).
+ *  - `balance`    — gross balance (everything we hold).
+ *  - `reserved`   — portion already committed to in-flight settlements
+ *                   / escrows / corridor funding obligations.
+ *  - `available`  — `balance - reserved`; freely spendable.
+ *  - `backingRatio` — for stablecoin-backed currencies, the ratio of
+ *                   fiat reserves available to circulating Twin Token
+ *                   supply (1.0 = 100% backed). For non-stablecoin
+ *                   reserves this is `1.0` by convention.
+ *  - `lastReconciledTs` — last time on-chain balance was reconciled
+ *                   against the local view.
  */
 export interface ReserveAccount {
   currency: string;
-  assetCode: string;
   balance: number;
   reserved: number;
   available: number;
@@ -51,14 +59,20 @@ export interface ReserveAccount {
   backingRatio: number;
 }
 
+// ---------------------------------------------------------------------------
+// Mint / Burn limits
+// ---------------------------------------------------------------------------
+
 /**
- * MintLimit — per-asset mint limits.
- *   - `dailyLimit`   : max amount mintable in a rolling 24h window
- *   - `dailyUsed`    : amount minted in the current window
- *   - `windowStartTs`: when the current window started (rolls over every 24h)
- *   - `perTxLimit`   : max amount mintable per single mint operation
- *   - `cooldownMs`   : minimum time between mints to the same recipient (0 = none)
- *   - `lastMintTs`   : timestamp of last successful mint (for cooldown)
+ * Per-asset mint limit configuration + 24h rolling usage state.
+ *
+ * The rolling window resets when `now - windowStartTs >= 24h`. After
+ * reset, `dailyUsed` returns to 0 and `windowStartTs` advances to `now`.
+ *
+ *  - `perTxLimit`   — hard cap on a single mint.
+ *  - `cooldownMs`   — minimum gap between consecutive mints (0 = no
+ *                     cooldown).
+ *  - `lastMintTs`   — last mint timestamp (for cooldown enforcement).
  */
 export interface MintLimit {
   assetCode: string;
@@ -71,8 +85,11 @@ export interface MintLimit {
 }
 
 /**
- * BurnLimit — per-asset burn limits. Burns are bounded because burning destroys
- * the protocol's liability to redeem, so unbounded burns could mask insolvency.
+ * Per-asset burn limit configuration + 24h rolling usage state.
+ *
+ * Burns are typically less risky than mints (burning reduces supply
+ * which is always backed), but we still cap them to detect anomalous
+ * burn spikes (e.g. a compromised issuer account).
  */
 export interface BurnLimit {
   assetCode: string;
@@ -82,211 +99,304 @@ export interface BurnLimit {
   perTxLimit: number;
 }
 
-/**
- * CorridorTarget — the target reserve envelope for a corridor.
- *   - `targetReserve`      : the "ideal" reserve amount on each side
- *   - `minReserve`         : floor — below this triggers `rebalance_needed`
- *   - `maxReserve`         : ceiling — above this the corridor is "over-reserved"
- *                            and can donate liquidity to under-reserved corridors
- *   - `rebalanceThreshold` : fraction (0..1) of target — if reserve falls below
- *                            target × (1 - rebalanceThreshold), rebalance triggers
- *   - `lastBalancedTs`     : timestamp of the last successful rebalance
- */
-export interface CorridorTarget {
-  corridor: TreasuryCorridor;
-  targetReserve: number;
-  minReserve: number;
-  maxReserve: number;
-  rebalanceThreshold: number;
-  lastBalancedTs: number | null;
-}
-
-/** Alert severity levels. */
-export type AlertSeverity = 'info' | 'warning' | 'critical';
-
-/** Alert type tags. */
-export type AlertType =
-  | 'low_reserve'
-  | 'backing_mismatch'
-  | 'mint_limit_exceeded'
-  | 'freeze_triggered'
-  | 'rebalance_needed';
-
-/**
- * ReserveAlert — an actionable treasury alert. Deduplicated by (type, target).
- * Once `resolved` is true, the alert is retained for audit history but no
- * longer appears in `active()`.
- */
-export interface ReserveAlert {
-  id: string;
-  severity: AlertSeverity;
-  type: AlertType;
-  currency?: string;
-  assetCode?: string;
-  message: string;
-  ts: number;
-  resolved: boolean;
-}
-
-/** The scope of an emergency freeze. */
-export type FreezeScope = 'account' | 'asset' | 'corridor';
-
-/**
- * EmergencyFreeze — an auditable freeze record. Every freeze / lift emits a
- * `treasury.freeze_triggered` / `treasury.freeze_lifted` event with the
- * initiator + reason so the action is fully traceable.
- */
-export interface EmergencyFreeze {
-  id: string;
-  scope: FreezeScope;
-  target: string;
-  reason: string;
-  initiatedBy: string;
-  initiatedAt: number;
-  expiresAt?: number;
-  liftedAt?: number;
-  active: boolean;
-}
-
-/**
- * YieldRecord — one period's yield for an asset.
- *   - `period`   : label like '2024-06-01' or '2024-W22'
- *   - `grossYield`: total yield earned (before protocol fee)
- *   - `netYield` : yield net of protocol fee share
- *   - `source`   : 'reserve_staking' | 'defi_deployment' | 'fx_hedging' | ...
- *   - `apy`      : annualized percentage yield (0.05 = 5%)
- */
-export interface YieldRecord {
-  period: string;
-  assetCode: string;
-  grossYield: number;
-  netYield: number;
-  source: string;
-  apy: number;
-}
-
-/**
- * CapitalEfficiency — composite efficiency for one asset.
- *   - `reserveRatio` : reserve.available / circulating (≥1 = fully backed)
- *   - `utilization`  : circulating / (circulating + escrowed) — how much of
- *                      total supply is in active circulation (vs locked)
- *   - `velocity`     : tx volume / reserve (annualized turnover)
- *   - `efficiency`   : composite 0..1 — higher = more capital-efficient
- */
-export interface CapitalEfficiency {
-  assetCode: string;
-  reserveRatio: number;
-  utilization: number;
-  velocity: number;
-  efficiency: number;
-}
-
-/**
- * TreasuryReport — the daily treasury report. A pure snapshot of treasury state
- * at a point in time, assembled from every subsystem.
- */
-export interface TreasuryReport {
-  asOfTs: number;
-  reserves: ReserveAccount[];
-  backingVerified: boolean;
-  mintUsage: { assetCode: string; dailyUsed: number; dailyLimit: number; remaining: number }[];
-  burnUsage: { assetCode: string; dailyUsed: number; dailyLimit: number; remaining: number }[];
-  alerts: ReserveAlert[];
-  yields: YieldRecord[];
-  capitalEfficiency: CapitalEfficiency[];
-  corridors: CorridorTarget[];
-  frozenAssets: string[];
-}
-
-/* ========================================================================== */
-/* Engine configuration types                                                  */
-/* ========================================================================== */
-
-/** Configuration for a single asset's mint limits. */
-export interface MintLimitConfig {
-  assetCode: string;
-  dailyLimit: number;
-  perTxLimit: number;
-  cooldownMs?: number;
-}
-
-/** Configuration for a single asset's burn limits. */
-export interface BurnLimitConfig {
-  assetCode: string;
-  dailyLimit: number;
-  perTxLimit: number;
-}
-
-/** Configuration for a corridor target envelope. */
-export interface CorridorTargetConfig {
-  corridor: TreasuryCorridor;
-  targetReserve: number;
-  minReserve: number;
-  maxReserve: number;
-  rebalanceThreshold: number;
-}
-
-/** Result of a limit check — does a mint/burn pass the limits? */
+/** Outcome of a mint/burn check. */
 export interface LimitCheckResult {
   allowed: boolean;
   reason?: string;
   remainingDaily?: number;
+  nextAllowedTs?: number;
 }
 
-/** Result of a backing verification. */
-export interface BackingVerification {
-  verified: boolean;
+// ---------------------------------------------------------------------------
+// Corridor funding
+// ---------------------------------------------------------------------------
+
+/** A corridor is identified by a `{ from, to }` country pair. */
+export interface CorridorId {
+  from: string;
+  to: string;
+}
+
+/** Human-readable corridor key. */
+export function corridorKey(c: CorridorId): string {
+  return `${c.from}->${c.to}`;
+}
+
+/**
+ * Per-corridor reserve target. The treasury auto-rebalances when actual
+ * corridor reserves drift outside the `[minReserve, maxReserve]` band
+ * beyond `rebalanceThreshold`.
+ */
+export interface CorridorTarget {
+  corridor: CorridorId;
+  targetReserve: number;
+  minReserve: number;
+  maxReserve: number;
+  rebalanceThreshold: number;
+}
+
+/** A corridor funding movement (in or out). */
+export interface CorridorFundingRecord {
+  id: string;
+  corridor: CorridorId;
+  amount: number;
+  direction: 'fund' | 'defund';
+  source: string;
+  destination: string;
+  ts: number;
+  reason: string;
+}
+
+/** Current reserve allocated to a corridor. */
+export interface CorridorReserve {
+  corridor: CorridorId;
+  amount: number;
+  currency: string;
+  updatedAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// LP profitability
+// ---------------------------------------------------------------------------
+
+/**
+ * LP profitability snapshot.
+ *
+ *  - `volume`   — total settlement volume routed through this LP.
+ *  - `revenue`  — fees earned by the LP (settlement fees).
+ *  - `costs`    — capital cost (opportunity cost of committed reserves)
+ *                 + operational cost (opex allocation).
+ *  - `pnl`      — `revenue - costs`.
+ *  - `margin`   — `pnl / revenue` (0 if revenue is 0).
+ *  - `apy`      — annualised return on committed capital
+ *                 (`pnl * 365 / daysElapsed / capitalCommitted`).
+ */
+export interface LPProfitability {
+  lpId: string;
+  corridor: CorridorId;
+  volume: number;
+  revenue: number;
+  costs: number;
+  pnl: number;
+  margin: number;
+  apy: number;
+  /** Capital committed (used for APY computation). */
+  capitalCommitted: number;
+  /** Number of settlements in the range. */
+  settlementCount: number;
+  /** Range start (inclusive). */
+  fromTs: number;
+  /** Range end (exclusive). */
+  toTs: number;
+}
+
+/** A single settlement recorded for an LP. */
+export interface LPSettlementRecord {
+  id: string;
+  lpId: string;
+  corridor: CorridorId;
+  volume: number;
+  fee: number;
+  cost: number;
+  ts: number;
+}
+
+// ---------------------------------------------------------------------------
+// Liquidity forecasting
+// ---------------------------------------------------------------------------
+
+/** A single forecast point. */
+export interface ForecastPoint {
+  ts: number;
+  /** Forecasted demand (settlements flowing into the corridor). */
+  demand: number;
+  /** Forecasted supply (LP liquidity available in the corridor). */
+  supply: number;
+  /** Projected net reserve (supply - demand). */
+  net: number;
+  /** Confidence in this forecast (0–1). */
+  confidence: number;
+}
+
+// ---------------------------------------------------------------------------
+// Stress tests
+// ---------------------------------------------------------------------------
+
+/** The kind of shock applied in a stress test. */
+export type StressShockType =
+  | 'corridor_drain'
+  | 'lp_default'
+  | 'currency_depeg'
+  | 'reserve_loss';
+
+/** A single shock to apply. */
+export interface StressShock {
+  type: StressShockType;
+  /** 0–1 fraction (e.g. 0.30 = 30% drain) or absolute magnitude. */
+  magnitude: number;
+  /** Optional target (corridor key, lpId, currency) — depends on shock type. */
+  target?: string;
+}
+
+/** A stress test scenario definition. */
+export interface StressTestScenario {
+  id: string;
+  name: string;
+  description: string;
+  shock: StressShock;
+  projectedImpact: string;
+}
+
+/** The result of running a stress test scenario. */
+export interface StressTestResult {
+  scenarioId: string;
+  passed: boolean;
+  /** Absolute reserve impact (positive = loss). */
+  reserveImpact: number;
+  /** Shortfall vs. minimum required reserves (0 if none). */
+  shortfall: number;
+  /** Estimated recovery time in ms (0 if no recovery needed). */
+  recoveryTimeMs: number;
+  recommendation: string;
+  /** Post-shock reserve snapshot per currency. */
+  postShockReserves: Array<{ currency: string; balance: number; available: number }>;
+  ts: number;
+}
+
+// ---------------------------------------------------------------------------
+// Treasury reports
+// ---------------------------------------------------------------------------
+
+/** A treasury alert. */
+export interface TreasuryAlert {
+  id: string;
+  level: 'info' | 'warning' | 'critical';
+  category: 'reserve' | 'backing' | 'limit' | 'corridor' | 'lp' | 'forecast' | 'stress';
+  message: string;
+  ts: number;
+  /** Optional affected entity (currency, corridor key, lpId). */
+  subject?: string;
+}
+
+/** A frozen asset (compliance hold / pending investigation). */
+export interface FrozenAsset {
   assetCode: string;
-  circulating: number;
-  escrowed: number;
-  reserve: number;
-  backingRatio: number;
-  /** (circulating + escrowed) − reserve — positive = shortfall. */
-  discrepancy: number;
+  reason: string;
+  frozenAt: number;
 }
 
-/** Result of a corridor rebalance attempt. */
-export interface RebalanceResult {
-  rebalanced: boolean;
-  from?: string;
-  to?: string;
-  amount?: number;
-  route?: string;
-  reason?: string;
+/** Mint/burn usage summary for a single asset. */
+export interface LimitUsageSummary {
+  assetCode: string;
+  dailyLimit: number;
+  dailyUsed: number;
+  utilization: number;
+  windowStartTs: number;
 }
 
-/** Result of a pre-mint / pre-burn hook. */
-export interface HookResult {
-  allowed: boolean;
-  reason?: string;
+/** Yield summary for a corridor (APR-style). */
+export interface CorridorYieldSummary {
+  corridor: CorridorId;
+  apr: number;
+  volume: number;
+  revenue: number;
+  costs: number;
 }
 
-/** Milliseconds in a day — used by limit window roll-overs. */
-export const DAY_MS = 24 * 60 * 60 * 1000;
+/** Capital efficiency summary. */
+export interface CapitalEfficiencySummary {
+  /** Total capital deployed across all corridors. */
+  totalCapitalDeployed: number;
+  /** Total capital sitting idle (not deployed in any corridor). */
+  idleCapital: number;
+  /** Efficiency ratio: deployed / (deployed + idle). */
+  efficiencyRatio: number;
+  /** Average utilisation across corridors (0–1). */
+  averageUtilization: number;
+}
 
-/** Default daily mint limit (10 000 in asset units). */
-export const DEFAULT_DAILY_MINT_LIMIT = 10_000;
+/**
+ * Daily treasury report — the canonical snapshot of treasury state.
+ *
+ * Aggregates: reserves, backing verification, mint/burn usage, alerts,
+ * yields, capital efficiency, corridor funding, frozen assets, LP
+ * profitability, and the latest stress test results.
+ */
+export interface TreasuryReport {
+  asOfTs: number;
+  reserves: ReserveAccount[];
+  backingVerified: Array<{
+    assetCode: string;
+    verified: boolean;
+    backingRatio: number;
+    discrepancy: number;
+  }>;
+  mintUsage: LimitUsageSummary[];
+  burnUsage: LimitUsageSummary[];
+  alerts: TreasuryAlert[];
+  yields: CorridorYieldSummary[];
+  capitalEfficiency: CapitalEfficiencySummary;
+  corridors: CorridorReserve[];
+  frozenAssets: FrozenAsset[];
+  lpProfitability: LPProfitability[];
+  stressTestResults: StressTestResult[];
+}
 
-/** Default per-tx mint limit (1 000 in asset units). */
-export const DEFAULT_PER_TX_MINT_LIMIT = 1_000;
+/** A settlement report (aggregated settlement activity for a period). */
+export interface SettlementReport {
+  period: { fromTs: number; toTs: number };
+  totalVolume: number;
+  totalSettlements: number;
+  totalFees: number;
+  byCorridor: Array<{
+    corridor: CorridorId;
+    volume: number;
+    settlements: number;
+    fees: number;
+  }>;
+  byLP: Array<{
+    lpId: string;
+    volume: number;
+    settlements: number;
+    pnl: number;
+  }>;
+}
 
-/** Default daily burn limit. */
-export const DEFAULT_DAILY_BURN_LIMIT = 10_000;
+/** A capital report (reserves + corridor allocation + efficiency). */
+export interface CapitalReport {
+  asOfTs: number;
+  totalReserves: number;
+  totalAvailable: number;
+  totalReserved: number;
+  byCurrency: ReserveAccount[];
+  corridorAllocation: Array<{
+    corridor: CorridorId;
+    amount: number;
+    share: number;
+  }>;
+  capitalEfficiency: CapitalEfficiencySummary;
+}
 
-/** Default per-tx burn limit. */
-export const DEFAULT_PER_TX_BURN_LIMIT = 1_000;
+// ---------------------------------------------------------------------------
+// TreasuryEngine init options
+// ---------------------------------------------------------------------------
 
-/** Default mint cooldown (0 = no cooldown between mints). */
-export const DEFAULT_MINT_COOLDOWN_MS = 0;
+/** Initialization options for the TreasuryEngine facade. */
+export interface TreasuryEngineOptions {
+  /** Periodic check interval (ms) for reserve + alert refresh. Default 60_000. */
+  checkIntervalMs?: number;
+  /** Periodic check interval (ms) for liquidity forecast refresh. Default 300_000. */
+  forecastIntervalMs?: number;
+  /** Default reserve alert threshold (fraction of available). Default 0.20. */
+  defaultReserveAlertThreshold?: number;
+  /** Annualised cost of capital (used in LP profitability). Default 0.08 (8% APR). */
+  costOfCapitalApr?: number;
+  /** Operational cost per settlement (used in LP profitability). Default 0.10. */
+  opexPerSettlement?: number;
+}
 
-/** Default low-reserve threshold ratio (10% of circulating). */
-export const DEFAULT_LOW_RESERVE_THRESHOLD_RATIO = 0.1;
-
-/** Default minimum backing ratio (1.0 = fully backed). */
-export const MIN_BACKING_RATIO = 1.0;
-
-/** Default reserve alert threshold (absolute amount). */
-export const DEFAULT_RESERVE_ALERT_THRESHOLD = 1_000;
-
-/** Protocol fee share of gross yield (10%). */
-export const PROTOCOL_FEE_SHARE = 0.10;
+/** A time range [fromTs, toTs) used in profitability + settlement queries. */
+export interface TimeRange {
+  fromTs: number;
+  toTs: number;
+}

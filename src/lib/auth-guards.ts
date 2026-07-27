@@ -1,53 +1,75 @@
+import { redirect } from 'next/navigation';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
 
 /**
- * Get the authenticated session.
+ * Resolve the authenticated merchant for the current session.
+ *
+ * Looks for a MERCHANT or MERCHANT_STAFF role on the user,
+ * uses its `merchantId`, and returns the merchant row.
+ *
+ * If the user is not authenticated → redirects to /login.
+ * If the user has no merchant role → redirects to /unauthorized.
  */
-export async function getAuthSession() {
-  return await getServerSession(authOptions);
-}
-
-/**
- * Get the merchant ID for the current user.
- */
-export async function getMerchantId(): Promise<string | null> {
-  const session = await getAuthSession();
-  if (!session) return null;
-  const userId = (session.user as any)?.id;
-  if (!userId) return null;
-  const userRole = await db.userRole.findFirst({
-    where: { userId, role: { in: ['MERCHANT', 'MERCHANT_STAFF'] } },
-  });
-  return userRole?.merchantId ?? null;
-}
-
-/**
- * Require a merchant session. Returns the merchant ID + merchant record.
- */
-export async function requireMerchant(): Promise<{ session: any; merchantId: string; merchant: any }> {
-  const session = await getAuthSession();
-  if (!session) throw new Error('UNAUTHORIZED');
-  const userId = (session.user as any)?.id;
-  const userRole = await db.userRole.findFirst({
-    where: { userId, role: { in: ['MERCHANT', 'MERCHANT_STAFF'] } },
-  });
-  if (!userRole?.merchantId) throw new Error('NO_MERCHANT');
-  const merchant = await db.merchant.findUnique({ where: { id: userRole.merchantId } });
-  if (!merchant) throw new Error('MERCHANT_NOT_FOUND');
-  return { session, merchantId: userRole.merchantId, merchant };
-}
-
-/**
- * Require an admin session.
- */
-export async function requireAdmin(): Promise<{ session: any }> {
-  const session = await getAuthSession();
-  if (!session) throw new Error('UNAUTHORIZED');
-  const roles = (session.user as any)?.roles as string[] | undefined;
-  if (!roles || !roles.some((r) => ['ADMIN', 'SUPER_ADMIN'].includes(r))) {
-    throw new Error('FORBIDDEN');
+export async function requireMerchant() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    redirect('/login');
   }
-  return { session };
+
+  const userId = (session.user as { id?: string }).id;
+  if (!userId) {
+    redirect('/login');
+  }
+
+  const roleRow = await db.userRole.findFirst({
+    where: {
+      userId,
+      role: { in: ['MERCHANT', 'MERCHANT_STAFF'] },
+      merchantId: { not: null },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  if (!roleRow?.merchantId) {
+    redirect('/unauthorized');
+  }
+
+  const merchant = await db.merchant.findUnique({
+    where: { id: roleRow.merchantId },
+  });
+
+  if (!merchant) {
+    redirect('/unauthorized');
+  }
+
+  return { session, merchant, userId };
+}
+
+/**
+ * Resolve the authenticated admin (ADMIN or SUPER_ADMIN).
+ *
+ * Redirects to /login when unauthenticated, /unauthorized when
+ * the user lacks an admin role.
+ */
+export async function requireAdmin() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    redirect('/login');
+  }
+
+  const userId = (session.user as { id?: string }).id;
+  if (!userId) {
+    redirect('/login');
+  }
+
+  const roles = ((session.user as { roles?: string[] }).roles) ?? [];
+  const isAdmin = roles.some((r) => r === 'ADMIN' || r === 'SUPER_ADMIN');
+
+  if (!isAdmin) {
+    redirect('/unauthorized');
+  }
+
+  return { session, userId, roles };
 }

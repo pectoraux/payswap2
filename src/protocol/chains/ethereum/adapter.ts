@@ -1,163 +1,224 @@
 /**
- * PaySwap Protocol — Ethereum Adapter (STUB).
+ * PaySwap Protocol — Ethereum Chain Adapter (Stub).
  *
- * Placeholder implementation of the ChainAdapter interface for Ethereum.
- * All methods return a structured error result (no JS throws) so callers
- * can pattern-match on `success` and degrade gracefully.
+ * Future-chain stub. All operations return a structured `{ success: false,
+ * error }` — no JS throws. Real Ethereum integration will use `ethers.js`
+ * or `viem` to talk to an L1 RPC node + the PaySwap ERC-20 twin-token
+ * contract.
  *
- * When implementing for real, swap each method body with calls to a
- * real Ethereum client (e.g. `ethers.js` or `viem`):
+ * ## ERC-20 shaped helpers (for future integration)
  *
- *   ```ts
- *   // ERC-20 helpers (real implementation pattern):
- *   const erc20 = new Contract(issuer, ERC20_ABI, signer);
- *   // issueAsset  → erc20.mint(to, amount)
- *   // burnAsset   → erc20.burnFrom(from, amount)
- *   // transfer    → erc20.transfer(to, amount)
- *   // createTrustline → no-op (EVM uses approvals, not trustlines)
- *   //                     → erc20.approve(spender, amount) is the analog
- *   // createEscrowAccount → deploy Escrow.sol contract
- *   // sponsorReserve      → not applicable on EVM (no reserves)
- *   // feeBumpTransaction  → resubmit with higher gas price (EIP-1559)
- *   // addSigner / setThresholds → not native; use Safe (Gnosis) multisig
- *   // verifyTransaction   → provider.getTransactionReceipt(txHash)
- *   // getLatestLedger     → provider.getBlock('latest')
- *   // streamLedgers       → provider.on('block', cb)
- *   // getSequence         → provider.getTransactionCount(address)
- *   ```
+ * When this adapter is fully wired, the mapping will be:
  *
- * Frozen-kernel compliance: imports only `ChainAdapter` type for typing.
+ *   - createAccount         → no-op (EVM accounts are implicit; address derived from keypair)
+ *   - fundAccount           → eth_sendTransaction (native ETH transfer)
+ *   - registerAsset         → ERC-20 deploy: new ethers.ContractFactory(abi, bytecode, signer).deploy()
+ *   - issueAsset            → ERC-20.mint(to, amount)        // contract.mint(to, amount)
+ *   - burnAsset             → ERC-20.burn(from, amount)      // contract.burn(amount)
+ *   - createTrustline       → no-op (ERC-20 has no trustline concept)
+ *   - transfer              → ERC-20.transfer(to, amount)    // contract.transfer(to, amount)
+ *   - pathPayment           → DEX swap via Uniswap V3 router (multicall)
+ *   - createClaimableBalance→ not native to EVM — use escrow contract
+ *   - claimBalance          → escrow contract.release(claimant)
+ *   - createEscrowAccount   → deploy Escrow.sol with 2-of-2 Gnosis Safe + timeLock
+ *   - releaseEscrow         → escrow.release(recipient)
+ *   - sponsorReserve        → not applicable (EVM has no reserve sponsorship)
+ *   - feeBumpTransaction    → not applicable (EVM fees are per-tx, not bumpable)
+ *   - addSigner             → Safe.addOwnerWithThreshold(owner, threshold)
+ *   - removeSigner          → Safe.removeOwner(prevOwner, owner, threshold)
+ *   - setThresholds         → Safe.changeThreshold(threshold)
+ *   - verifyTransaction     → eth_getTransactionReceipt(txHash)
+ *   - getLatestLedger       → eth_blockNumber
+ *   - streamLedgers         → poll eth_blockNumber on interval
+ *   - getSequence           → eth_getTransactionCount(address, 'pending')
+ *   - incrementSequence     → no-op (nonce auto-managed by signer)
+ *   - getBalance            → ERC-20.balanceOf(address)
+ *   - prepareSoroban…       → N/A (Soroban is Stellar-only)
+ *
+ * For now, return a structured 'not_implemented' error.
  */
 import type {
   ChainAdapter,
-  AccountResult,
-  BalanceResult,
-  BalancesResult,
+  ChainMode,
+  ChainNetwork,
   ChainResult,
-  ClaimableBalanceResult,
-  ClaimableBalancesResult,
-  CreateAccountParams,
-  CreateClaimableBalanceParams,
-  CreateEscrowAccountParams,
-  CreateTrustlineParams,
-  EscrowResult,
-  FeeBumpParams,
-  FundAccountParams,
-  GetBalanceParams,
-  GetLedgerEntryParams,
-  HealthResult,
-  IssueAssetParams,
-  BurnAssetParams,
-  LedgerEntryResult,
-  LedgerResult,
-  LedgerStreamCallback,
-  AddSignerParams,
-  RemoveSignerParams,
-  SetThresholdsParams,
-  PathPaymentParams,
-  PathPaymentResult,
-  RegisterAssetParams,
-  ReleaseEscrowParams,
-  SequenceResult,
-  SponsorReserveParams,
-  TransferParams,
-  TxResult,
-  VerifyResult,
-  VerifyTransactionParams,
+  ChainVerifyResult,
+  ChainBalanceResult,
+  ChainHealthResult,
+  ChainMemo,
+  ClaimPredicate,
+  ChainSigner,
 } from '../adapter';
 
-const NOT_IMPLEMENTED = 'Ethereum adapter not yet implemented';
+const NOT_IMPLEMENTED = 'ethereum adapter not yet implemented — use Stellar';
 
-/** Stub Ethereum adapter — all methods return structured error shapes. */
-export class EthereumAdapter implements ChainAdapter {
+export class EthereumChainAdapter implements ChainAdapter {
   readonly chain = 'ethereum';
-  readonly isInitialized = false;
+  readonly mode: ChainMode = 'simulation';
+  readonly network: ChainNetwork = 'mainnet';
+  isInitialized = false;
 
-  async createAccount(_params: CreateAccountParams): Promise<AccountResult> {
+  async setMode(_mode: ChainMode): Promise<ChainResult> {
+    return { success: false, error: NOT_IMPLEMENTED, mode: this.mode, network: this.network };
+  }
+
+  async createAccount(_params: { address: string; startingBalance?: number; funder?: string }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async fundAccount(_params: FundAccountParams): Promise<ChainResult> {
+
+  async fundAccount(_params: { address: string; assetCode: string; amount: number; funder?: string }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async registerAsset(_params: RegisterAssetParams): Promise<ChainResult> {
+
+  async registerAsset(_params: { code: string; issuer: string; metadata?: Record<string, unknown> }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async issueAsset(_params: IssueAssetParams): Promise<ChainResult> {
+
+  async issueAsset(_params: { assetCode: string; amount: number; to: string; issuer?: string }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async burnAsset(_params: BurnAssetParams): Promise<ChainResult> {
+
+  async burnAsset(_params: { assetCode: string; amount: number; from: string }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async createTrustline(_params: CreateTrustlineParams): Promise<ChainResult> {
+
+  async createTrustline(_params: { account: string; assetCode: string; issuer?: string; limit?: number }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async transfer(_params: TransferParams): Promise<ChainResult> {
+
+  async transfer(_params: { assetCode: string; amount: number; from: string; to: string; memo?: ChainMemo; issuer?: string }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async pathPayment(_params: PathPaymentParams): Promise<PathPaymentResult> {
-    return { success: false, error: NOT_IMPLEMENTED, receivedAmount: 0, path: [] };
-  }
-  async createClaimableBalance(_params: CreateClaimableBalanceParams): Promise<ClaimableBalanceResult> {
+
+  async pathPayment(_params: {
+    sourceAssetCode: string;
+    sourceAmount: number;
+    destAssetCode: string;
+    destMin: number;
+    from: string;
+    to: string;
+    path?: string[];
+  }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async claimBalance(_params: { balanceId: string; claimant: string; memo?: import('../adapter').ChainMemo }): Promise<ChainResult> {
+
+  async createClaimableBalance(_params: {
+    assetCode: string;
+    amount: number;
+    source: string;
+    claimants: { destination: string; predicate: ClaimPredicate }[];
+    issuer?: string;
+  }): Promise<ChainResult & { balanceId?: string }> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async getClaimableBalances(_holder: string): Promise<ClaimableBalancesResult> {
-    return { success: false, error: NOT_IMPLEMENTED, balances: [] };
-  }
-  async createEscrowAccount(_params: CreateEscrowAccountParams): Promise<EscrowResult> {
+
+  async claimBalance(_params: { balanceId: string; claimant: string }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async releaseEscrow(_params: ReleaseEscrowParams): Promise<ChainResult> {
+
+  async getClaimableBalances(_params: { account?: string; assetCode?: string }): Promise<ChainResult & { balances?: Array<{ balanceId: string; assetCode: string; amount: number; claimants: string[] }> }> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async sponsorReserve(_params: SponsorReserveParams): Promise<ChainResult> {
+
+  async createEscrowAccount(_params: {
+    assetCode: string;
+    amount: number;
+    signer1: string;
+    signer2: string;
+    unlockTime?: number;
+  }): Promise<ChainResult & { escrowAddress?: string }> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async feeBumpTransaction(_params: FeeBumpParams): Promise<ChainResult> {
+
+  async releaseEscrow(_params: { escrowAddress: string; to: string; amount: number; assetCode: string }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async addSigner(_params: AddSignerParams): Promise<ChainResult> {
+
+  async sponsorReserve(_params: { sponsored: string; sponsor: string; assetCode?: string }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async removeSigner(_params: RemoveSignerParams): Promise<ChainResult> {
+
+  async feeBumpTransaction(_params: { innerTxHash: string; feeSource: string; baseFee: number }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async setThresholds(_params: SetThresholdsParams): Promise<ChainResult> {
+
+  async addSigner(_params: { account: string; signer: ChainSigner }): Promise<ChainResult> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async verifyTransaction(_params: VerifyTransactionParams): Promise<VerifyResult> {
+
+  async removeSigner(_params: { account: string; signerKey: string }): Promise<ChainResult> {
+    return { success: false, error: NOT_IMPLEMENTED };
+  }
+
+  async setThresholds(_params: { account: string; low: number; medium: number; high: number }): Promise<ChainResult> {
+    return { success: false, error: NOT_IMPLEMENTED };
+  }
+
+  async verifyTransaction(_params: { txHash: string }): Promise<ChainVerifyResult> {
     return { success: false, confirmed: false, error: NOT_IMPLEMENTED };
   }
-  async getTransaction(_txHash: string): Promise<TxResult> {
+
+  async getTransaction(_params: { txHash: string }): Promise<ChainVerifyResult> {
     return { success: false, confirmed: false, error: NOT_IMPLEMENTED };
   }
-  async getLatestLedger(): Promise<LedgerResult> {
-    return { success: false, error: NOT_IMPLEMENTED, ledger: 0, closeTime: 0, txCount: 0 };
-  }
-  streamLedgers(_callback: LedgerStreamCallback): () => void {
-    return () => { /* no-op */ };
-  }
-  async getLedgerEntry(_params: GetLedgerEntryParams): Promise<LedgerEntryResult> {
+
+  async getLatestLedger(): Promise<ChainResult & { ledger?: number; closeTime?: number }> {
     return { success: false, error: NOT_IMPLEMENTED };
   }
-  async getSequence(_address: string): Promise<SequenceResult> {
-    return { success: false, error: NOT_IMPLEMENTED, sequence: 0 };
+
+  streamLedgers(_callback: (ledger: { ledger: number; closeTime: number; txCount: number }) => void): () => void {
+    return () => { /* noop */ };
   }
-  async incrementSequence(_address: string): Promise<SequenceResult> {
-    return { success: false, error: NOT_IMPLEMENTED, sequence: 0 };
+
+  async getLedgerEntry(_params: { key: string }): Promise<ChainResult & { value?: unknown }> {
+    return { success: false, error: NOT_IMPLEMENTED };
   }
-  async getBalance(_params: GetBalanceParams): Promise<BalanceResult> {
-    return { success: false, error: NOT_IMPLEMENTED, balance: 0 };
+
+  async getSequence(_params: { address: string }): Promise<ChainResult & { sequence?: string }> {
+    return { success: false, error: NOT_IMPLEMENTED };
   }
-  async getBalances(_address: string): Promise<BalancesResult> {
-    return { success: false, error: NOT_IMPLEMENTED, balances: [] };
+
+  async incrementSequence(_params: { address: string; delta?: number }): Promise<ChainResult & { sequence?: string }> {
+    return { success: false, error: NOT_IMPLEMENTED };
   }
-  async healthCheck(): Promise<HealthResult> {
-    return { healthy: false, latencyMs: 0, chain: this.chain, details: { reason: NOT_IMPLEMENTED } };
+
+  async getBalance(_params: { address: string; assetCode: string; issuer?: string }): Promise<ChainBalanceResult> {
+    return { success: false, error: NOT_IMPLEMENTED };
+  }
+
+  async getBalances(_params: { address: string }): Promise<ChainResult & { balances?: Record<string, number> }> {
+    return { success: false, error: NOT_IMPLEMENTED };
+  }
+
+  async prepareSorobanTransaction(_params: {
+    contractId: string;
+    method: string;
+    args?: unknown[];
+    source: string;
+  }): Promise<ChainResult & { preparedXdr?: string }> {
+    return { success: false, error: NOT_IMPLEMENTED };
+  }
+
+  async recoverTransaction(_params: { txHash: string }): Promise<ChainVerifyResult> {
+    return { success: false, confirmed: false, error: NOT_IMPLEMENTED };
+  }
+
+  async reconcileLedger(_params: {
+    expectedBalances: Array<{ address: string; assetCode: string; amount: number; issuer?: string }>;
+  }): Promise<ChainResult & { discrepancies?: Array<{ address: string; assetCode: string; expected: number; actual: number }> }> {
+    return { success: false, error: NOT_IMPLEMENTED };
+  }
+
+  async healthCheck(): Promise<ChainHealthResult> {
+    return {
+      chain: 'ethereum',
+      healthy: false,
+      mode: this.mode,
+      latencyMs: 0,
+      network: this.network,
+      details: { error: NOT_IMPLEMENTED },
+    };
   }
 }
 
-/** Singleton Ethereum adapter — usable once implemented. */
-export const ethereumChainAdapter = new EthereumAdapter();
+export const ethereumChainAdapter = new EthereumChainAdapter();

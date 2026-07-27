@@ -1,262 +1,198 @@
 /**
- * PaySwap Protocol — Production Connectors v2 — Open Banking Connector.
+ * PaySwap Protocol — Production Connectors v2 — Open Banking (PSD2).
  *
- * Real-shape simulated PSD2 / Open Banking API connector. Operations:
- *   - getBalance({ accountId, currency })            → balances[] (PSD2 shape)
+ * Simulated PSD2 / Open Banking connector. Real implementations call
+ * bank APIs (e.g. TrueLayer, Plaid, Tink) under the Strong Customer
+ * Authentication umbrella; this in-process simulation mirrors that
+ * surface area so the protocol layer can run end-to-end.
+ *
+ * Operations:
+ *   - getBalance({ accountId, currency })
  *   - initiateTransfer({ fromAccount, toAccount, amount, currency, reference })
- *                                                      → transactionId, status
- *   - verifyTransfer({ transferId })                  → status, amount, valueDateTime
- *   - getAccount({ accountId })                       → accountId, iban, bic, status
+ *   - verifyTransfer({ transferId })
  *
- * Auth: `Authorization: Bearer <token>` (simulated, token resolved from apiKeyRef).
- *
- * The simulated response shapes mirror the UK Open Banking / Berlin Group PSD2
- * standards — IBAN, BIC, balance amount/currency, transaction reference. The
- * doQuery method is structured so that swapping the simulation body for a real
- * `fetch(this.config.endpoint + path, { headers })` is a 1:1 substitution.
- *
- * Evidence: source='open_banking', verificationLevel='institutional',
- *           reputation=0.9. Payload includes accountId, balance, attestedValue.
+ * Evidence: source='open_banking', verificationLevel='institutional', reputation=0.9.
  */
 import type { Evidence } from '@/kernel/evidence';
-import type {
-  ConnectorConfig,
-  ConnectorError,
-  ConnectorId,
-  ConnectorRequest,
-  ConnectorType,
-} from './types';
-import { ProductionConnector, buildAttestationEvidence } from './base';
+import { createEvidence } from '@/kernel/evidence';
+import { uid, round } from '@/kernel/support';
+import type { ConnectorConfig, ConnectorRequest } from './types';
 import { invalidResponse } from './errors';
+import { HealthMonitor } from './health';
+import { MetricsCollector } from './metrics';
+import { IdempotencyStore } from './idempotency';
+import { ProductionConnector, type DoQueryResult } from './base';
 
-const DEFAULT_CONFIG: ConnectorConfig = {
+/** Default config — overridden by the registry for non-default deployments. */
+export const DEFAULT_OPEN_BANKING_CONFIG: ConnectorConfig = {
   id: 'open_banking',
-  type: 'bank',
-  name: 'Open Banking API (PSD2)',
-  endpoint: 'https://api.openbanking.example.com/psd2/v1',
-  apiKeyRef: 'vault://payswap/open-banking/prod/api-key',
-  secretRef: 'vault://payswap/open-banking/prod/hmac-secret',
-  timeout: 5_000,
-  retryCount: 3,
-  retryBackoffMs: 200,
+  type: 'open_banking',
+  name: 'Open Banking (PSD2)',
+  endpoint: 'sim://open-banking/v1',
+  timeout: 8_000,
+  retryCount: 2,
+  retryBackoffMs: 400,
   rateLimitRps: 10,
   rateLimitBurst: 20,
-  idempotencyTtlMs: 60_000,
+  idempotencyTtlMs: 5 * 60 * 1000,
 };
 
+interface TransferRecord {
+  transferId: string;
+  fromAccount: string;
+  toAccount: string;
+  amount: number;
+  currency: string;
+  reference?: string;
+  status: 'pending' | 'settled' | 'failed';
+  createdAt: number;
+}
+
+/** Deterministic pseudo-balance derived from the accountId so the same account is stable across calls. */
+function pseudoBalance(accountId: string, currency: string): number {
+  let h = 0;
+  const key = `${accountId}:${currency}`;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
+  const positive = Math.abs(h);
+  // Range 1,000..1,000,000 in 100-unit steps.
+  return round(1000 + (positive % 9999) * 100, 2);
+}
+
 export class OpenBankingConnector extends ProductionConnector {
-  constructor(config?: Partial<ConnectorConfig>) {
-    super({ ...DEFAULT_CONFIG, ...config });
+  /** transferId -> record (in-process simulation of the bank's transfer ledger). */
+  private transfers = new Map<string, TransferRecord>();
+
+  constructor(
+    healthMonitor: HealthMonitor,
+    metricsCollector: MetricsCollector,
+    config?: Partial<ConnectorConfig>,
+    idempotency?: IdempotencyStore,
+  ) {
+    super(
+      { ...DEFAULT_OPEN_BANKING_CONFIG, ...config },
+      healthMonitor,
+      metricsCollector,
+      idempotency,
+    );
   }
 
-  // ─── Real auth header that would be sent on a real fetch ───────────────────
-  /** Build the Authorization header value for a real upstream call. */
-  protected authHeader(): string {
-    return `Bearer ${this.apiKey || '<unresolved-token>'}`;
-  }
-
-  // ─── doQuery: simulated PSD2 response shapes ───────────────────────────────
-  async doQuery(
-    request: ConnectorRequest,
-  ): Promise<{ result: Record<string, unknown>; error?: ConnectorError }> {
-    // In production:
-    //   const res = await fetch(`${this.config.endpoint}/${path}`, {
-    //     method, headers: { Authorization: this.authHeader(), 'Content-Type': 'application/json', 'X-Idempotency-Key': request.id },
-    //     body: method === 'POST' ? JSON.stringify(request.params) : undefined,
-    //   });
-    //   const body = await res.json();
-    //   if (!res.ok) return { result: {}, error: fromHttpError(res.status, body) };
-    //   return { result: body };
-    //
-    // Here we simulate faithful response shapes.
-
+  protected async doQuery(request: ConnectorRequest): Promise<DoQueryResult> {
     switch (request.operation) {
       case 'getBalance':
-        return this.simGetBalance(request);
+        return this.getBalance(request.params);
       case 'initiateTransfer':
-        return this.simInitiateTransfer(request);
+        return this.initiateTransfer(request.params);
       case 'verifyTransfer':
-        return this.simVerifyTransfer(request);
-      case 'getAccount':
-        return this.simGetAccount(request);
+        return this.verifyTransfer(request.params);
       default:
-        return {
-          result: {},
-          error: invalidResponse(`Unknown operation: ${request.operation}`),
-        };
+        return { ok: false, error: invalidResponse(`unknown_operation:${request.operation}`) };
     }
   }
 
-  private simGetBalance(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const accountId = request.params.accountId as string | undefined;
-    const currency = (request.params.currency as string | undefined) ?? 'USD';
-    if (!accountId) {
-      return { result: {}, error: invalidResponse('accountId required') };
-    }
-    // PSD2 /accounts/{accountId}/balances response shape:
-    //   { accountId, balances: [{ type, balanceAmount: { amount, currency }, referenceDate, lastChangeDateTime }] }
-    const balance = (request.params.expectedBalance as number | undefined)
-      ?? deterministicBalance(accountId, currency);
-    return {
-      result: {
-        accountId,
-        balances: [
-          {
-            type: 'available',
-            balanceAmount: { amount: balance.toFixed(2), currency },
-            referenceDate: new Date().toISOString().slice(0, 10),
-            lastChangeDateTime: new Date().toISOString(),
-          },
-        ],
-      },
-    };
-  }
+  protected buildEvidence(request: ConnectorRequest, result: unknown): Evidence {
+    const params = request.params;
+    const entityId =
+      (params['accountId'] as string | undefined) ??
+      (params['fromAccount'] as string | undefined) ??
+      (params['transferId'] as string | undefined) ??
+      request.id;
 
-  private simInitiateTransfer(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const { fromAccount, toAccount, amount, currency, reference } = request.params as {
-      fromAccount?: string; toAccount?: string; amount?: number; currency?: string; reference?: string;
-    };
-    if (!fromAccount || !toAccount || amount == null) {
-      return { result: {}, error: invalidResponse('fromAccount, toAccount, amount required') };
-    }
-    // PSD2 /payments response: { transactionId, status: 'PENDING', amount: { amount, currency } }
-    const transactionId = `OB-TX-${deterministicHash(`${fromAccount}${toAccount}${amount}${request.id}`).slice(0, 16)}`;
-    return {
-      result: {
-        transactionId,
-        status: 'PENDING',
-        amount: { amount: amount.toFixed(2), currency: currency ?? 'USD' },
-        reference: reference ?? `idem-${request.id.slice(0, 8)}`,
-        submittedAt: new Date().toISOString(),
-      },
-    };
-  }
-
-  private simVerifyTransfer(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const transferId = request.params.transferId as string | undefined;
-    if (!transferId) {
-      return { result: {}, error: invalidResponse('transferId required') };
-    }
-    // PSD2 /payments/{transactionId} response:
-    //   { transactionId, status, amount, valueDateTime, creditorName }
-    // Simulated statuses: deterministic per transferId.
-    const status = transferId.includes('FAIL')
-      ? 'REJECTED'
-      : transferId.includes('PEND')
-      ? 'PENDING'
-      : 'BOOKED';
-    const amount = deterministicBalance(transferId, 'USD');
-    return {
-      result: {
-        transactionId: transferId,
-        status,
-        amount: { amount: amount.toFixed(2), currency: 'USD' },
-        valueDateTime: new Date().toISOString(),
-        creditorName: 'PaySwap Merchant Settlement',
-      },
-    };
-  }
-
-  private simGetAccount(request: ConnectorRequest): { result: Record<string, unknown>; error?: ConnectorError } {
-    const accountId = request.params.accountId as string | undefined;
-    if (!accountId) {
-      return { result: {}, error: invalidResponse('accountId required') };
-    }
-    // PSD2 /accounts/{accountId} response:
-    //   { accountId, iban, bic, currency, status, name }
-    const iban = `GB29 NWBK ${deterministicHash(accountId).slice(0, 12).toUpperCase()}`;
-    return {
-      result: {
-        accountId,
-        iban,
-        bic: 'NWBKGB2L',
-        currency: 'GBP',
-        status: 'active',
-        name: `Account ${accountId}`,
-      },
-    };
-  }
-
-  // ─── Evidence construction ─────────────────────────────────────────────────
-  buildEvidence(request: ConnectorRequest, result: Record<string, unknown>): Evidence {
-    const accountId =
-      (request.params.accountId as string | undefined) ??
-      (result.accountId as string | undefined) ??
-      'unknown';
-    const currency =
-      (request.params.currency as string | undefined) ??
-      ((result.amount as { currency?: string } | undefined)?.currency) ??
-      'USD';
-
-    // Extract attested amount based on operation.
-    let attestedAmount: number | undefined;
-    let attestedValue = '';
-    if (request.operation === 'getBalance') {
-      const balances = result.balances as Array<{ balanceAmount: { amount: string } }> | undefined;
-      if (balances && balances.length > 0) {
-        attestedAmount = parseFloat(balances[0].balanceAmount.amount);
-        attestedValue = `${attestedAmount} ${currency} available`;
-      }
-    } else if (request.operation === 'initiateTransfer' || request.operation === 'verifyTransfer') {
-      const amt = result.amount as { amount?: string; currency?: string } | undefined;
-      if (amt?.amount) {
-        attestedAmount = parseFloat(amt.amount);
-        attestedValue = `${attestedAmount} ${amt.currency ?? currency} transfer`;
-      }
-    } else if (request.operation === 'getAccount') {
-      attestedValue = `account ${accountId} verified (IBAN ${result.iban})`;
-    }
-
-    return buildAttestationEvidence({
+    return createEvidence({
+      type: 'fiat_proof',
       source: 'open_banking',
       verificationLevel: 'institutional',
-      entityId: `account:${accountId}`,
-      attester: this.config.id,
-      attestedAmount,
-      currency,
+      entityId,
+      attester: 'open-banking-connector-v2',
       reputation: 0.9,
-      jurisdiction: 'EU-PSD2',
-      ttlMs: 60_000,
-      payload: {
-        connector: this.config.id,
-        connectorType: this.config.type,
-        operation: request.operation,
-        attestedValue,
-        accountId,
-        iban: result.iban,
-        bic: result.bic,
-      },
+      jurisdiction: 'EU',
+      payload: { operation: request.operation, requestId: request.id, result },
     });
   }
 
-  // ─── Health probe ──────────────────────────────────────────────────────────
   async healthCheck(): Promise<{ healthy: boolean; latencyMs: number }> {
-    // In production: GET /health
     const start = Date.now();
-    return { healthy: true, latencyMs: Math.floor(Math.random() * 80) + 40 };
+    // Simulated — instant in-process. A real impl would ping the bank's /health endpoint.
+    return { healthy: true, latencyMs: Date.now() - start };
+  }
+
+  // --------------------------------------------------------------- getBalance
+  private getBalance(params: Record<string, unknown>): DoQueryResult {
+    const accountId = params['accountId'] as string | undefined;
+    const currency = (params['currency'] as string | undefined) ?? 'USD';
+    if (!accountId) {
+      return { ok: false, error: invalidResponse('accountId_required') };
+    }
+    const balance = pseudoBalance(accountId, currency);
+    return {
+      ok: true,
+      data: { accountId, currency, balance, available: balance, asOf: Date.now() },
+    };
+  }
+
+  // ----------------------------------------------------------- initiateTransfer
+  private initiateTransfer(params: Record<string, unknown>): DoQueryResult {
+    const fromAccount = params['fromAccount'] as string | undefined;
+    const toAccount = params['toAccount'] as string | undefined;
+    const amount = params['amount'] as number | undefined;
+    const currency = (params['currency'] as string | undefined) ?? 'USD';
+    const reference = params['reference'] as string | undefined;
+    if (!fromAccount || !toAccount || amount === undefined) {
+      return { ok: false, error: invalidResponse('fromAccount_toAccount_amount_required') };
+    }
+    if (amount <= 0) {
+      return { ok: false, error: invalidResponse('amount_must_be_positive') };
+    }
+    const transferId = uid('obxfer');
+    const record: TransferRecord = {
+      transferId,
+      fromAccount,
+      toAccount,
+      amount: round(amount, 2),
+      currency,
+      reference,
+      status: 'pending',
+      createdAt: Date.now(),
+    };
+    this.transfers.set(transferId, record);
+    return {
+      ok: true,
+      data: { transferId, status: record.status, amount: record.amount, currency },
+    };
+  }
+
+  // ------------------------------------------------------------ verifyTransfer
+  private verifyTransfer(params: Record<string, unknown>): DoQueryResult {
+    const transferId = params['transferId'] as string | undefined;
+    if (!transferId) {
+      return { ok: false, error: invalidResponse('transferId_required') };
+    }
+    const record = this.transfers.get(transferId);
+    if (!record) {
+      return { ok: false, error: invalidResponse(`transfer_not_found:${transferId}`) };
+    }
+    // Simulated settlement: any transfer older than 0ms is "settled" in this stub.
+    // A real connector would poll the bank's status endpoint.
+    if (record.status === 'pending') {
+      record.status = 'settled';
+    }
+    return {
+      ok: true,
+      data: {
+        transferId: record.transferId,
+        status: record.status,
+        amount: record.amount,
+        currency: record.currency,
+        fromAccount: record.fromAccount,
+        toAccount: record.toAccount,
+        reference: record.reference,
+        settledAt: record.status === 'settled' ? Date.now() : undefined,
+      },
+    };
+  }
+
+  /** Helper used by tests to inject a failed transfer. */
+  _injectFailedTransfer(transferId: string): void {
+    const r = this.transfers.get(transferId);
+    if (r) r.status = 'failed';
   }
 }
-
-// ─── Deterministic simulation helpers ────────────────────────────────────────
-
-/** Deterministic pseudo-balance for a given account/currency pair. */
-function deterministicBalance(accountId: string, currency: string): number {
-  const h = deterministicHash(`${accountId}|${currency}`);
-  // Map the hash to a balance in [1000, 500000].
-  const n = parseInt(h.slice(0, 8), 16);
-  return 1000 + (n % 499000);
-}
-
-/** Simple FNV-1a hash → hex string. Deterministic across calls. */
-export function deterministicHash(s: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, '0');
-}
-
-/** Static type identifier (used by registry wiring). */
-export const OPEN_BANKING_CONNECTOR_ID: ConnectorId = 'open_banking';
-export const OPEN_BANKING_CONNECTOR_TYPE: ConnectorType = 'bank';

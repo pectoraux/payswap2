@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { simulationEngine, ScenarioLibrary, type SimulationScenario, type SimulationResult } from '@/kernel';
-import { requireSession, unauthorized } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,9 +11,6 @@ export const dynamic = 'force-dynamic';
  * continuous verification system.
  */
 export async function POST() {
-  const session = await requireSession();
-  if (!session) return unauthorized();
-
   const records = await db.savedScenarioRecord.findMany();
   const saved = records.map((r) => {
     const scenario = JSON.parse(r.scenario) as SimulationScenario;

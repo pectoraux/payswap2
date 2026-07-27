@@ -1,435 +1,280 @@
 /**
- * PaySwap Protocol — Double-Entry Ledger / Report Generators.
- * -----------------------------------------------------------------------------
- * Each report is a pure function that pulls from the ledger (rebuilt from
- * events) plus the relevant protocol module singletons. Reports are
- * serializable (no class instances, no functions) so they can be returned
- * directly from API routes.
+ * PaySwap Protocol — Ledger Reports.
  *
- * Reports:
- *   - SettlementReport           — period settlement summary
- *   - TreasuryReport             — point-in-time treasury position
- *   - LPReport                   — LP health + utilization
- *   - MerchantReport             — merchant revenue / payouts / outstanding
- *   - OutstandingLiabilitiesReport — what we currently owe
- *   - HistoricalSnapshotReport   — time-series of balance sheets
+ * Thin report generators that wrap the LedgerEngine queries into shapes
+ * suitable for export (CSV/JSON), dashboards, and the daily close pack.
+ *
+ * These are intentionally simple — the heavy lifting lives in the engine. The
+ * report layer is where you add formatting, period partitioning, and
+ * human-readable narrative.
  */
-import { round } from '@/kernel/support';
-import type { LedgerEngine } from './engine';
-import type { SnapshotStore, LedgerSnapshot } from './snapshots';
-import { takeSnapshot } from './snapshots';
+import { round, formatDuration } from '@/kernel/support';
+import type {
+  LedgerEngine,
+  TrialBalance,
+  BalanceSheet,
+  IncomeStatement,
+  IntegrityReport,
+} from './engine';
+import type { DailyReconciliationReport } from './reconciliation';
+import {
+  getAccount,
+  twinAssetToCurrency,
+} from './accounts';
 
-const EPSILON = 1e-6;
+/** A single row in a treasury report. */
+export interface TreasuryReportRow {
+  accountCode: string;
+  label: string;
+  type: string;
+  balance: number;
+  currency: string;
+}
 
-/* ========================================================================== */
-/* Settlement Report                                                           */
-/* ========================================================================== */
-
-export interface SettlementReport {
-  period: { fromTs: number; toTs: number };
-  totalSettled: number;
-  byCurrency: Record<string, number>;
-  byLP: Record<string, number>;
-  byCorridor: Record<string, number>;
-  failedCount: number;
-  /** Average settlement latency in ms (estimated from escrow freeze→release). */
-  avgSettlementMs: number;
+/** Daily treasury report. */
+export interface DailyTreasuryReport {
+  /** Report id. */
+  id: string;
+  /** Cutoff timestamp. */
+  asOfTs: number;
+  /** Trial balance totals. */
+  totals: { totalDebits: number; totalCredits: number; balanced: boolean };
+  /** Treasury account rows (assets, liabilities, equity). */
+  rows: TreasuryReportRow[];
+  /** Net asset position (assets − liabilities). */
+  netAssetPosition: number;
+  /** Treasury equity balance. */
+  treasuryEquity: number;
+  /** Generation time (ms). */
+  durationMs: number;
 }
 
 /**
- * Generate a settlement report for [fromTs, toTs].
- *
- * Pulls from:
- *   - ledger (cash:bank:* and cash:mmo:* credits = settled fiat out)
- *   - escrow module (frozen→released entries within the period)
- *   - payout service (completed + failed payouts)
+ * Generate a daily treasury report — every active account with its balance,
+ * grouped by type, with the trial-balance totals and the net asset position.
+ */
+export function generateDailyTreasuryReport(
+  ledger: LedgerEngine,
+  asOfTs?: number,
+): DailyTreasuryReport {
+  const start = Date.now();
+  const cutoff = asOfTs ?? Date.now();
+  const tb = ledger.getTrialBalance(cutoff);
+  const bs = ledger.getBalanceSheet(cutoff);
+
+  const rows: TreasuryReportRow[] = [];
+  for (const code of Object.keys(tb.accounts)) {
+    const def = getAccount(code);
+    const t = tb.accounts[code];
+    rows.push({
+      accountCode: code,
+      label: def?.label ?? code,
+      type: def?.type ?? 'asset',
+      balance: round(t.balance, 6),
+      currency: def?.currency === 'multi' ? 'multi' : (def?.currency ?? 'multi'),
+    });
+  }
+
+  // Sort: assets first, then liabilities, then equity, then revenue/expense.
+  const typeOrder: Record<string, number> = { asset: 0, liability: 1, equity: 2, revenue: 3, expense: 4 };
+  rows.sort((a, b) => {
+    const ta = typeOrder[a.type] ?? 99;
+    const tb_ = typeOrder[b.type] ?? 99;
+    if (ta !== tb_) return ta - tb_;
+    return a.accountCode < b.accountCode ? -1 : 1;
+  });
+
+  return {
+    id: `treasury-${cutoff}`,
+    asOfTs: cutoff,
+    totals: {
+      totalDebits: tb.totalDebits,
+      totalCredits: tb.totalCredits,
+      balanced: tb.balanced,
+    },
+    rows,
+    netAssetPosition: round(bs.assets.total - bs.liabilities.total, 6),
+    treasuryEquity: round(bs.equity.accounts['equity:treasury'] ?? 0, 6),
+    durationMs: Date.now() - start,
+  };
+}
+
+/** Settlement report row — per twin-token asset. */
+export interface SettlementReportRow {
+  assetCode: string;
+  currency: string;
+  circulating: number;
+  escrowed: number;
+  backing: number;
+  /** circulating + escrowed − backing (should be 0). */
+  discrepancy: number;
+}
+
+/** Settlement report — twin token backing per asset. */
+export interface SettlementReport {
+  id: string;
+  asOfTs: number;
+  rows: SettlementReportRow[];
+  /** Total backing liability across all currencies. */
+  totalBacking: number;
+  /** Total circulating across all assets. */
+  totalCirculating: number;
+  /** Total escrowed across all assets. */
+  totalEscrowed: number;
+  /** True if every row's discrepancy is zero. */
+  balanced: boolean;
+  durationMs: number;
+}
+
+/**
+ * Generate a settlement report — twin token backing coverage per asset.
+ * Useful for the daily close pack.
  */
 export function generateSettlementReport(
   ledger: LedgerEngine,
-  escrowModule: { all: () => Array<{ state: string; frozenAt: number; releasedAt: number | null; currency: string; amount: number; lpId: string }> },
-  payoutService: { list: (filter?: { state?: string }) => Array<{ state: string; method: string; sourceCurrency: string; destinationCurrency: string; sourceAmount: number; completedAt: number | null; createdAt: number }> },
-  fromTs: number,
-  toTs: number,
+  asOfTs?: number,
 ): SettlementReport {
-  // Cash credits within the period = settled fiat out.
-  const byCurrency: Record<string, number> = {};
-  const byLP: Record<string, number> = {};
-  const byCorridor: Record<string, number> = {};
-  let totalSettled = 0;
+  const start = Date.now();
+  const cutoff = asOfTs ?? Date.now();
+  const tb = ledger.getTrialBalance(cutoff);
 
-  const lines = ledger.getLines({ fromTs, toTs });
-  for (const line of lines) {
-    if (line.accountCode.startsWith('cash:bank:') || line.accountCode.startsWith('cash:mmo:')) {
-      if (line.credit > 0) {
-        byCurrency[line.currency] = round((byCurrency[line.currency] ?? 0) + line.credit, 6);
-        totalSettled = round(totalSettled + line.credit, 6);
-      }
-    }
-  }
-
-  // Escrow releases within the period.
-  let releasedCount = 0;
-  let totalLatency = 0;
-  for (const entry of escrowModule.all()) {
-    if (entry.state === 'released' && entry.releasedAt != null) {
-      if (entry.releasedAt >= fromTs && entry.releasedAt <= toTs) {
-        byLP[entry.lpId] = round((byLP[entry.lpId] ?? 0) + entry.amount, 6);
-        totalLatency += entry.releasedAt - entry.frozenAt;
-        releasedCount++;
-        // Corridor = currency (simplified — a real report would use the
-        // corridor from the payment intent).
-        byCorridor[entry.currency] = round((byCorridor[entry.currency] ?? 0) + entry.amount, 6);
-      }
-    }
-  }
-  const avgSettlementMs = releasedCount > 0 ? round(totalLatency / releasedCount, 0) : 0;
-
-  // Failed payouts within the period.
-  let failedCount = 0;
-  for (const payout of payoutService.list()) {
-    if (payout.state === 'failed' && payout.createdAt >= fromTs && payout.createdAt <= toTs) {
-      failedCount++;
-    }
-  }
-
-  return {
-    period: { fromTs, toTs },
-    totalSettled,
-    byCurrency,
-    byLP,
-    byCorridor,
-    failedCount,
-    avgSettlementMs,
-  };
-}
-
-/* ========================================================================== */
-/* Treasury Report                                                             */
-/* ========================================================================== */
-
-export interface TreasuryReport {
-  asOfTs: number;
-  totalReserves: number;
-  byCurrency: Record<string, number>;
-  twinTokenBacking: Record<string, number>;
-  outstandingLiabilities: number;
-  /** totalReserves / outstandingLiabilities — >1 means solvent. */
-  capitalEfficiency: number;
-}
-
-/**
- * Generate a treasury report as of `asOfTs` (defaults to now).
- *
- * totalReserves = sum of cash:bank:* + cash:mmo:* + reserve:stellar:* DR balances.
- * twinTokenBacking = sum of twin:backing:* CR balances (liability to redeem).
- * outstandingLiabilities = twinTokenBacking + sum of user:wallet:* + merchant:payable:*.
- */
-export function generateTreasuryReport(ledger: LedgerEngine, asOfTs: number = Date.now()): TreasuryReport {
-  const codes = ledger.getAccountCodes(asOfTs);
-  const byCurrency: Record<string, number> = {};
-  let totalReserves = 0;
-  for (const code of codes) {
-    if (code.startsWith('cash:bank:') || code.startsWith('cash:mmo:') || code.startsWith('reserve:stellar:')) {
-      const bal = ledger.getAccountBalance(code, asOfTs);
-      // Asset → debit-normal → balance positive.
-      for (const [cur, v] of Object.entries(bal.byCurrency)) {
-        byCurrency[cur] = round((byCurrency[cur] ?? 0) + v.balance, 6);
-        totalReserves = round(totalReserves + v.balance, 6);
-      }
-    }
-  }
-
-  const twinTokenBacking: Record<string, number> = {};
-  let backingTotal = 0;
-  for (const code of codes) {
-    if (code.startsWith('twin:backing:')) {
-      const bal = ledger.getAccountBalance(code, asOfTs);
-      for (const [cur, v] of Object.entries(bal.byCurrency)) {
-        const amt = round(-v.balance, 6); // credit-normal → negate
-        if (Math.abs(amt) > EPSILON) {
-          twinTokenBacking[cur] = amt;
-          backingTotal = round(backingTotal + amt, 6);
-        }
-      }
-    }
-  }
-
-  let otherLiabilities = 0;
-  for (const code of codes) {
-    if (code.startsWith('user:wallet:') || code.startsWith('merchant:payable:') || code.startsWith('payout:pending:')) {
-      const bal = ledger.getAccountBalance(code, asOfTs);
-      otherLiabilities = round(otherLiabilities - bal.balance, 6); // negate credit-normal
-    }
-  }
-  const outstandingLiabilities = round(backingTotal + otherLiabilities, 6);
-  const capitalEfficiency = outstandingLiabilities > 0 ? round(totalReserves / outstandingLiabilities, 6) : 0;
-
-  return {
-    asOfTs,
-    totalReserves,
-    byCurrency,
-    twinTokenBacking,
-    outstandingLiabilities,
-    capitalEfficiency,
-  };
-}
-
-/* ========================================================================== */
-/* LP Report                                                                   */
-/* ========================================================================== */
-
-export interface LPReport {
-  lpId: string;
-  stake: number;
-  collateral: number;
-  authorizedExposure: number;
-  currentExposure: number;
-  utilization: number;
-  reputation: number;
-  volume: number;
-  failures: number;
-}
-
-/**
- * Generate an LP report.
- *
- * stake, collateral, authorizedExposure, currentExposure, reputation come
- * from the lpLifecycle module. volume = sum of cash credits for the LP's
- * corridor within the period (best-effort). failures = count of LP-failed
- * payouts (best-effort: count of payouts by this LP's merchants that failed).
- */
-export function generateLPReport(
-  lpId: string,
-  lpLifecycle: {
-    get: (id: string) => {
-      stakeIds: string[];
-      collateralIds: string[];
-      authorizedExposure: number;
-      currentExposure: number;
-      reputation: number;
-      currency: string;
-    } | undefined;
-  },
-  collateralVault: { totalLockedByLp: (id: string) => number },
-  settlementCapacityVault: { capacityByLp: (id: string, currency?: string) => number },
-): LPReport {
-  const lp = lpLifecycle.get(lpId);
-  if (!lp) {
-    return {
-      lpId,
-      stake: 0,
-      collateral: 0,
-      authorizedExposure: 0,
-      currentExposure: 0,
-      utilization: 0,
-      reputation: 0,
-      volume: 0,
-      failures: 0,
-    };
-  }
-  const stake = settlementCapacityVault.capacityByLp(lpId, lp.currency);
-  const collateral = collateralVault.totalLockedByLp(lpId);
-  const utilization = lp.authorizedExposure > 0
-    ? round(lp.currentExposure / lp.authorizedExposure, 6)
-    : 0;
-  return {
-    lpId,
-    stake,
-    collateral,
-    authorizedExposure: lp.authorizedExposure,
-    currentExposure: lp.currentExposure,
-    utilization,
-    reputation: lp.reputation,
-    volume: 0, // Best-effort — would need ledger tagging by LP.
-    failures: 0, // Best-effort — would need payout→LP linkage.
-  };
-}
-
-/* ========================================================================== */
-/* Merchant Report                                                             */
-/* ========================================================================== */
-
-export interface MerchantReport {
-  merchantId: string;
-  revenue: number;
-  payouts: number;
-  outstanding: number;
-  refundRate: number;
-  feeContribution: number;
-}
-
-/**
- * Generate a merchant report.
- *
- * revenue, refundRate come from merchantPlatform.getAnalytics.
- * payouts = sum of completed payout sourceAmounts.
- * outstanding = revenue − payouts (what we still owe the merchant).
- * feeContribution = sum of completed payout fees.
- */
-export function generateMerchantReport(
-  merchantId: string,
-  ledger: LedgerEngine,
-  merchantPlatform: { getAnalytics: (id: string) => { totalRevenue: number; refundRate: number } },
-  payoutService: {
-    list: (filter?: { merchantId?: string; state?: string }) => Array<{
-      state: string; sourceAmount: number; fee: number;
-    }>;
-  },
-): MerchantReport {
-  const analytics = merchantPlatform.getAnalytics(merchantId);
-  const completed = payoutService.list({ merchantId, state: 'completed' });
-  const payouts = round(completed.reduce((s, p) => s + p.sourceAmount, 0), 6);
-  const feeContribution = round(completed.reduce((s, p) => s + p.fee, 0), 6);
-  const outstanding = round(analytics.totalRevenue - payouts, 6);
-
-  return {
-    merchantId,
-    revenue: round(analytics.totalRevenue, 6),
-    payouts,
-    outstanding: Math.max(0, outstanding),
-    refundRate: analytics.refundRate,
-    feeContribution,
-  };
-}
-
-/* ========================================================================== */
-/* Outstanding Liabilities Report                                              */
-/* ========================================================================== */
-
-export interface OutstandingLiabilitiesReport {
-  asOfTs: number;
-  twinTokensOutstanding: number;
-  pendingPayouts: number;
-  pendingSettlements: number;
-  escrowedFunds: number;
-  total: number;
-}
-
-/**
- * Generate an outstanding-liabilities report as of `asOfTs` (defaults to now).
- *
- * twinTokensOutstanding = CR balance on twin:backing:* (liability to redeem).
- * pendingPayouts = CR balance on payout:pending:*.
- * pendingSettlements = CR balance on settlement:receivable (locked user funds).
- * escrowedFunds = DR balance on twintoken:escrowed:* (asset, but illiquid).
- */
-export function generateOutstandingLiabilitiesReport(
-  ledger: LedgerEngine,
-  asOfTs: number = Date.now(),
-): OutstandingLiabilitiesReport {
-  const codes = ledger.getAccountCodes(asOfTs);
-  let twinTokensOutstanding = 0;
-  let pendingPayouts = 0;
-  let pendingSettlements = 0;
-  let escrowedFunds = 0;
-  for (const code of codes) {
-    const bal = ledger.getAccountBalance(code, asOfTs);
-    if (code.startsWith('twin:backing:')) {
-      twinTokensOutstanding = round(twinTokensOutstanding - bal.balance, 6);
-    } else if (code.startsWith('payout:pending:')) {
-      pendingPayouts = round(pendingPayouts - bal.balance, 6);
-    } else if (code === 'settlement:receivable' || code.startsWith('settlement:receivable:')) {
-      // settlement:receivable is debit-normal (an asset — the right to settle).
-      // We report the absolute amount being held.
-      pendingSettlements = round(pendingSettlements + Math.abs(bal.balance), 6);
+  // Discover twin-token asset codes from the active accounts.
+  const assetCodes = new Set<string>();
+  for (const code of Object.keys(tb.accounts)) {
+    if (code.startsWith('twintoken:circulating:')) {
+      assetCodes.add(code.slice('twintoken:circulating:'.length));
     } else if (code.startsWith('twintoken:escrowed:')) {
-      escrowedFunds = round(escrowedFunds + bal.balance, 6);
+      assetCodes.add(code.slice('twintoken:escrowed:'.length));
     }
   }
-  const total = round(twinTokensOutstanding + pendingPayouts + pendingSettlements + escrowedFunds, 6);
+
+  const rows: SettlementReportRow[] = [];
+  let totalBacking = 0;
+  let totalCirculating = 0;
+  let totalEscrowed = 0;
+  let balanced = true;
+
+  for (const assetCode of [...assetCodes].sort()) {
+    const currency = twinAssetToCurrency(assetCode);
+    const circulating = Math.max(0, tb.accounts[`twintoken:circulating:${assetCode}`]?.balance ?? 0);
+    const escrowed = Math.max(0, tb.accounts[`twintoken:escrowed:${assetCode}`]?.balance ?? 0);
+    const backing = Math.abs(tb.accounts[`twin:backing:${currency}`]?.balance ?? 0);
+    const discrepancy = round(circulating + escrowed - backing, 6);
+    if (Math.abs(discrepancy) > 1e-6) balanced = false;
+    rows.push({ assetCode, currency, circulating, escrowed, backing, discrepancy });
+    totalBacking = round(totalBacking + backing, 6);
+    totalCirculating = round(totalCirculating + circulating, 6);
+    totalEscrowed = round(totalEscrowed + escrowed, 6);
+  }
+
   return {
-    asOfTs,
-    twinTokensOutstanding,
-    pendingPayouts,
-    pendingSettlements,
-    escrowedFunds,
-    total,
+    id: `settlement-${cutoff}`,
+    asOfTs: cutoff,
+    rows,
+    totalBacking,
+    totalCirculating,
+    totalEscrowed,
+    balanced,
+    durationMs: Date.now() - start,
   };
 }
 
-/* ========================================================================== */
-/* Historical Snapshot Report                                                  */
-/* ========================================================================== */
-
-export interface HistoricalSnapshotReport {
-  snapshots: LedgerSnapshot[];
-  /** Time-series of total assets per snapshot. */
-  totalAssetsSeries: Array<{ ts: number; totalAssets: number }>;
-  /** Time-series of total liabilities per snapshot. */
-  totalLiabilitiesSeries: Array<{ ts: number; totalLiabilities: number }>;
-  /** Time-series of total equity per snapshot. */
-  totalEquitySeries: Array<{ ts: number; totalEquity: number }>;
-  /** Time-series of trial-balance delta per snapshot. */
-  trialBalanceDeltaSeries: Array<{ ts: number; delta: number }>;
+/** Reconciliation summary report — human-readable. */
+export interface ReconciliationSummaryReport {
+  id: string;
+  asOfTs: number;
+  passed: boolean;
+  failedCount: number;
+  durationMs: number;
+  checks: Array<{
+    name: string;
+    passed: boolean;
+    discrepancyCount: number;
+  }>;
+  summary: string;
 }
 
 /**
- * Generate a historical-snapshot report from a SnapshotStore.
- * Pulls all snapshots in [fromTs, toTs] and computes time-series of
- * assets / liabilities / equity / trial-balance delta.
+ * Summarize a DailyReconciliationReport into a one-screen human-readable
+ * summary. Useful for ops dashboards and audit logs.
  */
-export function generateHistoricalSnapshotReport(
-  snapshotStore: SnapshotStore,
-  fromTs?: number,
-  toTs?: number,
-): HistoricalSnapshotReport {
-  const snapshots = snapshotStore.list(fromTs, toTs);
-  const totalAssetsSeries: Array<{ ts: number; totalAssets: number }> = [];
-  const totalLiabilitiesSeries: Array<{ ts: number; totalLiabilities: number }> = [];
-  const totalEquitySeries: Array<{ ts: number; totalEquity: number }> = [];
-  const trialBalanceDeltaSeries: Array<{ ts: number; delta: number }> = [];
-  for (const snap of snapshots) {
-    let assets = 0;
-    let liabilities = 0;
-    let equity = 0;
-    for (const [code, bal] of Object.entries(snap.accounts)) {
-      // Account-type lookup — duplicated here to avoid a circular import
-      // with accounts.ts at runtime (accounts.ts is pure data, but we keep
-      // the lookup local for clarity).
-      let type: 'asset' | 'liability' | 'equity' | 'revenue' | 'expense' = 'asset';
-      if (code.startsWith('cash:') || code.startsWith('twintoken:') || code.startsWith('settlement:') || code.startsWith('lp:') || code.startsWith('reserve:')) {
-        type = 'asset';
-      } else if (code.startsWith('user:') || code.startsWith('merchant:') || code.startsWith('payout:') || code.startsWith('twin:')) {
-        type = 'liability';
-      } else if (code.startsWith('equity:')) {
-        type = 'equity';
-      } else if (code.startsWith('revenue:')) {
-        type = 'revenue';
-      } else if (code.startsWith('expense:')) {
-        type = 'expense';
-      }
-      if (type === 'asset') assets = round(assets + bal.balance, 6);
-      else if (type === 'liability') liabilities = round(liabilities - bal.balance, 6);
-      else if (type === 'equity') equity = round(equity - bal.balance, 6);
-    }
-    totalAssetsSeries.push({ ts: snap.ts, totalAssets: assets });
-    totalLiabilitiesSeries.push({ ts: snap.ts, totalLiabilities: liabilities });
-    totalEquitySeries.push({ ts: snap.ts, totalEquity: equity });
-    trialBalanceDeltaSeries.push({
-      ts: snap.ts,
-      delta: round(snap.trialBalance.totalDebits - snap.trialBalance.totalCredits, 6),
-    });
-  }
+export function summarizeReconciliation(
+  recon: DailyReconciliationReport,
+): ReconciliationSummaryReport {
+  const checks = [
+    recon.twinTokenBacking,
+    recon.escrow,
+    recon.payouts,
+    recon.treasury,
+  ].map((r) => ({
+    name: r.name,
+    passed: r.passed,
+    discrepancyCount: r.discrepancies.length,
+  }));
+
+  const summary = recon.passed
+    ? `All ${checks.length} reconciliation checks passed in ${formatDuration(recon.durationMs)}.`
+    : `${recon.failedCount} of ${checks.length} reconciliation checks failed in ${formatDuration(recon.durationMs)}. ` +
+      checks.filter((c) => !c.passed).map((c) => `${c.name} (${c.discrepancyCount} discrepancies)`).join('; ');
+
   return {
-    snapshots,
-    totalAssetsSeries,
-    totalLiabilitiesSeries,
-    totalEquitySeries,
-    trialBalanceDeltaSeries,
+    id: `recon-summary-${recon.asOfTs}`,
+    asOfTs: recon.asOfTs,
+    passed: recon.passed,
+    failedCount: recon.failedCount,
+    durationMs: recon.durationMs,
+    checks,
+    summary,
   };
 }
 
+/** Full close pack — treasury + settlement + integrity + income statement. */
+export interface DailyClosePack {
+  id: string;
+  asOfTs: number;
+  treasury: DailyTreasuryReport;
+  settlement: SettlementReport;
+  incomeStatement: IncomeStatement;
+  integrity: IntegrityReport;
+  /** Trial balance snapshot. */
+  trialBalance: TrialBalance;
+  /** Balance sheet. */
+  balanceSheet: BalanceSheet;
+  /** Total duration (ms). */
+  durationMs: number;
+}
+
 /**
- * Capture a snapshot into the store as of `ts` and return it.
- * Useful for scheduled snapshot capture (e.g., daily or per-frame).
+ * Generate the full daily close pack — every report needed to close the books.
+ *
+ * Includes treasury, settlement, income statement (from start of day),
+ * integrity check, trial balance, and balance sheet.
  */
-export function captureSnapshot(
+export function generateDailyClosePack(
   ledger: LedgerEngine,
-  snapshotStore: SnapshotStore,
-  ts: number = Date.now(),
-  frame?: number,
-): LedgerSnapshot {
-  const snapshot = takeSnapshot(ledger, ts, frame);
-  snapshotStore.save(snapshot);
-  return snapshot;
+  asOfTs?: number,
+  dayStartTs?: number,
+): DailyClosePack {
+  const start = Date.now();
+  const cutoff = asOfTs ?? Date.now();
+  const startOfDay = dayStartTs ?? new Date(cutoff).setHours(0, 0, 0, 0);
+
+  const treasury = generateDailyTreasuryReport(ledger, cutoff);
+  const settlement = generateSettlementReport(ledger, cutoff);
+  const incomeStatement = ledger.getIncomeStatement(startOfDay, cutoff);
+  const integrity = ledger.verifyIntegrity();
+  const trialBalance = ledger.getTrialBalance(cutoff);
+  const balanceSheet = ledger.getBalanceSheet(cutoff);
+
+  return {
+    id: `close-${cutoff}`,
+    asOfTs: cutoff,
+    treasury,
+    settlement,
+    incomeStatement,
+    integrity,
+    trialBalance,
+    balanceSheet,
+    durationMs: Date.now() - start,
+  };
 }

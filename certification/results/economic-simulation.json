@@ -1,0 +1,421 @@
+{
+  "runAt": "2026-07-25T05:59:28.968Z",
+  "baseline": {
+    "scenarioId": "BASELINE",
+    "name": "Baseline (no shock)",
+    "description": "Baseline world with no shock applied — the control.",
+    "shock": "No shock.",
+    "reserveRatio": 1.1111111111111112,
+    "treasurySolvent": true,
+    "alertsRaised": 0,
+    "mintsBlocked": 0,
+    "lpPnl": [
+      {
+        "lpId": "LP-A",
+        "pnl": 40207.52859915825,
+        "margin": 0.9980266589933204,
+        "volume": 8057405.728964122,
+        "negative": false
+      },
+      {
+        "lpId": "LP-B",
+        "pnl": 31406.329009133427,
+        "margin": 0.9990266212706139,
+        "volume": 6287385.8094370365,
+        "negative": false
+      },
+      {
+        "lpId": "LP-C",
+        "pnl": 13854.808024176182,
+        "margin": 0.9990193519987013,
+        "volume": 2773681.6101624817,
+        "negative": false
+      }
+    ],
+    "lpNegativeCount": 0,
+    "merchantSuccessRate": 100,
+    "paymentsTotal": 1380,
+    "paymentsSucceeded": 1380,
+    "paymentsFailed": 0,
+    "queueDepth": 0,
+    "p50LatencyMs": 8681,
+    "p95LatencyMs": 10988,
+    "p99LatencyMs": 11696,
+    "totalFeeRevenue": 94402.45372939562,
+    "totalOpex": 137.99999999999645,
+    "netRevenue": 94264.45372939562,
+    "protocolSustainable": true,
+    "verdict": "PASS",
+    "notes": []
+  },
+  "scenarios": [
+    {
+      "scenarioId": "S1_LP_DEFAULT",
+      "name": "LP Default",
+      "description": "The largest LP (40% of corridor capacity) suddenly defaults (goes offline, cannot settle).",
+      "shock": "LP-A marked defaulted=true; its liquidity removed from routing.",
+      "reserveRatio": 1.1111111111111112,
+      "treasurySolvent": true,
+      "alertsRaised": 0,
+      "mintsBlocked": 0,
+      "lpPnl": [
+        {
+          "lpId": "LP-B",
+          "pnl": 51481.00767424974,
+          "margin": 0.9982316052210383,
+          "volume": 10314441.53941616,
+          "negative": false
+        },
+        {
+          "lpId": "LP-C",
+          "pnl": 33988.05330747637,
+          "margin": 0.9990388215195933,
+          "volume": 6804150.664691622,
+          "negative": false
+        }
+      ],
+      "lpNegativeCount": 0,
+      "merchantSuccessRate": 100,
+      "paymentsTotal": 1380,
+      "paymentsSucceeded": 1380,
+      "paymentsFailed": 0,
+      "queueDepth": 0,
+      "p50LatencyMs": 9119,
+      "p95LatencyMs": 13618,
+      "p99LatencyMs": 19306,
+      "totalFeeRevenue": 94402.45372939562,
+      "totalOpex": 137.99999999999645,
+      "netRevenue": 94264.45372939562,
+      "protocolSustainable": true,
+      "verdict": "PASS",
+      "notes": []
+    },
+    {
+      "scenarioId": "S2_LIQUIDITY_SHORTAGE",
+      "name": "Liquidity Shortage",
+      "description": "Demand for GHS→KES corridor exceeds total LP capacity by 200% (3x demand multiplier, GHS→KES only).",
+      "shock": "demandMultiplier = 3.0, corridorMix = 100% GHS→KES (only Ghana merchants can submit).",
+      "reserveRatio": 1.1111111111111112,
+      "treasurySolvent": true,
+      "alertsRaised": 0,
+      "mintsBlocked": 0,
+      "lpPnl": [
+        {
+          "lpId": "LP-A",
+          "pnl": 9957.97573393998,
+          "margin": 0.9969065564950986,
+          "volume": 1997775.1513542049,
+          "negative": false
+        },
+        {
+          "lpId": "LP-B",
+          "pnl": 8717.580814517498,
+          "margin": 0.9968553728033714,
+          "volume": 1749016.1667086743,
+          "negative": false
+        },
+        {
+          "lpId": "LP-C",
+          "pnl": 6224.090099277522,
+          "margin": 0.9968927614253805,
+          "volume": 1248698.0225191265,
+          "negative": false
+        }
+      ],
+      "lpNegativeCount": 0,
+      "merchantSuccessRate": 28.814814814814817,
+      "paymentsTotal": 2700,
+      "paymentsSucceeded": 778,
+      "paymentsFailed": 1922,
+      "queueDepth": 45,
+      "p50LatencyMs": 9978,
+      "p95LatencyMs": 19907,
+      "p99LatencyMs": 24242,
+      "totalFeeRevenue": 24977.446702910038,
+      "totalOpex": 77.79999999999986,
+      "netRevenue": 24899.64670291004,
+      "protocolSustainable": true,
+      "verdict": "DEGRADED",
+      "notes": []
+    },
+    {
+      "scenarioId": "S3_FX_VOLATILITY",
+      "name": "FX Volatility",
+      "description": "GHS/KES rate swings 30% in 1 hour (GHS depreciates 30% vs KES).",
+      "shock": "fxRate GHS->KES 12.0 → 15.60 (+30%).",
+      "reserveRatio": 1.1111111111111112,
+      "treasurySolvent": true,
+      "alertsRaised": 0,
+      "mintsBlocked": 0,
+      "lpPnl": [
+        {
+          "lpId": "LP-A",
+          "pnl": 43434.642619465165,
+          "margin": 0.9980491517677731,
+          "volume": 8703908.528459292,
+          "negative": false
+        },
+        {
+          "lpId": "LP-B",
+          "pnl": 34631.25586598307,
+          "margin": 0.9991027724967959,
+          "volume": 6932471.177001793,
+          "negative": false
+        },
+        {
+          "lpId": "LP-C",
+          "pnl": 17173.173570450897,
+          "margin": 0.9990284970254882,
+          "volume": 3437974.7167538023,
+          "negative": false
+        }
+      ],
+      "lpNegativeCount": 0,
+      "merchantSuccessRate": 100,
+      "paymentsTotal": 1380,
+      "paymentsSucceeded": 1380,
+      "paymentsFailed": 0,
+      "queueDepth": 0,
+      "p50LatencyMs": 8776,
+      "p95LatencyMs": 11226,
+      "p99LatencyMs": 12261,
+      "totalFeeRevenue": 98745.90692192674,
+      "totalOpex": 137.99999999999645,
+      "netRevenue": 98607.90692192674,
+      "protocolSustainable": true,
+      "verdict": "PASS",
+      "notes": []
+    },
+    {
+      "scenarioId": "S4_RESERVE_DEPLETION",
+      "name": "Reserve Depletion",
+      "description": "Treasury reserves drop to 80% of circulating Twin Tokens (below 1:1 backing).",
+      "shock": "Reserves set to 80% of TWIN supply for every currency (ratio = 0.80).",
+      "reserveRatio": 0.8,
+      "treasurySolvent": false,
+      "alertsRaised": 1383,
+      "mintsBlocked": 2760,
+      "lpPnl": [],
+      "lpNegativeCount": 0,
+      "merchantSuccessRate": 0,
+      "paymentsTotal": 1380,
+      "paymentsSucceeded": 0,
+      "paymentsFailed": 1380,
+      "queueDepth": 23,
+      "p50LatencyMs": 0,
+      "p95LatencyMs": 0,
+      "p99LatencyMs": 0,
+      "totalFeeRevenue": 0,
+      "totalOpex": 0,
+      "netRevenue": 0,
+      "protocolSustainable": false,
+      "verdict": "PASS",
+      "notes": [
+        "Verdict override: treasury detected the shortfall (alerts raised) AND blocked all subsequent mints. The protocol correctly prevented insolvency from worsening."
+      ]
+    },
+    {
+      "scenarioId": "S5_MERCHANT_FRAUD",
+      "name": "Merchant Fraud",
+      "description": "A merchant attempts to withdraw 10x their actual balance via concurrent payout requests.",
+      "shock": "10 concurrent payouts × 10000 TWINKES against balance 1000.",
+      "reserveRatio": 1.1111111111111112,
+      "treasurySolvent": true,
+      "alertsRaised": 0,
+      "mintsBlocked": 0,
+      "lpPnl": [
+        {
+          "lpId": "LP-A",
+          "pnl": 38337.89028815874,
+          "margin": 0.9980319408046755,
+          "volume": 7682698.062198005,
+          "negative": false
+        },
+        {
+          "lpId": "LP-B",
+          "pnl": 29603.562665727797,
+          "margin": 0.9990415748248601,
+          "volume": 5926392.536950735,
+          "negative": false
+        },
+        {
+          "lpId": "LP-C",
+          "pnl": 12041.01801498363,
+          "margin": 0.9990541306075392,
+          "volume": 2410483.605660349,
+          "negative": false
+        }
+      ],
+      "lpNegativeCount": 0,
+      "merchantSuccessRate": 100,
+      "paymentsTotal": 1380,
+      "paymentsSucceeded": 1380,
+      "paymentsFailed": 0,
+      "queueDepth": 0,
+      "p50LatencyMs": 8681,
+      "p95LatencyMs": 10988,
+      "p99LatencyMs": 11696,
+      "totalFeeRevenue": 94402.45372939562,
+      "totalOpex": 137.99999999999645,
+      "netRevenue": 94264.45372939562,
+      "protocolSustainable": true,
+      "verdict": "PASS",
+      "notes": [
+        "Merchant mch_fraud_pcqdky had actual TWINKES balance 1000.",
+        "Fired 10 concurrent payout requests each for 10000 (10x balance).",
+        "Result: 0 succeeded, 10 blocked.",
+        "Merchant flagged (all excess payouts blocked): true."
+      ]
+    },
+    {
+      "scenarioId": "S6_CHARGEBACK_WAVE",
+      "name": "Chargeback Wave",
+      "description": "20% of payments in a 1-hour window get disputed/charged back (refunded).",
+      "shock": "chargebackFraction = 0.20 applied after settlement.",
+      "reserveRatio": 1.1111111111111112,
+      "treasurySolvent": true,
+      "alertsRaised": 0,
+      "mintsBlocked": 0,
+      "lpPnl": [
+        {
+          "lpId": "LP-A",
+          "pnl": 43139.40818405991,
+          "margin": 0.9979827233501484,
+          "volume": 8645321.642291484,
+          "negative": false
+        },
+        {
+          "lpId": "LP-B",
+          "pnl": 34269.59330791816,
+          "margin": 0.999014674073053,
+          "volume": 6860678.6661498435,
+          "negative": false
+        },
+        {
+          "lpId": "LP-C",
+          "pnl": 16855.073270427078,
+          "margin": 0.9990161013848516,
+          "volume": 3374334.657281763,
+          "negative": false
+        }
+      ],
+      "lpNegativeCount": 0,
+      "merchantSuccessRate": 100,
+      "paymentsTotal": 1380,
+      "paymentsSucceeded": 1380,
+      "paymentsFailed": 0,
+      "queueDepth": 0,
+      "p50LatencyMs": 8681,
+      "p95LatencyMs": 10988,
+      "p99LatencyMs": 11696,
+      "totalFeeRevenue": 77283.28242252926,
+      "totalOpex": 165.59999999999488,
+      "netRevenue": 77117.68242252927,
+      "protocolSustainable": true,
+      "verdict": "PASS",
+      "notes": []
+    },
+    {
+      "scenarioId": "S7_RAPID_GROWTH",
+      "name": "Rapid Transaction Growth",
+      "description": "Transaction volume increases 10x over 1 hour (viral event).",
+      "shock": "demandMultiplier = 10.0 across all corridors.",
+      "reserveRatio": 1.1111111111111112,
+      "treasurySolvent": true,
+      "alertsRaised": 0,
+      "mintsBlocked": 0,
+      "lpPnl": [
+        {
+          "lpId": "LP-A",
+          "pnl": 70377.13533169653,
+          "margin": 0.995113309574686,
+          "volume": 14144547.08916916,
+          "negative": false
+        },
+        {
+          "lpId": "LP-B",
+          "pnl": 61494.205650395845,
+          "margin": 0.9960316934406445,
+          "volume": 12347841.149104413,
+          "negative": false
+        },
+        {
+          "lpId": "LP-C",
+          "pnl": 43643.07963917174,
+          "margin": 0.9990339980223362,
+          "volume": 8737055.941152466,
+          "negative": false
+        }
+      ],
+      "lpNegativeCount": 0,
+      "merchantSuccessRate": 46.48550724637681,
+      "paymentsTotal": 13800,
+      "paymentsSucceeded": 6415,
+      "paymentsFailed": 7385,
+      "queueDepth": 150,
+      "p50LatencyMs": 8964,
+      "p95LatencyMs": 12359,
+      "p99LatencyMs": 20144,
+      "totalFeeRevenue": 176169.63427244683,
+      "totalOpex": 641.5000000000773,
+      "netRevenue": 175528.13427244674,
+      "protocolSustainable": true,
+      "verdict": "DEGRADED",
+      "notes": []
+    },
+    {
+      "scenarioId": "S8_CORRIDOR_IMBALANCE",
+      "name": "Corridor Imbalance",
+      "description": "90% of traffic flows GHS→KES, only 10% flows KES→GHS (one-way pressure).",
+      "shock": "corridorMix = 90% GHS->KES, 10% KES->GHS, 0% GHS->NGN, 0% NGN->GHS.",
+      "reserveRatio": 1.1111111111111112,
+      "treasurySolvent": true,
+      "alertsRaised": 0,
+      "mintsBlocked": 0,
+      "lpPnl": [
+        {
+          "lpId": "LP-A",
+          "pnl": 7943.502481722231,
+          "margin": 0.9945661019746375,
+          "volume": 1597380.4990841737,
+          "negative": false
+        },
+        {
+          "lpId": "LP-B",
+          "pnl": 6655.1865272721025,
+          "margin": 0.9968694217346629,
+          "volume": 1335217.3077375256,
+          "negative": false
+        },
+        {
+          "lpId": "LP-C",
+          "pnl": 4146.85371635954,
+          "margin": 0.9969467859216433,
+          "volume": 831910.7448700815,
+          "negative": false
+        }
+      ],
+      "lpNegativeCount": 0,
+      "merchantSuccessRate": 89.58333333333334,
+      "paymentsTotal": 1200,
+      "paymentsSucceeded": 1075,
+      "paymentsFailed": 125,
+      "queueDepth": 15,
+      "p50LatencyMs": 9223,
+      "p95LatencyMs": 18721,
+      "p99LatencyMs": 22643,
+      "totalFeeRevenue": 25095.850735253443,
+      "totalOpex": 107.49999999999817,
+      "netRevenue": 24988.350735253447,
+      "protocolSustainable": true,
+      "verdict": "DEGRADED",
+      "notes": []
+    }
+  ],
+  "summary": {
+    "pass": 5,
+    "degraded": 3,
+    "fail": 0,
+    "total": 8
+  }
+}

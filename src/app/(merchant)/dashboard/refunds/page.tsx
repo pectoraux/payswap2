@@ -1,8 +1,11 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { requireMerchant } from '@/lib/auth-guards';
-import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
+// M-RT-19: reads go through the read-model façades. db.refund is forbidden.
+// We fetch refunds via refundReadModel, payments via paymentReadModel, and
+// join in memory (the projection doesn't store relationships).
+import { refundReadModel, paymentReadModel } from '@/runtime';
 import {
   Card,
   CardContent,
@@ -36,24 +39,21 @@ export default async function RefundsPage({
 
   const env = await getEnvironment();
 
-  const refunds = await db.refund.findMany({
-    where: { merchantId, environment: env },
-    orderBy: { createdAt: 'desc' },
-    take: 100,
-    include: { payment: true },
-  });
+  // M-RT-19: fetch via read-model façades (backed by runtime projections).
+  const [refunds, recentPaymentViews] = await Promise.all([
+    refundReadModel.list(merchantId, env, { take: 100 }),
+    paymentReadModel.list(merchantId, { take: 500 }),
+  ]);
 
-  // Recent payments the merchant can issue refunds against.
-  const recentPayments = await db.payment.findMany({
-    where: {
-      merchantId,
-      environment: env,
-      status: { in: ['SUCCESS', 'COMPLETED', 'SETTLED', 'SUCCEEDED'] },
-    },
-    orderBy: { createdAt: 'desc' },
-    take: 25,
-    select: { id: true, reference: true, amount: true, currency: true },
-  });
+  // Build a payment lookup map for joining (the projection doesn't store
+  // relationships — we join in memory, same pattern as the dashboard).
+  const paymentMap = new Map(recentPaymentViews.map((p) => [p.id, p]));
+
+  // Recent payments the merchant can issue refunds against (filter in memory).
+  const recentPayments = recentPaymentViews
+    .filter((p) => ['SUCCESS', 'COMPLETED', 'SETTLED', 'SUCCEEDED'].includes(p.status))
+    .slice(0, 25)
+    .map((p) => ({ id: p.id, reference: p.reference, amount: p.amount, currency: p.currency }));
 
   // When the user clicks "Create Refund" on a payment detail page we link
   // here with ?paymentId=… — pre-select that payment in the dialog so they
@@ -151,7 +151,8 @@ export default async function RefundsPage({
               </TableHeader>
               <TableBody>
                 {refunds.map((r) => {
-                  const ref = r.payment?.reference || r.paymentId.slice(0, 12);
+                  const payment = paymentMap.get(r.paymentId);
+                  const ref = payment?.reference || r.paymentId.slice(0, 12);
                   return (
                     <TableRow key={r.id}>
                       <TableCell className="font-mono text-xs">
@@ -163,7 +164,7 @@ export default async function RefundsPage({
                         </Link>
                       </TableCell>
                       <TableCell className="font-semibold tabular-nums">
-                        {fmt(r.amount, r.payment?.currency)}
+                        {fmt(r.amount, payment?.currency)}
                       </TableCell>
                       <TableCell>
                         <Badge

@@ -1,35 +1,26 @@
 import { redirect } from 'next/navigation';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
 import { AppShell } from '@/components/app-shell';
-import { db } from '@/lib/db';
+import { requireMerchant } from '@/lib/auth-guards';
 
+export const dynamic = 'force-dynamic';
+
+/**
+ * Merchant dashboard layout.
+ *
+ * Server-side auth check via requireMerchant():
+ * - No session     → /login
+ * - No merchant role → /unauthorized
+ *
+ * The AppShell (client component) handles navigation + sidebar.
+ * SessionProvider is already wired in the root layout.
+ */
 export default async function MerchantLayout({ children }: { children: React.ReactNode }) {
-  const session = await getServerSession(authOptions);
-  if (!session) redirect('/login');
+  const { merchant } = await requireMerchant();
 
-  // Fetch organizations — wrapped in try/catch so a DB issue doesn't crash the page
-  let organizations: any[] = [];
-  try {
-    const userId = (session.user as any)?.id;
-    if (userId) {
-      const memberships = await db.organizationMember.findMany({
-        where: { userId, status: 'active' },
-        include: { organization: true },
-      });
-      organizations = memberships.map(m => ({
-        id: m.organization.id,
-        name: m.organization.name,
-        slug: m.organization.slug,
-        type: m.organization.type,
-        role: m.role,
-        logoUrl: m.organization.logoUrl ?? undefined,
-      }));
-    }
-  } catch (e) {
-    // Organizations not available — continue without the switcher
-    console.error('[merchant-layout] Failed to load organizations:', e);
+  // Defensive: a closed or suspended merchant should not access the dashboard.
+  if (merchant.status === 'CLOSED' || merchant.status === 'SUSPENDED') {
+    redirect('/unauthorized');
   }
 
-  return <AppShell role="merchant" organizations={organizations}>{children}</AppShell>;
+  return <AppShell role="merchant">{children}</AppShell>;
 }

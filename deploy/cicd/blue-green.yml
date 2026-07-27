@@ -1,0 +1,130 @@
+# =============================================================================
+# PaySwap — Blue-Green Deployment Script
+# =============================================================================
+# Implements a blue-green deployment against a Kubernetes cluster.
+#
+# Strategy:
+#   1. The current "live" environment is identified (blue or green) by
+#      inspecting the Service's selector labels.
+#   2. A new Deployment is created for the inactive environment (e.g.
+#      if blue is live, deploy to green) with the new image tag.
+#   3. The script waits for the new Deployment to become healthy
+#      (all pods ready + liveness probe passing).
+#   4. The Service selector is flipped to point at the new environment.
+#   5. The old environment is kept running for instant rollback — it is
+#      only scaled down after a configurable soak period (default 1h).
+#
+# Usage:
+#   bash deploy/cicd/blue-green.sh \
+#     --environment production \
+#     --image-tag v1.2.3 \
+#     --namespace payswap \
+#     --service payswap-api \
+#     --soak-minutes 60
+# =============================================================================
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Defaults
+ENVIRONMENT="production"
+IMAGE_TAG=""
+NAMESPACE="payswap"
+SERVICE_NAME="payswap-api"
+SOAK_MINUTES=60
+DRY_RUN=false
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --environment) ENVIRONMENT="$2"; shift 2 ;;
+    --image-tag) IMAGE_TAG="$2"; shift 2 ;;
+    --namespace) NAMESPACE="$2"; shift 2 ;;
+    --service) SERVICE_NAME="$2"; shift 2 ;;
+    --soak-minutes) SOAK_MINUTES="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=true; shift ;;
+    *) echo "unknown arg: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [[ -z "$IMAGE_TAG" ]]; then
+  echo "❌ --image-tag is required" >&2
+  exit 1
+fi
+
+echo "🚀 Blue-green deployment"
+echo "   environment : $ENVIRONMENT"
+echo "   image tag   : $IMAGE_TAG"
+echo "   namespace   : $NAMESPACE"
+echo "   service     : $SERVICE_NAME"
+echo "   soak (min)  : $SOAK_MINUTES"
+echo "   dry-run     : $DRY_RUN"
+echo ""
+
+# Step 1 — identify the current live environment (blue or green).
+LIVE_ENV=$(kubectl -n "$NAMESPACE" get svc "$SERVICE_NAME" \
+  -o jsonpath='{.metadata.annotations.deployment\.payswap\.io/live-environment}' 2>/dev/null || echo "")
+if [[ -z "$LIVE_ENV" ]]; then
+  LIVE_ENV="blue"
+  echo "   no live environment annotation found — defaulting to $LIVE_ENV"
+fi
+NEXT_ENV=$([[ "$LIVE_ENV" == "blue" ]] && echo "green" || echo "blue")
+echo "   live env    : $LIVE_ENV"
+echo "   next env    : $NEXT_ENV"
+echo ""
+
+if $DRY_RUN; then
+  echo "dry-run — would deploy $IMAGE_TAG to $NEXT_ENV and flip the service"
+  exit 0
+fi
+
+# Step 2 — create / update the inactive Deployment.
+DEPLOYMENT_NAME="${SERVICE_NAME}-${NEXT_ENV}"
+echo "📦 deploying $IMAGE_TAG to $DEPLOYMENT_NAME"
+kubectl -n "$NAMESPACE" set image "deployment/${DEPLOYMENT_NAME}" \
+  "payswap=${ECR_REGISTRY:-payswap/api}:${IMAGE_TAG}" 2>/dev/null \
+  || kubectl -n "$NAMESPACE" create deployment "$DEPLOYMENT_NAME" \
+       --image="${ECR_REGISTRY:-payswap/api}:${IMAGE_TAG}" \
+       --replicas=3
+
+# Step 3 — wait for the new Deployment to become healthy.
+echo "⏳ waiting for rollout of $DEPLOYMENT_NAME"
+kubectl -n "$NAMESPACE" rollout status "deployment/${DEPLOYMENT_NAME}" --timeout=300s
+
+# Health check the new pods before flipping traffic.
+echo "🩺 probing new pods"
+kubectl -n "$NAMESPACE" get pods -l "app=${DEPLOYMENT_NAME}" \
+  --no-headers | awk '{print $1}' | while read -r POD; do
+  kubectl -n "$NAMESPACE" exec "$POD" -- \
+    curl -sf http://127.0.0.1:3000/readyz > /dev/null \
+    || { echo "❌ pod $POD failed readiness probe"; exit 1; }
+done
+
+# Step 4 — flip the Service selector.
+echo "🔀 flipping service selector from $LIVE_ENV to $NEXT_ENV"
+kubectl -n "$NAMESPACE" patch svc "$SERVICE_NAME" --type=json \
+  -p="[{\"op\":\"replace\",\"path\":\"/spec/selector\",\"value\":{\"app\":\"${DEPLOYMENT_NAME}\"}}]"
+kubectl -n "$NAMESPACE" annotate svc "$SERVICE_NAME" \
+  "deployment.payswap.io/live-environment=${NEXT_ENV}" \
+  "deployment.payswap.io/previous-environment=${LIVE_ENV}" \
+  "deployment.payswap.io/last-flip-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --overwrite
+
+echo "✅ traffic is now served by $NEXT_ENV (image $IMAGE_TAG)"
+echo "   the previous environment ($LIVE_ENV) is kept running for instant rollback"
+echo ""
+echo "   to roll back:"
+echo "     kubectl -n $NAMESPACE patch svc $SERVICE_NAME --type=json \\"
+echo "       -p='[{\"op\":\"replace\",\"path\":\"/spec/selector\",\"value\":{\"app\":\"${SERVICE_NAME}-${LIVE_ENV}\"}}]'"
+echo ""
+echo "   the previous environment will be scaled down automatically after ${SOAK_MINUTES}m"
+echo "   (or run: kubectl -n $NAMESPACE scale deployment ${SERVICE_NAME}-${LIVE_ENV} --replicas=0)"
+
+# Step 5 — schedule scale-down of the old environment.
+(
+  sleep "$((SOAK_MINUTES * 60))"
+  kubectl -n "$NAMESPACE" scale "deployment/${SERVICE_NAME}-${LIVE_ENV}" --replicas=0 \
+    && echo "✅ scaled down ${SERVICE_NAME}-${LIVE_ENV} after ${SOAK_MINUTES}m soak"
+) &
+echo "   scheduled scale-down of $LIVE_ENV in ${SOAK_MINUTES}m (PID $!)"
+
+exit 0
