@@ -85,6 +85,8 @@ import { SchemaRegistry, registerAllEventTypes } from './event-evolution';
 import { RecoveryManager, buildManifest, type KernelManifest } from './recovery';
 // M-RT-29: Dual Runtime (RuntimeHost — Sandbox + Live isolation):
 import { RuntimeHost, type RuntimeContext } from './host';
+// M-RT-30: Liquidity Intelligence & Settlement Kernel:
+import { LiquidityPolicyEngine, BandwidthEngine, SettlementContractEngine, DisputeEngine } from './liquidity';
 
 // Re-export the public surface.
 export * from './types';
@@ -202,6 +204,8 @@ export * from './recovery';
 // M-RT-29: Dual Runtime public surface:
 export { RuntimeHost } from './host';
 export type { RuntimeContext } from './host';
+// M-RT-30: Liquidity Intelligence public surface:
+export * from './liquidity';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -297,6 +301,11 @@ export interface Runtime {
   schema: SchemaRegistry;
   // M-RT-28: Recovery Manager (checkpoint + crash recovery + projection verification).
   recovery: RecoveryManager;
+  // M-RT-30: Liquidity Intelligence (policy engine + bandwidth + settlement contracts + disputes).
+  liquidityPolicy: LiquidityPolicyEngine;
+  bandwidth: BandwidthEngine;
+  settlementContracts: SettlementContractEngine;
+  disputes: DisputeEngine;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -538,6 +547,28 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   recovery.register(wallets.projection, () => wallets.projection.count(), () => wallets.projection.eventsApplied());
   recovery.register(treasury.projection, () => treasury.projection.count(), () => treasury.projection.eventsApplied());
 
+  // ── M-RT-30: Liquidity Intelligence & Settlement Kernel ─────────────────
+  const bandwidth = new BandwidthEngine();
+  const settlementContracts = new SettlementContractEngine();
+  const disputes = new DisputeEngine();
+  projectionRunner.register(bandwidth as unknown as import('./read-models').Projection);
+  projectionRunner.register(settlementContracts as unknown as import('./read-models').Projection);
+  projectionRunner.register(disputes as unknown as import('./read-models').Projection);
+  const liquidityPolicy = new LiquidityPolicyEngine({
+    getReserve: (country, currency) => {
+      // Query treasury for reserve accounts.
+      const accounts = treasury.projection.listByKind('reserve');
+      const match = accounts.find((a) => a.reference === country && a.currency === currency);
+      return match?.availableBalance ?? 0;
+    },
+    getStablecoinInventory: (currency) => {
+      const accounts = treasury.projection.listByKind('treasury');
+      const match = accounts.find((a) => a.currency === currency && a.reference?.includes('stablecoin'));
+      return match?.availableBalance ?? 0;
+    },
+    getBandwidth: (country, assetType) => bandwidth.getAvailableBandwidth(country, assetType),
+  });
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -598,6 +629,10 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     settlements,
     schema,
     recovery,
+    liquidityPolicy,
+    bandwidth,
+    settlementContracts,
+    disputes,
     health,
     migrations,
     invariants,

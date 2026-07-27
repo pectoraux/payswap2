@@ -191,6 +191,17 @@ export function registerAllEventTypes(registry: SchemaRegistry): void {
     registry.registerEvent(type, 1, { description: 'Initial version' });
   }
 
+  // M-RT-30: Liquidity Intelligence events (v1).
+  for (const type of [
+    'bandwidth.registered', 'bandwidth.locked', 'bandwidth.released', 'bandwidth.escrowed', 'bandwidth.slashed',
+    'settlement.contract.created', 'settlement.contract.funded', 'settlement.contract.claimed',
+    'settlement.contract.confirmed', 'settlement.contract.released', 'settlement.contract.closed',
+    'settlement.contract.expired',
+    'settlement.disputed', 'dispute.evidence_submitted', 'dispute.status_changed', 'dispute.resolved',
+  ]) {
+    registry.registerEvent(type, 1, { description: 'Initial version (M-RT-30)' });
+  }
+
   // Register projection compatibility (all projections support v1+ of their events).
   registry.registerProjection('payments', {
     'payment.recorded': 1, 'payment.completed': 1, 'payment.failed': 1, 'payment.refunded': 1,
@@ -205,5 +216,17 @@ export function registerAllEventTypes(registry: SchemaRegistry): void {
     'treasury.account.created': 1, 'treasury.account.credited': 1, 'treasury.account.debited': 1,
     'treasury.position.opened': 1, 'treasury.position.closed': 1,
     'treasury.transfer.requested': 1, 'treasury.transfer.executed': 1, 'treasury.reconciliation.run': 1,
+  });
+  // M-RT-30: Register liquidity projection compatibility.
+  registry.registerProjection('bandwidth', {
+    'bandwidth.registered': 1, 'bandwidth.locked': 1, 'bandwidth.released': 1, 'bandwidth.escrowed': 1, 'bandwidth.slashed': 1,
+  });
+  registry.registerProjection('settlementContracts', {
+    'settlement.contract.created': 1, 'settlement.contract.funded': 1, 'settlement.contract.claimed': 1,
+    'settlement.contract.confirmed': 1, 'settlement.contract.released': 1, 'settlement.contract.closed': 1,
+    'settlement.contract.expired': 1,
+  });
+  registry.registerProjection('disputes', {
+    'settlement.disputed': 1, 'dispute.evidence_submitted': 1, 'dispute.status_changed': 1, 'dispute.resolved': 1,
   });
 }
