@@ -70,6 +70,8 @@ import { ProjectionHealthRegistry, MigrationManager } from './migration';
 import { LiquidityComposer } from './engines/liquidity-composer';
 // M-RT-20: Economic Integrity Hardening (Invariant Engine):
 import { InvariantEngine, BUILTIN_INVARIANTS } from './invariants';
+// M-RT-21: Runtime Enforcement (Dispatcher — the only way to mutate state):
+import { RuntimeDispatcher, CommandRegistry, BUILTIN_HANDLERS } from './dispatcher';
 
 // Re-export the public surface.
 export * from './types';
@@ -160,6 +162,8 @@ export type { CompositionRequest, ComposedExecutionPlan, ExecutionLeg, SplitPlan
 export * from './read-models/v2';
 // M-RT-20: Invariant Engine public surface:
 export * from './invariants';
+// M-RT-21: Runtime Dispatcher public surface:
+export * from './dispatcher';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -242,6 +246,10 @@ export interface Runtime {
   migrations: MigrationManager;
   // M-RT-20: Invariant Engine (verifies economic invariants before every append).
   invariants: InvariantEngine;
+  // M-RT-21: Runtime Dispatcher (the ONLY way to mutate financial state).
+  dispatcher: RuntimeDispatcher;
+  // M-RT-21: Command Registry (holds all command handlers).
+  commands: CommandRegistry;
 
   /** Dispatch a raw merchant intent through the full pipeline. */
   dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
@@ -418,6 +426,13 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     invariants.register(inv);
   }
 
+  // ── M-RT-21: Runtime Dispatcher (the only way to mutate financial state) ─
+  const commands = new CommandRegistry();
+  for (const handler of BUILTIN_HANDLERS) {
+    commands.register(handler);
+  }
+  const dispatcher = new RuntimeDispatcher({ eventStore, clock, invariants, registry: commands });
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -469,6 +484,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     health,
     migrations,
     invariants,
+    dispatcher,
+    commands,
     dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
     registerStage: (stage, handler) => pipeline.register(stage, handler),
     registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),
