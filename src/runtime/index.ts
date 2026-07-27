@@ -79,6 +79,8 @@ import { TwinTokenProjection, LPRuntimeProjection, EconomicMarketplace, Economic
 // M-RT-26: Transaction Coordinator + Settlement Adapters:
 import { TransactionCoordinator } from './transaction';
 import { createDefaultAdapters, type SettlementAdapterRegistry } from './settlement';
+// M-RT-27: Event Evolution (Schema Registry + Event Upcaster):
+import { SchemaRegistry, registerAllEventTypes } from './event-evolution';
 
 // Re-export the public surface.
 export * from './types';
@@ -189,6 +191,8 @@ export * from './economic';
 // M-RT-26: Transaction Coordinator + Settlement public surface:
 export * from './transaction';
 export * from './settlement';
+// M-RT-27: Event Evolution public surface:
+export * from './event-evolution';
 
 import type { MerchantIntent, TypedIntent } from './intent';
 import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
@@ -280,6 +284,8 @@ export interface Runtime {
   coordinator: TransactionCoordinator;
   // M-RT-26: Settlement Adapter Registry (pluggable blockchain settlement).
   settlements: SettlementAdapterRegistry;
+  // M-RT-27: Schema Registry (event evolution + upcasters + projection compatibility).
+  schema: SchemaRegistry;
   // M-RT-19: Projection health registry (aggregates health from all projections).
   health: ProjectionHealthRegistry;
   // M-RT-19: Migration manager (owns all capability backfills).
@@ -505,6 +511,10 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const coordinator = new TransactionCoordinator({ eventStore, clock, invariants, registry: commands });
   const settlements = createDefaultAdapters();
 
+  // ── M-RT-27: Event Evolution (Schema Registry + Upcasters) ──────────────
+  const schema = new SchemaRegistry();
+  registerAllEventTypes(schema);
+
   const runtime: Runtime = {
     clock,
     eventStore,
@@ -563,6 +573,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     economicCompiler,
     coordinator,
     settlements,
+    schema,
     health,
     migrations,
     invariants,
