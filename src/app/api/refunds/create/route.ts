@@ -9,6 +9,7 @@ import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
 import { refundService } from '@/services';
 import { getIdempotencyKey } from '@/lib/idempotency';
+import { validateBody, createRefundSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,32 +53,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const paymentId =
-    typeof body.paymentId === 'string' && body.paymentId.trim()
-      ? body.paymentId.trim()
-      : '';
-
-  if (!paymentId) {
-    return NextResponse.json(
-      { error: 'Payment ID is required' },
-      { status: 400 },
-    );
-  }
-
-  const rawType =
-    typeof body.type === 'string' ? body.type.toUpperCase() : '';
-  const type = REFUND_TYPES.has(rawType) ? (rawType as 'FULL' | 'PARTIAL') : '';
-  if (!type) {
-    return NextResponse.json(
-      { error: 'Type must be "full" or "partial"' },
-      { status: 400 },
-    );
-  }
-
-  const reason =
-    typeof body.reason === 'string' && body.reason.trim()
-      ? body.reason.trim()
-      : '';
+  // H-4: Validate input with Zod schema
+  const validation = validateBody(createRefundSchema, body);
+  if (!validation.success) return validation.response;
+  const { paymentId, type, reason } = validation.data;
 
   // Look up the payment and verify ownership.
   const payment = await db.payment.findUnique({ where: { id: paymentId } });
@@ -123,7 +102,7 @@ export async function POST(req: NextRequest) {
       paymentId,
       amount,
       type,
-      reason,
+      reason: reason ?? '',
       environment: env,
       actorId: userId,
     });

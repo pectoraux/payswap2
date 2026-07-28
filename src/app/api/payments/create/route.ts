@@ -7,6 +7,7 @@ import {
 } from '@/lib/api-auth';
 import { getEnvironment } from '@/lib/environment';
 import { paymentService } from '@/services';
+import { validateBody, createPaymentSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,19 +35,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const amount = Number(body.amount);
-  const currency = typeof body.currency === 'string' ? body.currency : 'GHS';
-  const method = typeof body.method === 'string' ? body.method : null;
-  const description = typeof body.description === 'string' ? body.description : 'Payment';
-  const customerEmail = typeof body.customerEmail === 'string' && body.customerEmail.trim() ? body.customerEmail.trim() : undefined;
-  const customerName = typeof body.customerName === 'string' && body.customerName.trim() ? body.customerName.trim() : undefined;
-
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return NextResponse.json({ error: 'Invalid amount' }, { status: 400 });
-  }
-  if (!method) {
-    return NextResponse.json({ error: 'Method is required' }, { status: 400 });
-  }
+  // H-4: Validate input with Zod schema
+  const validation = validateBody(createPaymentSchema, body);
+  if (!validation.success) return validation.response;
+  const { amount, currency, method, description, customerEmail, customerName } = validation.data;
 
   try {
     const payment = await paymentService.create({

@@ -70,5 +70,11 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  secret: process.env.NEXTAUTH_SECRET || 'payswap-dev-secret-change-in-production',
+  // H-3: Fail fast if NEXTAUTH_SECRET is not set. Never use an insecure
+  // hardcoded fallback — an attacker who knows the fallback can forge JWTs.
+  secret: (() => {
+    const s = process.env.NEXTAUTH_SECRET;
+    if (!s) throw new Error('NEXTAUTH_SECRET environment variable must be set');
+    return s;
+  })(),
 };

@@ -8,6 +8,7 @@ import {
 import { getEnvironment } from '@/lib/environment';
 import { payoutService } from '@/services';
 import { getIdempotencyKey } from '@/lib/idempotency';
+import { validateBody, createPayoutSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,22 +50,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const method = typeof body.method === 'string' ? body.method : '';
-  const sourceAmount = Number(body.sourceAmount);
-  const sourceCurrency =
-    typeof body.sourceCurrency === 'string' ? body.sourceCurrency : 'GHS';
+  // H-4: Validate input with Zod schema
+  const validation = validateBody(createPayoutSchema, body);
+  if (!validation.success) return validation.response;
+  const { method, sourceAmount, sourceCurrency } = validation.data;
 
-  if (!ALLOWED_METHODS.has(method)) {
-    return NextResponse.json(
-      { error: 'Invalid payout method' },
-      { status: 400 },
-    );
-  }
-  if (!Number.isFinite(sourceAmount) || sourceAmount <= 0) {
-    return NextResponse.json({ error: 'Invalid amount' }, { status: 400 });
-  }
-
-  // Get idempotency key from header (H-2 fix)
   const idempotencyKey = getIdempotencyKey(req);
 
   try {

@@ -578,9 +578,70 @@ export const SolvencyInvariant: RuntimeInvariant = {
   },
 };
 
+// ─── 17. Twin Token Backing Invariant (H-6 fix) ─────────────────────────────
+
+/**
+ * Twin Token Backing: every minted twin token must be backed by reserves.
+ *
+ * Twin tokens are PaySwap's internal settlement token. They must be 1:1
+ * backed by fiat or stablecoin reserves. This invariant verifies that
+ * twin token supply never exceeds total reserves.
+ *
+ * If a `twin.minted` event would cause the total supply to exceed
+ * reserves, the transaction is rejected.
+ */
+export const TwinTokenBackingInvariant: RuntimeInvariant = {
+  id: 'twin-token-backing',
+  description: 'Twin token supply must not exceed total reserves (1:1 backing)',
+  handles: ['twin.minted', 'twin.burned', 'twin.transferred', 'twin.converted'],
+
+  verify(events: StoredEvent[], snapshot: RuntimeSnapshot): ReturnType<typeof pass> | ReturnType<typeof fail> {
+    const start = Date.now();
+
+    // Count twin token mint/burn events from the ledger
+    let totalMinted = 0;
+    let totalBurned = 0;
+
+    for (const event of events) {
+      if (event.type === 'twin.minted') {
+        const p = event.payload as { amount?: number };
+        totalMinted += Number(p.amount ?? 0);
+      } else if (event.type === 'twin.burned') {
+        const p = event.payload as { amount?: number };
+        totalBurned += Number(p.amount ?? 0);
+      }
+    }
+
+    const twinTokenSupply = totalMinted - totalBurned;
+
+    // Calculate total reserves from ledger entries
+    const entries = snapshot.ledgerEntries;
+    let totalReserves = 0;
+    for (const entry of entries) {
+      const accountLabel = (entry as any).accountLabel || (entry as any).account || '';
+      if (typeof accountLabel === 'string' && (accountLabel.includes('reserve') || accountLabel.includes('asset:'))) {
+        totalReserves += entry.debit - entry.credit;
+      }
+    }
+
+    // Allow twin token supply up to total reserves (1:1 backing)
+    // If supply exceeds reserves, the system is underbacked
+    if (twinTokenSupply > totalReserves && twinTokenSupply > 0) {
+      return fail('twin-token-backing', [
+        violation('twin-token-backing',
+          `UNDERBACKED: twin token supply (${twinTokenSupply}) exceeds reserves (${totalReserves}). Deficit: ${twinTokenSupply - totalReserves}`,
+          { severity: 'error' }
+        ),
+      ], start);
+    }
+
+    return pass('twin-token-backing', start);
+  },
+};
+
 // ─── All Built-in Invariants ────────────────────────────────────────────────
 
-/** All 16 built-in economic invariants, in registration order. */
+/** All 17 built-in economic invariants, in registration order. */
 export const BUILTIN_INVARIANTS: RuntimeInvariant[] = [
   DoubleEntryInvariant,
   ReserveConservationInvariant,
@@ -598,4 +659,5 @@ export const BUILTIN_INVARIANTS: RuntimeInvariant[] = [
   WalletReserveLimitInvariant,
   WalletReleaseLimitInvariant,
   SolvencyInvariant,
+  TwinTokenBackingInvariant,
 ];
