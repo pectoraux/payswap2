@@ -4186,3 +4186,48 @@ Stage Summary:
 - 2 LP AI endpoints merged to 1
 
 This audit is READ-ONLY — no code changes were made. The hardening sprint should tackle the priority fixes in order; items 1–5 are pure deletion (low risk), items 6–10 require migration (medium risk, test after each).
+
+---
+Task ID: M-ID-41
+Agent: identity-os-agent
+Task: Build Identity OS (people, merchants, LPs, orgs, governments, wallets, AI agents, devices with credentials/attestations/delegation/recovery)
+
+Work Log:
+- Read worklog tail (M-PLATFORM-39 + M-TRUST-40 patterns) to match conventions.
+- Created `src/identity/` as a NEW top-level dir parallel to `src/runtime/`, `src/trust/`, `src/sdk/`.
+- Part A: types.ts — IdentityType (8 types), Identity, Credential, Attestation, Delegation, RecoveryMethod, RecoverySession, IdentityProof, IdentityOverview.
+- Part B: store.ts — process-wide singleton on `globalThis.__PAYSWAP_IDENTITY_STORE__` (mirrors SDK + Trust Engine pattern). Includes a lightweight non-cryptographic hashSecret/verifySecret pair (production would use argon2/bcrypt), a seedIdentityStore() function that plants 12 representative identities across all 8 types with credentials/attestations/recovery/delegations/proofs, and an entity-index map for findByEntity lookups. Seed is auto-run on first import.
+- Part C: registry.ts — IdentityRegistry with register/get/findByEntity/listByType/list/search/updateTrustScore/suspend/revoke/reactivate. Idempotent register() (returns existing identity if one already exists for the same (entityType, entityId) pair — matches SDK loader's pattern).
+- Part D: credentials.ts — CredentialManager with add/verify/remove/list/authenticate. authenticate() returns the Identity when (a) identifier matches, (b) secret hash matches, (c) credential is verified, (d) not expired, (e) identity is active. Sync `getSync` for use by other identity services.
+- Part E: attestations.ts — AttestationService with create/list/verify/revoke. create() enforces attester is active AND trustLevel >= 'verified'. verify() runs 6 validity checks (existence, not revoked, validFrom past, validUntil future, attester active, attester verified). Trusted attesters nudge the subject's trust score up.
+- Part F: delegation.ts — DelegationManager with delegate/canAct/listFrom/listTo/revoke. canAct() checks scope coverage using prefix matching (e.g., scope 'payments:write' covers action 'payments:write:any'), expiry, maxAmount limit, and from-identity still active.
+- Part G: recovery.ts — RecoveryManager with add/verify/initiateRecovery/completeRecovery/list. 15-minute recovery session TTL. backup_codes type auto-generates 10 one-time codes; other types use a 6-digit pending code. initiateRecovery never leaks whether the identifier exists (returns empty methods array on miss).
+- Part H: proofs.ts — IdentityProofService with create/verify/list. Supports 4 proof types: signature, zero_knowledge, attestation_chain, document_hash. verify() supports an optional verifier identity check.
+- Part I: index.ts barrel — exports all types + all service singletons + an `identityEngine` object that wires them together. `identityEngine.overview()` returns an IdentityOverview snapshot for the admin dashboard.
+- Part J: API endpoints — 16 routes under /api/identity/* and /api/identities/*. All admin-only (except the two recovery endpoints which are public). Credentials are returned WITHOUT their secretHash (public-safe projection).
+- Part K: Admin UI — /admin/identities with stats grid (6 tiles: total / avg trust / credentials / attestations / delegations / recovery methods), identity distribution by type (8 type tiles), sidebar list with search + 3 filters (type/trust/status), and a detail panel showing trust score bar + 4 sub-sections (credentials, attestations, delegations from/to, recovery) + suspend/revoke/reactivate actions. Each sub-section supports inline add/create/revoke via shadcn/ui dialogs.
+- Part L: nav-config.tsx — added `Identities` to the admin Platform group with a Fingerprint icon.
+
+Stage Summary:
+- Identity files: src/identity/{types,store,registry,credentials,attestations,delegation,recovery,proofs,index}.ts (9 files, ~1598 lines)
+- API endpoints:
+  • GET /api/identity/overview
+  • GET /api/identities (filter by type/trust/status/q)
+  • GET /api/identities/[id]
+  • POST /api/identities/[id]/suspend
+  • POST /api/identities/[id]/revoke
+  • POST /api/identities/[id]/reactivate
+  • GET /api/identities/[id]/credentials
+  • POST /api/identities/[id]/credentials
+  • DELETE /api/identities/[id]/credentials/[credentialId]
+  • GET /api/identities/[id]/attestations
+  • POST /api/identities/[id]/attestations
+  • GET /api/identities/[id]/delegations
+  • POST /api/identities/[id]/delegations
+  • POST /api/identities/[id]/delegations/[delegationId]/revoke
+  • GET /api/identities/[id]/recovery
+  • POST /api/identities/[id]/recovery
+  • POST /api/identity/recovery/initiate
+  • POST /api/identity/recovery/complete
+- Admin UI: /admin/identities (page.tsx + identities-manager.tsx, ~1417 lines)
+- tsc: 0 | lint: 0 (275 pre-existing warnings unrelated to this task)

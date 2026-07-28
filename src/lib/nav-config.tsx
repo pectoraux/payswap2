@@ -55,6 +55,8 @@ import {
   Clock,
   Plane,
   Send,
+  Fingerprint,
+  Wrench,
 } from 'lucide-react';
 
 /**
@@ -179,6 +181,7 @@ export const adminNav: NavGroup[] = [
       { label: 'Waitlist', href: '/admin/waitlist', icon: <Users className="h-4 w-4" /> },
       { label: 'Users', href: '/admin/users', icon: <Users className="h-4 w-4" /> },
       { label: 'Merchants', href: '/admin/merchants', icon: <Package className="h-4 w-4" /> },
+      { label: 'Identities', href: '/admin/identities', icon: <Fingerprint className="h-4 w-4" /> },
       { label: 'Extensions', href: '/admin/extensions', icon: <Boxes className="h-4 w-4" /> },
       { label: 'Capability SDK', href: '/admin/sdk', icon: <Puzzle className="h-4 w-4" /> },
     ],
@@ -317,6 +320,18 @@ export const opsNav: NavGroup[] = [
       { label: 'Incidents', href: '/ops/incidents', icon: <AlertTriangle className="h-4 w-4" /> },
       { label: 'Status', href: '/ops/status', icon: <Activity className="h-4 w-4" /> },
       { label: 'SRE', href: '/ops/sre', icon: <Terminal className="h-4 w-4" /> },
+    ],
+  },
+  {
+    label: 'Operations OS',
+    items: [
+      { label: 'Runbooks', href: '/ops/runbooks', icon: <ScrollText className="h-4 w-4" /> },
+      { label: 'On-Call', href: '/ops/oncall', icon: <UserCheck className="h-4 w-4" /> },
+      { label: 'Maintenance', href: '/ops/maintenance', icon: <Wrench className="h-4 w-4" /> },
+      { label: 'Investigations', href: '/ops/investigations', icon: <Microscope className="h-4 w-4" /> },
+      { label: 'Treasury Ops', href: '/ops/treasury-ops', icon: <Landmark className="h-4 w-4" /> },
+      { label: 'Settlement Ops', href: '/ops/settlement-ops', icon: <Repeat2 className="h-4 w-4" /> },
+      { label: 'Migrations', href: '/ops/migrations', icon: <Database className="h-4 w-4" /> },
     ],
   },
 ];
