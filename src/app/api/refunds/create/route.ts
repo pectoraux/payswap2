@@ -7,6 +7,8 @@ import {
 } from '@/lib/api-auth';
 import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
+import { refundService } from '@/services';
+import { getIdempotencyKey } from '@/lib/idempotency';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,9 +18,19 @@ const REFUND_TYPES = new Set(['FULL', 'PARTIAL']);
 /**
  * POST /api/refunds/create
  *
- * Create a Refund against an existing payment owned by the authenticated
- * merchant. The payment must exist, belong to the merchant, and the refund
- * amount must not exceed the payment amount.
+ * Create a Refund against an existing payment through the runtime kernel.
+ *
+ * This route goes through:
+ *   API → refundService → executionPlanner → dispatcher → invariants →
+ *   event store → ledger → projections
+ *
+ * The refund is recorded in the event store (refund.requested +
+ * refund.executed + ledger.entry.posted events), the constitution
+ * invariants are verified (including refund-limit: refund amount <=
+ * payment amount), and the ledger is updated with balanced reversal
+ * entries.
+ *
+ * Idempotency: Pass an `Idempotency-Key` header to safely retry.
  *
  * Body:
  *   { paymentId, amount, type: 'full' | 'partial', reason? }
@@ -54,7 +66,7 @@ export async function POST(req: NextRequest) {
 
   const rawType =
     typeof body.type === 'string' ? body.type.toUpperCase() : '';
-  const type = REFUND_TYPES.has(rawType) ? rawType : '';
+  const type = REFUND_TYPES.has(rawType) ? (rawType as 'FULL' | 'PARTIAL') : '';
   if (!type) {
     return NextResponse.json(
       { error: 'Type must be "full" or "partial"' },
@@ -65,7 +77,7 @@ export async function POST(req: NextRequest) {
   const reason =
     typeof body.reason === 'string' && body.reason.trim()
       ? body.reason.trim()
-      : null;
+      : '';
 
   // Look up the payment and verify ownership.
   const payment = await db.payment.findUnique({ where: { id: paymentId } });
@@ -102,18 +114,25 @@ export async function POST(req: NextRequest) {
     amount = parsed;
   }
 
-  const refund = await db.refund.create({
-    data: {
+  // Get idempotency key from header (H-2 fix)
+  const idempotencyKey = getIdempotencyKey(req);
+
+  try {
+    const refund = await refundService.create({
       merchantId,
       paymentId,
       amount,
       type,
       reason,
-      status: 'PENDING',
-      requestedBy: userId || 'unknown',
       environment: env,
-    },
-  });
+      actorId: userId,
+    });
 
-  return NextResponse.json({ refund }, { status: 201 });
+    return NextResponse.json({ refund, idempotencyKey }, { status: 201 });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : 'Refund creation failed' },
+      { status: 500 },
+    );
+  }
 }

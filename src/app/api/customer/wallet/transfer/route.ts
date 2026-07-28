@@ -97,16 +97,15 @@ export async function POST(req: NextRequest) {
     recipientLabel = merchant.name;
   }
 
-  // Run the ledger atomically.
+  // Run the ledger atomically — H-8 FIX: use atomic conditional decrement
+  // to prevent TOCTOU race. The decrement only succeeds if balance >= amount
+  // at update time, eliminating the race between the balance check and the
+  // decrement.
   const result = await db.$transaction(async (tx) => {
     const senderWallet = await tx.wallet.findFirst({
       where: { accountId: ctx.account.id, currency },
     });
     if (!senderWallet) throw new Error('NO_SENDER_WALLET');
-
-    const senderFresh = await tx.wallet.findUnique({ where: { id: senderWallet.id } });
-    if (!senderFresh) throw new Error('NO_SENDER_WALLET');
-    if (senderFresh.balance < amount) throw new Error('INSUFFICIENT_FUNDS');
 
     // Find or create recipient wallet for that currency.
     let recipientWallet = await tx.wallet.findFirst({
@@ -124,10 +123,18 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const senderUpdated = await tx.wallet.update({
-      where: { id: senderWallet.id },
+    // H-8 FIX: Atomic conditional decrement — only decrements if
+    // balance >= amount at update time. No TOCTOU race possible.
+    const debitResult = await tx.wallet.updateMany({
+      where: { id: senderWallet.id, balance: { gte: amount } },
       data: { balance: { decrement: amount } },
     });
+
+    if (debitResult.count === 0) {
+      throw new Error('INSUFFICIENT_FUNDS');
+    }
+
+    // Credit recipient (safe — increment always succeeds)
     const recipientUpdated = await tx.wallet.update({
       where: { id: recipientWallet.id },
       data: { balance: { increment: amount } },
@@ -156,7 +163,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return { senderWallet: senderUpdated, recipientWallet: recipientUpdated, senderTxn, recipientTxn };
+    return { senderWallet: senderWallet, recipientWallet: recipientUpdated, senderTxn, recipientTxn };
   }).catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : 'UNKNOWN';
     return { error: msg };

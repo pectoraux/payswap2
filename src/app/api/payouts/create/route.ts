@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { randomUUID } from 'crypto';
 import {
   requireSession,
   requireMerchantId,
   unauthorized,
   forbidden,
 } from '@/lib/api-auth';
-import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
+import { payoutService } from '@/services';
+import { getIdempotencyKey } from '@/lib/idempotency';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,9 +17,18 @@ const ALLOWED_METHODS = new Set(['bank', 'mobile_money', 'onchain']);
 /**
  * POST /api/payouts/create
  *
- * Create a Payout (withdrawal) record for the authenticated merchant. The
- * payout starts in the REQUESTED state and is picked up by the ops pipeline
- * for processing.
+ * Create a Payout (withdrawal) through the runtime kernel.
+ *
+ * This route goes through:
+ *   API → payoutService → executionPlanner → dispatcher → invariants →
+ *   event store → ledger → projections
+ *
+ * The payout is recorded in the event store (payout.recorded +
+ * payout.completed + ledger.entry.posted events), the constitution
+ * invariants are verified, and the ledger is updated with balanced
+ * double-entry journal entries.
+ *
+ * Idempotency: Pass an `Idempotency-Key` header to safely retry.
  *
  * Body:
  *   { method, sourceAmount, sourceCurrency, destinationCurrency, destination }
@@ -44,14 +53,6 @@ export async function POST(req: NextRequest) {
   const sourceAmount = Number(body.sourceAmount);
   const sourceCurrency =
     typeof body.sourceCurrency === 'string' ? body.sourceCurrency : 'GHS';
-  const destinationCurrency =
-    typeof body.destinationCurrency === 'string'
-      ? body.destinationCurrency
-      : sourceCurrency;
-  const destination =
-    typeof body.destination === 'string' && body.destination.trim()
-      ? body.destination.trim()
-      : null;
 
   if (!ALLOWED_METHODS.has(method)) {
     return NextResponse.json(
@@ -62,39 +63,25 @@ export async function POST(req: NextRequest) {
   if (!Number.isFinite(sourceAmount) || sourceAmount <= 0) {
     return NextResponse.json({ error: 'Invalid amount' }, { status: 400 });
   }
-  if (!destination) {
-    return NextResponse.json(
-      { error: 'Destination is required' },
-      { status: 400 },
-    );
-  }
 
-  // Simple fee estimate: 50 bps of source amount. The ops pipeline can
-  // recompute this later, but we want the merchant dashboard to show a
-  // sensible net amount immediately.
-  const feeBps = 50;
-  const fee = (sourceAmount * feeBps) / 10000;
-  const netAmount = sourceAmount - fee;
-  const fxRate = sourceCurrency === destinationCurrency ? 1 : 1;
+  // Get idempotency key from header (H-2 fix)
+  const idempotencyKey = getIdempotencyKey(req);
 
-  const payout = await db.payout.create({
-    data: {
+  try {
+    const payout = await payoutService.create({
       merchantId,
       method,
-      sourceAmount,
-      sourceAsset: `TWIN${sourceCurrency}`,
-      sourceCurrency,
-      destinationCurrency,
-      destination,
-      fxRate,
-      feeBps,
-      fee,
-      netAmount,
-      status: 'REQUESTED',
-      reason: `Payout request ${randomUUID().slice(0, 8).toUpperCase()}`,
+      amount: sourceAmount,
+      currency: sourceCurrency,
       environment: env,
-    },
-  });
+      actorId: (session.user as any)?.id,
+    });
 
-  return NextResponse.json({ payout }, { status: 201 });
+    return NextResponse.json({ payout, idempotencyKey }, { status: 201 });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : 'Payout creation failed' },
+      { status: 500 },
+    );
+  }
 }

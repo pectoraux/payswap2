@@ -63,14 +63,17 @@ export async function POST(
     });
     if (!wallet) throw new Error('NO_WALLET');
 
-    const fresh = await tx.wallet.findUnique({ where: { id: wallet.id } });
-    if (!fresh) throw new Error('NO_WALLET');
-    if (fresh.balance < amount) throw new Error('INSUFFICIENT_FUNDS');
-
-    const updatedWallet = await tx.wallet.update({
-      where: { id: wallet.id },
+    // H-8 FIX: Atomic conditional decrement — prevents TOCTOU race.
+    // Only decrements if balance >= amount at update time.
+    const debitResult = await tx.wallet.updateMany({
+      where: { id: wallet.id, balance: { gte: amount } },
       data: { balance: { decrement: amount } },
     });
+    if (debitResult.count === 0) {
+      throw new Error('INSUFFICIENT_FUNDS');
+    }
+
+    const updatedWallet = await tx.wallet.findUnique({ where: { id: wallet.id } });
 
     const payment = await tx.payment.create({
       data: {
@@ -171,6 +174,6 @@ export async function POST(
       counterparty: result.txn.counterparty,
       createdAt: result.txn.createdAt,
     },
-    walletBalance: result.wallet.balance,
+    walletBalance: result.wallet?.balance ?? 0,
   });
 }

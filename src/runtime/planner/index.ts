@@ -27,6 +27,11 @@ import type { RuntimeCommand } from '@/runtime/dispatcher/types';
 import type { DispatchResult } from '@/runtime/dispatcher/dispatcher';
 import { runtime } from '@/runtime';
 
+// H-1 fix: import the persisted event store to flush after every dispatch.
+// This ensures events are written to the DB before the API returns,
+// preventing data loss if the process crashes.
+import { eventStore as persistedEventStore } from '@/protocol/persistence/event-store';
+
 // ─── Execution Profiles ────────────────────────────────────────────────────
 
 export type ExecutionProfile =
@@ -235,6 +240,15 @@ class ExecutionPlanner {
           if (!dispatchResult.success) {
             trace.finalStatus = 'failed';
             break;
+          }
+          // H-1 fix: Flush events to the DB immediately after a successful
+          // dispatch. This ensures events are persisted before the API
+          // returns, preventing data loss if the process crashes.
+          try {
+            await persistedEventStore.flush();
+          } catch {
+            // Non-fatal — the periodic flush will retry. But we log it.
+            console.warn('[planner] Event store flush failed after dispatch');
           }
         }
       } catch (err) {

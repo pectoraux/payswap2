@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveCustomer, unauthorized } from '@/lib/api-auth';
 import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
+import { runtime as runtimeKernel } from '@/runtime';
+import type { Environment } from '@/runtime';
+import { getIdempotencyKey } from '@/lib/idempotency';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,10 +15,11 @@ const DESTINATIONS = new Set(['BANK_ACCOUNT', 'MOBILE_MONEY']);
 /**
  * POST /api/customer/wallet/withdraw
  *
- * Body: { amount: number, currency: string, destination: 'BANK_ACCOUNT' | 'MOBILE_MONEY', destinationLabel?: string, reference?: string }
+ * Dispatches a `wallet.debit` command through the runtime kernel.
+ * Uses atomic conditional update to prevent TOCTOU race (H-8 fix):
+ * the decrement only succeeds if balance >= amount at update time.
  *
- * Decreases the customer's wallet balance (validates sufficient funds),
- * records a DEBIT WalletTransaction.
+ * Body: { amount, currency, destination, destinationLabel?, reference? }
  */
 export async function POST(req: NextRequest) {
   const ctx = await resolveCustomer();
@@ -44,14 +48,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'Amount must be a positive number' }, { status: 400 });
   }
   if (!currency) {
-    return NextResponse.json({ ok: false, error: `Unsupported currency (allowed: ${[...CURRENCIES].join(', ')})` }, { status: 400 });
+    return NextResponse.json({ ok: false, error: 'Unsupported currency' }, { status: 400 });
   }
   if (!destination) {
-    return NextResponse.json({ ok: false, error: `Invalid destination (allowed: ${[...DESTINATIONS].join(', ')})` }, { status: 400 });
+    return NextResponse.json({ ok: false, error: 'Invalid destination' }, { status: 400 });
   }
 
   const destinationLabel =
-    typeof body?.destinationLabel === 'string' && body.destinationLabel.trim().length > 0
+    typeof body?.destinationLabel === 'string' && body.destinationLabel.trim()
       ? body.destinationLabel.trim().slice(0, 200)
       : null;
   const note =
@@ -59,31 +63,66 @@ export async function POST(req: NextRequest) {
       ? body.reference.trim().slice(0, 200)
       : null;
 
-  const result = await db.$transaction(async (tx) => {
-    const wallet = await tx.wallet.findFirst({
+  const idempotencyKey = getIdempotencyKey(req);
+
+  try {
+    // Dispatch through the runtime kernel
+    const dispatchResult = await runtimeKernel.dispatcher.dispatch({
+      type: 'wallet.debit',
+      payload: {
+        walletId: `${ctx.account.id}:${currency}`,
+        accountId: ctx.account.id,
+        currency,
+        amount,
+        description: note ?? `Withdrawal to ${destination}`,
+        reference: `wd_${Date.now().toString(36)}`,
+      },
+      metadata: {
+        actor: { id: ctx.userId, role: 'CUSTOMER' },
+        environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
+        correlationId: idempotencyKey,
+        source: 'api',
+      },
+    });
+
+    if (!dispatchResult.success) {
+      return NextResponse.json(
+        { ok: false, error: dispatchResult.error ?? dispatchResult.message },
+        { status: 500 },
+      );
+    }
+
+    // H-8 FIX: Atomic conditional update — prevents TOCTOU race.
+    // The decrement only succeeds if balance >= amount at update time.
+    // This is atomic at the SQL level — no race possible.
+    const wallet = await db.wallet.findFirst({
       where: { accountId: ctx.account.id, currency },
     });
 
     if (!wallet) {
-      throw new Error('NO_WALLET');
-    }
-    // Re-read inside the txn so we see the latest balance.
-    const fresh = await tx.wallet.findUnique({ where: { id: wallet.id } });
-    if (!fresh) throw new Error('NO_WALLET');
-    if (fresh.balance < amount) {
-      throw new Error('INSUFFICIENT_FUNDS');
+      return NextResponse.json({ ok: false, error: 'NO_WALLET' }, { status: 404 });
     }
 
-    const updated = await tx.wallet.update({
-      where: { id: wallet.id },
+    // Atomic conditional decrement: only decrements if balance >= amount
+    const updated = await db.wallet.updateMany({
+      where: { id: wallet.id, balance: { gte: amount } },
       data: { balance: { decrement: amount } },
     });
 
+    if (updated.count === 0) {
+      // Balance was insufficient at update time (race condition prevented)
+      return NextResponse.json(
+        { ok: false, error: 'INSUFFICIENT_FUNDS' },
+        { status: 400 },
+      );
+    }
+
+    const freshWallet = await db.wallet.findUnique({ where: { id: wallet.id } });
     const counterparty = destinationLabel
       ? `${destination}:${destinationLabel}`
       : destination;
 
-    const txn = await tx.walletTransaction.create({
+    const txn = await db.walletTransaction.create({
       data: {
         walletId: wallet.id,
         type: 'DEBIT',
@@ -95,48 +134,33 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return { wallet: updated, txn };
-  }).catch((err: unknown) => {
-    const msg = err instanceof Error ? err.message : 'UNKNOWN';
-    return { error: msg };
-  });
+    try {
+      await db.auditLog.create({
+        data: {
+          userId: ctx.userId,
+          action: 'CUSTOMER_WALLET_WITHDRAW',
+          resourceType: 'Wallet',
+          resourceId: wallet.id,
+          result: 'SUCCESS',
+          details: JSON.stringify({ amount, currency, destination, txnId: txn.id }),
+        },
+      });
+    } catch { /* ignore */ }
 
-  if ('error' in result) {
-    if (result.error === 'NO_WALLET') {
-      return NextResponse.json({ ok: false, error: `No ${currency} wallet found` }, { status: 404 });
-    }
-    if (result.error === 'INSUFFICIENT_FUNDS') {
-      return NextResponse.json({ ok: false, error: 'Insufficient funds' }, { status: 422 });
-    }
-    return NextResponse.json({ ok: false, error: 'Withdrawal failed' }, { status: 500 });
-  }
-
-  try {
-    await db.auditLog.create({
-      data: {
-        userId: ctx.userId,
-        action: 'CUSTOMER_WALLET_WITHDRAW',
-        resourceType: 'Wallet',
-        resourceId: result.wallet.id,
-        result: 'SUCCESS',
-        details: JSON.stringify({ amount, currency, destination, environment: env, txnId: result.txn.id }),
+    return NextResponse.json({
+      ok: true,
+      wallet: { id: freshWallet!.id, currency: freshWallet!.currency, balance: freshWallet!.balance },
+      transaction: {
+        id: txn.id, type: txn.type, amount: txn.amount,
+        currency: txn.currency, counterparty: txn.counterparty,
+        reference: txn.reference, createdAt: txn.createdAt,
       },
+      idempotencyKey,
     });
-  } catch {
-    // ignore — audit log is best-effort
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, error: e instanceof Error ? e.message : 'Withdrawal failed' },
+      { status: 500 },
+    );
   }
-
-  return NextResponse.json({
-    ok: true,
-    wallet: { id: result.wallet.id, currency: result.wallet.currency, balance: result.wallet.balance },
-    transaction: {
-      id: result.txn.id,
-      type: result.txn.type,
-      amount: result.txn.amount,
-      currency: result.txn.currency,
-      counterparty: result.txn.counterparty,
-      reference: result.txn.reference,
-      createdAt: result.txn.createdAt,
-    },
-  });
 }

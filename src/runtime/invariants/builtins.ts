@@ -521,9 +521,66 @@ export const WalletReleaseLimitInvariant: RuntimeInvariant = {
   },
 };
 
+// ─── 16. Solvency Invariant (C-5 fix) ───────────────────────────────────────
+
+/**
+ * Solvency: Total assets must be >= Total liabilities.
+ *
+ * This is the most fundamental financial invariant. If liabilities exceed
+ * assets, the system is insolvent — it owes more than it holds. No
+ * transaction should ever be allowed to make the system insolvent.
+ *
+ * The invariant checks the balance sheet derived from the ledger:
+ *   - Assets = merchant_receivable + stablecoin_reserves + fiat_reserves + ...
+ *   - Liabilities = twin_tokens_outstanding + wallet_balances + lp_payable + ...
+ *
+ * If assets < liabilities, the transaction is rejected.
+ */
+export const SolvencyInvariant: RuntimeInvariant = {
+  id: 'solvency',
+  description: 'Total assets must be >= total liabilities (solvency)',
+  handles: ['ledger.', 'payment.', 'payout.', 'refund.', 'wallet.', 'twin.', 'reserve.'],
+
+  verify(events: StoredEvent[], snapshot: RuntimeSnapshot): ReturnType<typeof pass> | ReturnType<typeof fail> {
+    const start = Date.now();
+    const entries = snapshot.ledgerEntries;
+
+    // Calculate totals from ledger entries
+    let assetTotal = 0;
+    let liabilityTotal = 0;
+
+    for (const entry of entries) {
+      // Account names follow the pattern: type:name (e.g., "asset:merchant_receivable")
+      // Debits increase assets, credits increase liabilities.
+      const accountLabel = (entry as any).accountLabel || (entry as any).account || '';
+      if (typeof accountLabel !== 'string') continue;
+
+      if (accountLabel.startsWith('asset:')) {
+        assetTotal += entry.debit - entry.credit;
+      } else if (accountLabel.startsWith('liability:')) {
+        liabilityTotal += entry.credit - entry.debit;
+      }
+      // Equity accounts are not checked (assets = liabilities + equity,
+      // so equity = assets - liabilities, which must be >= 0 for solvency)
+    }
+
+    // Solvency check: assets >= liabilities
+    if (assetTotal < liabilityTotal) {
+      return fail('solvency', [
+        violation('solvency',
+          `INSOLVENT: assets (${assetTotal}) < liabilities (${liabilityTotal}). Deficit: ${liabilityTotal - assetTotal}`,
+          { severity: 'error' }
+        ),
+      ], start);
+    }
+
+    return pass('solvency', start);
+  },
+};
+
 // ─── All Built-in Invariants ────────────────────────────────────────────────
 
-/** All 15 built-in economic invariants, in registration order. */
+/** All 16 built-in economic invariants, in registration order. */
 export const BUILTIN_INVARIANTS: RuntimeInvariant[] = [
   DoubleEntryInvariant,
   ReserveConservationInvariant,
@@ -540,4 +597,5 @@ export const BUILTIN_INVARIANTS: RuntimeInvariant[] = [
   WalletDebitLimitInvariant,
   WalletReserveLimitInvariant,
   WalletReleaseLimitInvariant,
+  SolvencyInvariant,
 ];

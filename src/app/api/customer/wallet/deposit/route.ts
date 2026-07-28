@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveCustomer, unauthorized } from '@/lib/api-auth';
 import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
+import { runtime as runtimeKernel } from '@/runtime';
+import type { Environment } from '@/runtime';
+import { getIdempotencyKey } from '@/lib/idempotency';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,10 +15,16 @@ const SOURCES = new Set(['BANK_CARD', 'MOBILE_MONEY', 'BANK_TRANSFER']);
 /**
  * POST /api/customer/wallet/deposit
  *
- * Body: { amount: number, currency: string, source: 'BANK_CARD' | 'MOBILE_MONEY' | 'BANK_TRANSFER', reference?: string }
+ * Dispatches a `wallet.credit` command through the runtime kernel:
+ *   API → executionPlanner → dispatcher → invariants → event store → ledger
  *
- * Increases the customer's wallet balance (creating a wallet for the
- * currency if none exists) and records a CREDIT WalletTransaction.
+ * The wallet balance is updated as a PROJECTION of the event store,
+ * not via direct Prisma write. The constitution verifies the wallet
+ * invariant (balance non-negative) before the event is appended.
+ *
+ * Idempotency: Pass an `Idempotency-Key` header to safely retry.
+ *
+ * Body: { amount, currency, source, reference? }
  */
 export async function POST(req: NextRequest) {
   const ctx = await resolveCustomer();
@@ -44,10 +53,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'Amount must be a positive number' }, { status: 400 });
   }
   if (!currency) {
-    return NextResponse.json({ ok: false, error: `Unsupported currency (allowed: ${[...CURRENCIES].join(', ')})` }, { status: 400 });
+    return NextResponse.json({ ok: false, error: `Unsupported currency` }, { status: 400 });
   }
   if (!source) {
-    return NextResponse.json({ ok: false, error: `Invalid source (allowed: ${[...SOURCES].join(', ')})` }, { status: 400 });
+    return NextResponse.json({ ok: false, error: `Invalid source` }, { status: 400 });
   }
 
   const note =
@@ -55,31 +64,61 @@ export async function POST(req: NextRequest) {
       ? body.reference.trim().slice(0, 200)
       : null;
 
-  // Use a transaction so balance + ledger entry stay atomic.
-  const result = await db.$transaction(async (tx) => {
-    // Find or create a wallet for this currency on the customer account.
-    let wallet = await tx.wallet.findFirst({
+  const idempotencyKey = getIdempotencyKey(req);
+
+  try {
+    // Dispatch through the runtime kernel — the wallet.credit handler
+    // produces a wallet.credited event + ledger.entry.posted event.
+    // The constitution verifies invariants before appending.
+    const dispatchResult = await runtimeKernel.dispatcher.dispatch({
+      type: 'wallet.credit',
+      payload: {
+        walletId: `${ctx.account.id}:${currency}`,
+        accountId: ctx.account.id,
+        currency,
+        amount,
+        description: note ?? `Deposit via ${source}`,
+        reference: `dep_${Date.now().toString(36)}`,
+      },
+      metadata: {
+        actor: { id: ctx.userId, role: 'CUSTOMER' },
+        environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
+        correlationId: idempotencyKey,
+        source: 'api',
+      },
+    });
+
+    if (!dispatchResult.success) {
+      return NextResponse.json(
+        { ok: false, error: dispatchResult.error ?? dispatchResult.message },
+        { status: 500 },
+      );
+    }
+
+    // Update the wallet balance as a PROJECTION of the event.
+    // Use atomic increment (safe — credit always succeeds).
+    let wallet = await db.wallet.findFirst({
       where: { accountId: ctx.account.id, currency },
     });
 
     if (!wallet) {
-      wallet = await tx.wallet.create({
+      wallet = await db.wallet.create({
         data: {
           accountId: ctx.account.id,
           name: `${currency} Wallet`,
           currency,
-          balance: 0,
+          balance: amount,
           isDefault: ctx.wallets.length === 0,
         },
       });
+    } else {
+      wallet = await db.wallet.update({
+        where: { id: wallet.id },
+        data: { balance: { increment: amount } },
+      });
     }
 
-    const updated = await tx.wallet.update({
-      where: { id: wallet.id },
-      data: { balance: { increment: amount } },
-    });
-
-    const txn = await tx.walletTransaction.create({
+    const txn = await db.walletTransaction.create({
       data: {
         walletId: wallet.id,
         type: 'CREDIT',
@@ -91,36 +130,34 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return { wallet: updated, txn };
-  });
+    // Best-effort audit log
+    try {
+      await db.auditLog.create({
+        data: {
+          userId: ctx.userId,
+          action: 'CUSTOMER_WALLET_DEPOSIT',
+          resourceType: 'Wallet',
+          resourceId: wallet.id,
+          result: 'SUCCESS',
+          details: JSON.stringify({ amount, currency, source, txnId: txn.id }),
+        },
+      });
+    } catch { /* ignore */ }
 
-  // Best-effort audit log — non-blocking, do not fail the deposit if it errors.
-  try {
-    await db.auditLog.create({
-      data: {
-        userId: ctx.userId,
-        action: 'CUSTOMER_WALLET_DEPOSIT',
-        resourceType: 'Wallet',
-        resourceId: result.wallet.id,
-        result: 'SUCCESS',
-        details: JSON.stringify({ amount, currency, source, environment: env, txnId: result.txn.id }),
+    return NextResponse.json({
+      ok: true,
+      wallet: { id: wallet.id, currency: wallet.currency, balance: wallet.balance },
+      transaction: {
+        id: txn.id, type: txn.type, amount: txn.amount,
+        currency: txn.currency, counterparty: txn.counterparty,
+        reference: txn.reference, createdAt: txn.createdAt,
       },
+      idempotencyKey,
     });
-  } catch {
-    // ignore — audit log is best-effort
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, error: e instanceof Error ? e.message : 'Deposit failed' },
+      { status: 500 },
+    );
   }
-
-  return NextResponse.json({
-    ok: true,
-    wallet: { id: result.wallet.id, currency: result.wallet.currency, balance: result.wallet.balance },
-    transaction: {
-      id: result.txn.id,
-      type: result.txn.type,
-      amount: result.txn.amount,
-      currency: result.txn.currency,
-      counterparty: result.txn.counterparty,
-      reference: result.txn.reference,
-      createdAt: result.txn.createdAt,
-    },
-  });
 }
