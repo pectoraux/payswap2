@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'crypto';
 import { db } from '@/lib/db';
+import { paymentService } from '@/services';
+import { getEnvironment } from '@/lib/environment';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -8,17 +10,17 @@ export const dynamic = 'force-dynamic';
 /**
  * POST /api/payment-links/[id]/pay
  *
- * Public hosted-checkout endpoint that finalises a payment made through a
- * reusable PaymentLink. The flow:
+ * NH-1 FIX: Now dispatches through paymentService → executionPlanner →
+ * dispatcher → invariants → event store → ledger. Previously bypassed
+ * the kernel with direct db.payment.create().
  *
+ * Flow:
  *   1. Look up the PaymentLink by ID. 404 if missing / inactive.
- *   2. Create a new Payment row with status PENDING (so the audit trail shows
- *      the intent), then immediately mark it COMPLETED + settled.
- *   3. Bump the link's `paymentCount` and `totalCollected` counters.
- *
- * The route is intentionally public — a customer paying a hosted payment link
- * does not have a PaySwap session.
+ *   2. Dispatch payment.create through the runtime kernel (produces
+ *      payment.recorded + payment.completed + ledger.entry.posted events).
+ *   3. Bump the link counters.
  */
+
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -46,44 +48,34 @@ export async function POST(
   }
 
   const reference = `PL-${randomUUID().slice(0, 8).toUpperCase()}`;
+  const env = await getEnvironment();
 
-  const payment = await db.$transaction(async (tx) => {
-    // 1. Create the Payment in PENDING first so the audit trail captures the
-    //    intent (this also mirrors how /api/payments/create behaves).
-    const created = await tx.payment.create({
-      data: {
-        merchantId: link.merchantId,
-        amount: link.amount,
-        currency: link.currency,
-        method: 'HOSTED_LINK',
-        description: link.description ?? 'Payment via payment link',
-        reference,
-        status: 'PENDING',
-        netAmount: link.amount,
-        environment: link.environment,
-        metadata: JSON.stringify({ paymentLinkId: link.id }),
-      },
-      include: { merchant: true },
-    });
-
-    // 2. Immediately settle — the simulated hosted checkout succeeds synchronously.
-    const settled = await tx.payment.update({
-      where: { id: created.id },
-      data: { status: 'COMPLETED', settledAt: new Date() },
-      include: { merchant: true },
-    });
-
-    // 3. Bump the link counters so the merchant dashboard reflects usage.
-    await tx.paymentLink.update({
-      where: { id: link.id },
-      data: {
-        paymentCount: { increment: 1 },
-        totalCollected: { increment: link.amount },
-      },
-    });
-
-    return settled;
+  // NH-1 FIX: Dispatch through paymentService (goes through the Execution
+  // Planner → dispatcher → invariants → event store → ledger).
+  const payment = await paymentService.create({
+    merchantId: link.merchantId,
+    amount: link.amount,
+    currency: link.currency,
+    method: 'PAYMENT_LINK',
+    description: link.description ?? 'Payment via payment link',
+    environment: env,
+    success: true,
   });
 
-  return NextResponse.json({ payment, merchant: payment.merchant }, { status: 201 });
+  // Bump the link counters so the merchant dashboard reflects usage.
+  await db.paymentLink.update({
+    where: { id: link.id },
+    data: {
+      paymentCount: { increment: 1 },
+      totalCollected: { increment: link.amount },
+    },
+  });
+
+  // Fetch with merchant relation for the response
+  const paymentWithMerchant = await db.payment.findUnique({
+    where: { id: payment.id },
+    include: { merchant: true },
+  });
+
+  return NextResponse.json({ payment: paymentWithMerchant, merchant: paymentWithMerchant?.merchant }, { status: 201 });
 }

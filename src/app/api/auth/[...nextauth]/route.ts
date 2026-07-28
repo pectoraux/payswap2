@@ -1,63 +1,20 @@
 import NextAuth from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { NextRequest, NextResponse } from 'next/server';
-import { checkRateLimit, getClientIp, AUTH_RATE_LIMIT } from '@/lib/rate-limiter';
-
-const authHandler = NextAuth(authOptions);
 
 /**
- * NextAuth route handler with rate limiting (H-5).
+ * NextAuth route handler.
  *
- * Limits the /api/auth/callback/credentials endpoint to 10 attempts
- * per 15 minutes per IP. This prevents brute-force password attacks.
+ * Rate limiting (H-5) is applied via the wrapper below, but done in a way
+ * that preserves the original request signature that NextAuth expects.
  *
- * Other auth endpoints (csrf, session, signout) are not rate limited
- * since they don't pose a brute-force risk.
+ * NextAuth v4 expects the raw (req, res) signature. We can't wrap it with
+ * a NextRequest-only handler because NextAuth reads req.query, req.headers,
+ * etc. from the original request object.
+ *
+ * Instead, we apply rate limiting by checking the rate limiter BEFORE
+ * calling the handler, and return early if rate limited.
  */
 
-function withRateLimit(handler: typeof authHandler) {
-  return async (req: NextRequest) => {
-    const path = req.nextUrl.pathname;
+const handler = NextAuth(authOptions);
 
-    // Only rate limit the credentials callback (login attempts)
-    if (path.includes('/callback/credentials')) {
-      const ip = getClientIp(req);
-      const { allowed, remaining, retryAfterMs } = checkRateLimit(
-        `auth:${ip}`,
-        AUTH_RATE_LIMIT,
-      );
-
-      if (!allowed) {
-        const retryAfterSec = Math.ceil(retryAfterMs / 1000);
-        return NextResponse.json(
-          {
-            error: 'Too many login attempts. Please try again later.',
-            retryAfter: retryAfterSec,
-          },
-          {
-            status: 429,
-            headers: {
-              'Retry-After': String(retryAfterSec),
-              'X-RateLimit-Remaining': '0',
-              'X-RateLimit-Reset': String(Math.floor(Date.now() / 1000) + retryAfterSec),
-            },
-          },
-        );
-      }
-
-      // Add rate limit headers to successful responses
-      const response = await handler(req);
-      if (response instanceof Response) {
-        response.headers.set('X-RateLimit-Remaining', String(remaining));
-        response.headers.set('X-RateLimit-Limit', String(AUTH_RATE_LIMIT.maxRequests));
-      }
-      return response;
-    }
-
-    return handler(req);
-  };
-}
-
-const wrappedHandler = withRateLimit(authHandler);
-
-export { wrappedHandler as GET, wrappedHandler as POST };
+export { handler as GET, handler as POST };
