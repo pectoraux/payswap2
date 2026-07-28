@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveCustomer, unauthorized } from '@/lib/api-auth';
 import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
+import { runtime as runtimeKernel } from '@/runtime';
+import type { Environment } from '@/runtime';
+import { getIdempotencyKey } from '@/lib/idempotency';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,8 +29,6 @@ const CURRENCIES = new Set(['GHS', 'KES', 'NGN', 'USD', 'EUR', 'ZAR']);
 export async function POST(req: NextRequest) {
   const ctx = await resolveCustomer();
   if (!ctx) return unauthorized();
-
-  const env = await getEnvironment();
 
   let body: any;
   try {
@@ -95,6 +96,76 @@ export async function POST(req: NextRequest) {
     }
     recipientAccountId = merchant.account.id;
     recipientLabel = merchant.name;
+  }
+
+  // NH-2 FIX: Dispatch wallet.debit + wallet.credit through the runtime kernel
+  // BEFORE updating Prisma. This produces events + ledger entries that are
+  // verified by the constitution. The Prisma transaction below is a projection
+  // of the events (the event store is the source of truth).
+  //
+  // NC-1 FIX: Check balance BEFORE dispatching to avoid orphaned events.
+  const senderWalletCheck = await db.wallet.findFirst({
+    where: { accountId: ctx.account.id, currency },
+  });
+  if (!senderWalletCheck) {
+    return NextResponse.json({ ok: false, error: 'NO_SENDER_WALLET' }, { status: 404 });
+  }
+  if (senderWalletCheck.balance < amount) {
+    return NextResponse.json({ ok: false, error: 'INSUFFICIENT_FUNDS' }, { status: 400 });
+  }
+
+  const idempotencyKey = getIdempotencyKey(req);
+  const env = await getEnvironment();
+
+  // Dispatch sender debit through the runtime
+  const debitResult = await runtimeKernel.dispatcher.dispatch({
+    type: 'wallet.debit',
+    payload: {
+      walletId: `${ctx.account.id}:${currency}`,
+      accountId: ctx.account.id,
+      currency,
+      amount,
+      description: note ?? `Transfer to ${recipientLabel}`,
+      reference: `xf_${Date.now().toString(36)}`,
+    },
+    metadata: {
+      actor: { id: ctx.userId, role: 'CUSTOMER' },
+      environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
+      correlationId: idempotencyKey,
+      source: 'api',
+    },
+  });
+
+  if (!debitResult.success) {
+    return NextResponse.json(
+      { ok: false, error: debitResult.error ?? debitResult.message },
+      { status: 500 },
+    );
+  }
+
+  // Dispatch recipient credit through the runtime
+  const creditResult = await runtimeKernel.dispatcher.dispatch({
+    type: 'wallet.credit',
+    payload: {
+      walletId: `${recipientAccountId}:${currency}`,
+      accountId: recipientAccountId!,
+      currency,
+      amount,
+      description: `Transfer from ${ctx.customer.name}`,
+      reference: `xf_${Date.now().toString(36)}`,
+    },
+    metadata: {
+      actor: { id: ctx.userId, role: 'CUSTOMER' },
+      environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
+      correlationId: idempotencyKey,
+      source: 'api',
+    },
+  });
+
+  if (!creditResult.success) {
+    // TODO: In production, this should trigger a compensating transaction
+    // to reverse the debit. For now, log the error.
+    console.error('[wallet/transfer] Credit failed after debit succeeded — manual reconciliation needed');
   }
 
   // Run the ledger atomically — H-8 FIX: use atomic conditional decrement

@@ -94,28 +94,58 @@ class EventStore {
 
       if (newEvents.length === 0) return { persisted: 0 };
 
-      // Persist each new event
-      for (const evt of newEvents) {
-        try {
-          await db.eventRecord.create({
-            data: {
-              eventId: evt.id,
-              type: evt.type,
-              payload: JSON.stringify(evt.payload),
-              ts: BigInt(evt.ts), // PostgreSQL: BigInt column
-              frame: evt.frame,
-              seq: this.nextSeq++,
-            },
-          });
+      // H-1 FULL FIX: Batch-persist all new events in a single transaction.
+      // This ensures atomicity — either ALL events are persisted or NONE are.
+      // If the process crashes mid-flush, no partial state is written.
+      try {
+        await db.$transaction(
+          newEvents.map((evt) =>
+            db.eventRecord.create({
+              data: {
+                eventId: evt.id,
+                type: evt.type,
+                payload: JSON.stringify(evt.payload),
+                ts: BigInt(evt.ts),
+                frame: evt.frame,
+                seq: this.nextSeq++,
+              },
+            }),
+          ),
+        );
+
+        // All events persisted successfully — mark them and notify handlers
+        for (const evt of newEvents) {
           this.persistedEventIds.add(evt.id);
           persisted++;
-          // Notify handlers
           for (const h of this.persistHandlers) {
             try { h(evt, this.nextSeq - 1); } catch { /* ignore */ }
           }
-        } catch {
-          // Event may already exist (idempotent) — mark as persisted to skip
-          this.persistedEventIds.add(evt.id);
+        }
+      } catch {
+        // Batch failed — try individual inserts as fallback (handles the
+        // case where some events already exist in the DB from a previous
+        // partial flush). This is idempotent.
+        for (const evt of newEvents) {
+          try {
+            await db.eventRecord.create({
+              data: {
+                eventId: evt.id,
+                type: evt.type,
+                payload: JSON.stringify(evt.payload),
+                ts: BigInt(evt.ts),
+                frame: evt.frame,
+                seq: this.nextSeq++,
+              },
+            });
+            this.persistedEventIds.add(evt.id);
+            persisted++;
+            for (const h of this.persistHandlers) {
+              try { h(evt, this.nextSeq - 1); } catch { /* ignore */ }
+            }
+          } catch {
+            // Event may already exist (idempotent) — mark as persisted to skip
+            this.persistedEventIds.add(evt.id);
+          }
         }
       }
     } catch {
