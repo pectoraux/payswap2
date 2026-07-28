@@ -645,9 +645,6 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const bandwidth = new BandwidthEngine();
   const settlementContracts = new SettlementContractEngine();
   const disputes = new DisputeEngine();
-  projectionRunner.register(bandwidth as unknown as import('./read-models').Projection);
-  projectionRunner.register(settlementContracts as unknown as import('./read-models').Projection);
-  projectionRunner.register(disputes as unknown as import('./read-models').Projection);
   const liquidityPolicy = new LiquidityPolicyEngine();
 
   // ── M-ECO-31: Adaptive Liquidity Intelligence ───────────────────────────
