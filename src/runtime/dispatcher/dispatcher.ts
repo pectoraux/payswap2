@@ -26,6 +26,7 @@ import { OptimisticConcurrencyError } from '../events';
 import type { RuntimeClock } from '../clock';
 import type { InvariantEngine } from '../invariants';
 import type { RuntimeSnapshot } from '../invariants';
+import { snapshotCache } from './snapshot-cache';
 import type { CommandRegistry, CommandResult } from './registry';
 import { uid } from '../types';
 import { IdempotencyStore } from './idempotency-store';
@@ -210,7 +211,11 @@ export class RuntimeDispatcher {
     // M-RT-22: Capture stream versions NOW (before the handler runs). This
     // is the "expected version" for OCC. Both parallel dispatches read the
     // same version; the second one's append will fail OCC and retry.
-    const snapshot = await this.buildSnapshot();
+    //
+    // NM-4 FIX: Use cached snapshot if available. Instead of reading ALL
+    // events on every dispatch (O(n)), we cache the snapshot and only read
+    // NEW events since the last snapshot (O(1) + O(new events)).
+    const snapshot = await this.buildSnapshotCached();
     // Build a map of streamId → LAST version (iterate all events, keep the last version per stream).
     const streamVersionsAtStart = new Map<string, number>();
     for (const ev of snapshot.events) {
@@ -313,6 +318,12 @@ export class RuntimeDispatcher {
         },
       );
       appendedEvents = appendResult.events;
+
+      // NM-4 FIX: Incrementally update the cached snapshot with the newly
+      // appended events. This avoids a full cache invalidation + rebuild
+      // on the next dispatch.
+      const newPosition = this.inputs.eventStore.size() ?? 0;
+      snapshotCache.applyNewEvents(appendedEvents, newPosition);
     } catch (err) {
       // M-RT-22: OCC errors must be RE-THROWN so the retry policy can catch
       // them and retry (re-load stream version → re-handle → re-verify → re-append).
@@ -350,6 +361,28 @@ export class RuntimeDispatcher {
       invariantDecision: { allow: true, violationCount: 0 },
       dispatchedAt,
     };
+  }
+
+  /**
+   * NM-4 FIX: Build snapshot using cache. If a cached snapshot exists,
+   * only read NEW events since the cache was taken and apply them
+   * incrementally. This is O(new events) instead of O(all events).
+   */
+  private async buildSnapshotCached(): Promise<RuntimeSnapshot> {
+    // Try the cache first
+    const currentLength = this.inputs.eventStore.size() ?? 0;
+    const cached = snapshotCache.get(currentLength);
+    if (cached) {
+      return cached;
+    }
+
+    // Cache miss — full rebuild
+    const snapshot = await this.buildSnapshot();
+
+    // Cache the result for future dispatches
+    snapshotCache.set(snapshot, currentLength);
+
+    return snapshot;
   }
 
   /** Build the current runtime snapshot (for invariant verification). */
