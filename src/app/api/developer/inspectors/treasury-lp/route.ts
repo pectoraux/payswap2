@@ -151,10 +151,10 @@ export async function GET() {
     // === LP ===
     const lps = payswapRuntime.lpRuntime.listLPs();
     const offers = payswapRuntime.lpRuntime.listOffers();
-    const bandwidth = payswapRuntime.bandwidth.list();
+    const bandwidth = payswapRuntime.bandwidth.listAll();
 
     const lpViews: LPView[] = lps.map((lp) => {
-      const lpBandwidth = bandwidth.filter((b) => b.owner === lp.lpId);
+      const lpBandwidth = bandwidth.filter((b) => b.lpId === lp.lpId);
       const lpAccounts = accounts.filter((a) => a.ownerId === lp.lpId || a.reference === lp.lpId);
       return {
         lpId: lp.lpId,

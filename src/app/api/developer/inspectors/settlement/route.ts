@@ -87,7 +87,7 @@ export async function GET() {
   try {
     const actors = payswapRuntime.settlementOrchestrator.list();
     const contracts = payswapRuntime.settlementContracts.list();
-    const bandwidth = payswapRuntime.bandwidth.list();
+    const bandwidth = payswapRuntime.bandwidth.listAll();
 
     const actorViews: SettlementActorView[] = actors.map((a) => ({
       settlementId: a.settlementId,
@@ -129,17 +129,17 @@ export async function GET() {
       })),
     }));
 
-    const contractViews: SettlementContractView[] = contracts.map((c) => ({
-      contractId: c.contractId,
+    const contractViews = contracts.map((c) => ({
+      contractId: c.id,
       fromCountry: c.fromCountry,
       toCountry: c.toCountry,
       amount: c.amount,
-      currency: c.currency,
-      lpId: c.lpId,
-      stablecoinAmount: c.stablecoinAmount,
-      stablecoinCurrency: c.stablecoinCurrency,
+      currency: c.toCurrency,
+      lpId: c.lpId ?? null,
+      stablecoinAmount: c.escrowAmount,
+      stablecoinCurrency: c.escrowCurrency,
       status: c.status,
-      escrowLocked: c.escrowLocked,
+      escrowLocked: c.escrowAmount > 0,
       createdAt: c.createdAt,
       fundedAt: c.fundedAt,
       claimedAt: c.claimedAt,
@@ -147,7 +147,7 @@ export async function GET() {
       releasedAt: c.releasedAt,
       closedAt: c.closedAt,
       expiresAt: c.expiresAt,
-      disputeId: c.disputeId,
+      disputeId: c.id,
     }));
 
     // Stats by status.
@@ -165,7 +165,7 @@ export async function GET() {
       actors: actorViews,
       contracts: contractViews,
       bandwidthPositions: bandwidth.map((b) => ({
-        owner: b.owner,
+        owner: b.lpId,
         country: b.country,
         assetType: b.assetType,
         capacity: b.capacity,

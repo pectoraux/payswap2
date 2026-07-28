@@ -223,8 +223,9 @@ export * from './recovery';
 // M-RT-29: Dual Runtime public surface:
 export { RuntimeHost } from './host';
 export type { RuntimeContext } from './host';
-// M-RT-30: Liquidity Intelligence public surface:
-export * from './liquidity';
+// M-RT-30: Liquidity Intelligence public surface (explicit re-exports to avoid conflicts):
+export { LiquidityPolicyEngine, liquidityPolicyEngine } from './liquidity';
+export type { SettlementStrategy, LiquidityExecutionPlan, BandwidthPosition, PolicyEngineInput } from './liquidity';
 // M-ECO-31: Adaptive Liquidity Intelligence public surface (explicit re-exports to avoid conflicts):
 export { LiquidityIntelligenceEngine as EcoIntelligenceEngine } from './eco-intelligence';
 export type {
@@ -647,28 +648,16 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   projectionRunner.register(bandwidth as unknown as import('./read-models').Projection);
   projectionRunner.register(settlementContracts as unknown as import('./read-models').Projection);
   projectionRunner.register(disputes as unknown as import('./read-models').Projection);
-  const liquidityPolicy = new LiquidityPolicyEngine({
-    getReserve: (country, currency) => {
-      const accounts = treasury.projection.listByKind('reserve');
-      const match = accounts.find((a) => a.reference === country && a.currency === currency);
-      return match?.availableBalance ?? 0;
-    },
-    getStablecoinInventory: (currency) => {
-      const accounts = treasury.projection.listByKind('treasury');
-      const match = accounts.find((a) => a.currency === currency && a.reference?.includes('stablecoin'));
-      return match?.availableBalance ?? 0;
-    },
-    getBandwidth: (country, assetType) => bandwidth.getAvailableBandwidth(country, assetType),
-  });
+  const liquidityPolicy = new LiquidityPolicyEngine();
 
   // ── M-ECO-31: Adaptive Liquidity Intelligence ───────────────────────────
   const intelligence = new EcoIntelligenceEngine({
     getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
-      id: a.id, kind: a.kind, ownerId: a.ownerId, currency: a.currency,
+      id: a.id, kind: a.kind, ownerId: a.lpIdId, currency: a.toCurrency,
       availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
     })),
-    getBandwidthPositions: () => bandwidth.list().map((b) => ({
-      owner: b.owner, country: b.country, assetType: b.assetType,
+    getBandwidthPositions: () => bandwidth.listAll().map((b) => ({
+      owner: b.lpId, country: b.country, assetType: b.assetType,
       capacity: b.capacity, reserved: b.reserved, used: b.used, available: b.available,
       escrow: b.escrow, bond: b.bond, status: b.status,
     })),
@@ -701,7 +690,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     },
     () => ({
       accounts: treasury.projection.list({ take: 10000 }).map((a) => ({
-        kind: a.kind, currency: a.currency,
+        kind: a.kind, currency: a.toCurrency,
         availableBalance: a.availableBalance, reference: a.reference,
       })),
     }),
@@ -713,18 +702,18 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   // ── M-ECO-34.5: Economic Control Plane ─────────────────────────────────
   const controlPlane = new EconomicControlPlane({
     getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
-      id: a.id, kind: a.kind, ownerId: a.ownerId, currency: a.currency,
+      id: a.id, kind: a.kind, ownerId: a.lpIdId, currency: a.toCurrency,
       availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
     })),
-    getBandwidthPositions: () => bandwidth.list().map((b) => ({
-      owner: b.owner, country: b.country, assetType: b.assetType,
+    getBandwidthPositions: () => bandwidth.listAll().map((b) => ({
+      owner: b.lpId, country: b.country, assetType: b.assetType,
       capacity: b.capacity, available: b.available, status: b.status,
     })),
     getLPs: () => lpRuntime.listLPs().map((lp) => ({
       lpId: lp.lpId, confidence: lp.confidence, riskScore: lp.riskScore, totalCapacity: lp.totalCapacity,
     })),
     getTwinTokenPositions: () => twinTokens.list().map((t) => ({
-      accountId: t.accountId, tokenType: t.tokenType, currency: t.currency, balance: t.balance,
+      accountId: t.accountId, tokenType: t.tokenType, currency: t.toCurrency, balance: t.balance,
     })),
     getIntelligenceDashboard: () => intelligence.getDashboard(),
   });
@@ -732,19 +721,19 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   // ── M-ECO-35: Canonical Economic Ledger & Solvency Engine ──────────────
   const ledger = new EconomicLedgerEngine({
     getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
-      id: a.id, kind: a.kind, currency: a.currency,
+      id: a.id, kind: a.kind, currency: a.toCurrency,
       availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
     })),
     getTwinTokenPositions: () => twinTokens.list().map((t) => ({
-      accountId: t.accountId, tokenType: t.tokenType, currency: t.currency, balance: t.balance,
+      accountId: t.accountId, tokenType: t.tokenType, currency: t.toCurrency, balance: t.balance,
     })),
-    getBandwidthPositions: () => bandwidth.list().map((b) => ({
-      owner: b.owner, country: b.country, capacity: b.capacity,
+    getBandwidthPositions: () => bandwidth.listAll().map((b) => ({
+      owner: b.lpId, country: b.country, capacity: b.capacity,
       available: b.available, escrow: b.escrow, bond: b.bond, used: b.used,
     })),
     getSettlementContracts: () => settlementContracts.list().map((c) => ({
-      contractId: c.contractId, amount: c.amount, currency: c.currency,
-      status: c.status, escrowLocked: c.escrowLocked,
+      contractId: c.id, amount: c.amount, currency: c.toCurrency,
+      status: c.status, escrowLocked: c.escrowAmount,
     })),
     getEventCount: () => eventStore.size(),
   });
@@ -766,7 +755,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
         description: r.description,
         targetCountries: r.targetCountries,
         amount: r.amount,
-        currency: r.currency,
+        currency: r.toCurrency,
         expectedROI: r.expectedROI,
         expectedRisk: r.expectedRisk,
         confidence: r.confidence,

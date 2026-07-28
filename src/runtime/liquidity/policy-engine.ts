@@ -1,295 +1,1061 @@
 /**
- * Liquidity Policy Engine — produces deterministic LiquidityExecutionPlans.
- * (M-RT-30.)
+ * M-RT-30: Liquidity Policy Engine — the brain that selects settlement
+ * strategies and produces deterministic execution plans.
  *
- *   Intent → Liquidity Policy → Execution Strategy → Treasury
- *          → Liquidity Network → Settlement → Confirmation → Finalization
+ * The LiquidityPolicyEngine takes a payment intent and the current reserve
+ * state, then produces a LiquidityExecutionPlan containing:
+ *   - strategy (one of 5: LOCAL_RAIL, RESERVE_TO_RESERVE, RESERVE_TO_MARKET,
+ *     MARKET_TO_RESERVE, MARKET_TO_MARKET)
+ *   - treasuryActions (reserve credits, twin token mint/burn)
+ *   - liquidityActions (stablecoin purchase, LP bandwidth allocation)
+ *   - settlementActions (escrow lock, LP claim, recipient confirm, release)
+ *   - fallbackGraph (deterministic fallback branches)
+ *   - rollbackPlan (how to reverse if something fails)
  *
- * The engine selects one of 5 strategies based on reserve availability:
- *   1. LOCAL_RAIL          — same country
- *   2. RESERVE_TO_RESERVE   — both countries have fiat reserves
- *   3. RESERVE_TO_MARKET    — receiving country has no reserve
- *   4. MARKET_TO_RESERVE    — sending country has no reserve
- *   5. MARKET_TO_MARKET     — neither country has reserves
+ * Strategy selection is deterministic:
+ *   1. Same country → LOCAL_RAIL
+ *   2. Both countries have fiat reserves → RESERVE_TO_RESERVE
+ *   3. Sender has reserve, receiver doesn't → RESERVE_TO_MARKET
+ *   4. Sender doesn't, receiver has reserve → MARKET_TO_RESERVE
+ *   5. Neither has reserve → MARKET_TO_MARKET
  *
- * Every plan includes a deterministic FallbackGraph and RollbackPlan.
- *
- * Pure: same intent + treasury state → same plan. No side effects.
+ * All output is deterministic — same input + same reserve state = same plan.
  */
 
-import type {
-  LiquidityIntent,
-  LiquidityExecutionPlan,
-  SettlementStrategy,
-  TreasuryAction,
-  LiquidityAction,
-  SettlementAction,
-  FallbackGraph,
-  FallbackBranch,
-  FeeModel,
-  RollbackStep,
-} from './types';
-import { uid } from '../types';
+// ─── Types ─────────────────────────────────────────────────────────────────
 
-/** Inputs to the Liquidity Policy Engine. */
-export interface LiquidityPolicyEngineInputs {
-  /** Get the available reserve for a country/currency. */
-  getReserve: (country: string, currency: string) => number;
-  /** Get the available stablecoin inventory. */
-  getStablecoinInventory: (currency: string) => number;
-  /** Get available LP bandwidth for a country. */
-  getBandwidth: (country: string, assetType: 'twin_token' | 'stablecoin') => number;
+export type SettlementStrategy =
+  | 'LOCAL_RAIL'
+  | 'RESERVE_TO_RESERVE'
+  | 'RESERVE_TO_MARKET'
+  | 'MARKET_TO_RESERVE'
+  | 'MARKET_TO_MARKET';
+
+export type BandwidthAssetType = 'fiat' | 'stablecoin' | 'twin_token';
+
+export interface BandwidthPosition {
+  lpId: string;
+  country: string;
+  assetType: BandwidthAssetType;
+  currency: string;
+  capacity: number;
+  reserved: number;
+  used: number;
+  available: number;  // capacity - reserved - used
+  escrow: number;
+  bond: number;
+  status: 'active' | 'suspended' | 'slashed';
+  participationMode: 'automatic' | 'manual';
+  /** For fiat bandwidth: debit authorization details */
+  debitAuthorization?: {
+    connector: 'stripe' | 'ach' | 'bank' | 'mobile_money';
+    authorized: boolean;
+    accountId?: string;
+  };
 }
 
-/** Default fee model: 90% LP, 10% PaySwap for market strategies; 100% PaySwap for reserve strategies. */
-function defaultFeeModel(strategy: SettlementStrategy): FeeModel {
-  if (strategy === 'LOCAL_RAIL' || strategy === 'RESERVE_TO_RESERVE') {
-    return { payswapFeeBps: 50, lpFeeBps: 0, totalFeeBps: 50, feeSplit: { lp: 0, payswap: 100 } };
-  }
-  return { payswapFeeBps: 10, lpFeeBps: 90, totalFeeBps: 100, feeSplit: { lp: 90, payswap: 10 } };
+export interface TreasuryAction {
+  type: 'credit_fiat_reserve' | 'debit_fiat_reserve' | 'mint_twin_tokens' | 'burn_twin_tokens' | 'credit_stablecoin_reserve' | 'debit_stablecoin_reserve';
+  country?: string;
+  currency: string;
+  amount: number;
+  accountId?: string;
+  reason: string;
 }
 
-/**
- * LiquidityPolicyEngine — produces deterministic execution plans.
- *
- * Pure: same intent + treasury state → same plan. Never executes.
- */
+export interface LiquidityAction {
+  type: 'purchase_stablecoin' | 'sell_stablecoin' | 'lock_stablecoin' | 'release_stablecoin' | 'allocate_lp_bandwidth' | 'release_lp_bandwidth';
+  country: string;
+  currency: string;
+  amount: number;
+  lpId?: string;
+  assetType?: BandwidthAssetType;
+  reason: string;
+}
+
+export interface SettlementAction {
+  type: 'create_contract' | 'fund_contract' | 'lp_claim' | 'lp_pay_recipient' | 'recipient_confirm' | 'release_escrow' | 'close_contract' | 'timeout_dispute';
+  contractId?: string;
+  lpId?: string;
+  recipientId?: string;
+  amount: number;
+  currency: string;
+  reason: string;
+}
+
+export interface FallbackBranch {
+  condition: string;
+  strategy: SettlementStrategy | 'CANCEL_REFUND';
+  actions: string[];
+}
+
+export interface FallbackGraph {
+  primary: SettlementStrategy;
+  fallbacks: FallbackBranch[];
+}
+
+export interface RollbackStep {
+  step: string;
+  action: string;
+  condition: string;
+}
+
+export interface RollbackPlan {
+  steps: RollbackStep[];
+}
+
+export interface FeeModel {
+  lpSharePercent: number;
+  payswapSharePercent: number;
+  totalFeeBps: number;
+}
+
+export interface LiquidityExecutionPlan {
+  planId: string;
+  intentId: string;
+  strategy: SettlementStrategy;
+  fromCountry: string;
+  toCountry: string;
+  fromCurrency: string;
+  toCurrency: string;
+  amount: number;
+  fxRate: number;
+  treasuryActions: TreasuryAction[];
+  liquidityActions: LiquidityAction[];
+  settlementActions: SettlementAction[];
+  requiredBandwidth: {
+    assetType: BandwidthAssetType;
+    country: string;
+    currency: string;
+    amount: number;
+  }[];
+  requiredEscrow: {
+    assetType: BandwidthAssetType;
+    currency: string;
+    amount: number;
+  }[];
+  reserveAware: boolean;
+  stablecoinUsage: {
+    required: boolean;
+    amount: number;
+    currency: string;
+    source: 'treasury' | 'marketplace' | 'lp_bandwidth';
+  };
+  feeModel: FeeModel;
+  fallbackGraph: FallbackGraph;
+  rollbackPlan: RollbackPlan;
+  compiledAt: number;
+}
+
+// ─── Reserve State (input to the policy engine) ────────────────────────────
+
+export interface ReserveState {
+  country: string;
+  currency: string;
+  hasFiatReserve: boolean;
+  fiatReserveAmount: number;
+  hasStablecoinReserve: boolean;
+  stablecoinReserveAmount: number;
+  maturity: 'stablecoin_only' | 'hybrid' | 'mostly_fiat' | 'fully_fiat' | 'reserve_exporter';
+}
+
+export interface PolicyEngineInput {
+  fromCountry: string;
+  toCountry: string;
+  fromCurrency: string;
+  toCurrency: string;
+  amount: number;
+  fxRate: number;
+  senderReserve: ReserveState;
+  receiverReserve: ReserveState;
+  /** Available LP bandwidth in the sender's country */
+  senderBandwidth: BandwidthPosition[];
+  /** Available LP bandwidth in the receiver's country */
+  receiverBandwidth: BandwidthPosition[];
+  /** Treasury stablecoin inventory */
+  treasuryStablecoins: { currency: string; amount: number }[];
+}
+
+// ─── Liquidity Policy Engine ───────────────────────────────────────────────
+
 export class LiquidityPolicyEngine {
-  constructor(private inputs: LiquidityPolicyEngineInputs) {}
-
   /**
-   * Compile an intent into a LiquidityExecutionPlan.
+   * Compile a payment intent into a LiquidityExecutionPlan.
    *
-   * Selects the strategy based on reserve availability, generates treasury
-   * + liquidity + settlement actions, and builds a deterministic fallback graph.
+   * This is the core of the settlement kernel. It:
+   *   1. Selects the settlement strategy based on reserve availability
+   *   2. Produces treasury actions (reserve credits, twin token mint/burn)
+   *   3. Produces liquidity actions (stablecoin purchase, LP bandwidth)
+   *   4. Produces settlement actions (escrow, LP claim, confirmation)
+   *   5. Builds a deterministic fallback graph
+   *   6. Builds a rollback plan
+   *
+   * The output is deterministic: same input = same plan.
    */
-  compile(intent: LiquidityIntent): LiquidityExecutionPlan {
-    const strategy = this.selectStrategy(intent);
-    const treasuryActions = this.generateTreasuryActions(intent, strategy);
-    const liquidityActions = this.generateLiquidityActions(intent, strategy);
-    const settlementActions = this.generateSettlementActions(intent, strategy);
-    const fallbackGraph = this.buildFallbackGraph(intent, strategy);
-    const rollbackPlan = this.buildRollbackPlan(strategy);
-    const feeModel = defaultFeeModel(strategy);
+  compile(input: PolicyEngineInput): LiquidityExecutionPlan {
+    const strategy = this.selectStrategy(input);
+    const planId = `plan_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-    const requiredBandwidth = liquidityActions
-      .filter((a) => a.actionType === 'lock_bandwidth')
-      .reduce((s, a) => s + a.amount, 0);
+    const treasuryActions: TreasuryAction[] = [];
+    const liquidityActions: LiquidityAction[] = [];
+    const settlementActions: SettlementAction[] = [];
+    const requiredBandwidth: LiquidityExecutionPlan['requiredBandwidth'] = [];
+    const requiredEscrow: LiquidityExecutionPlan['requiredEscrow'] = [];
 
-    const requiredEscrow = treasuryActions
-      .filter((a) => a.actionType === 'lock_stablecoin')
-      .reduce((s, a) => s + a.amount, 0);
+    let stablecoinUsage: LiquidityExecutionPlan['stablecoinUsage'] = {
+      required: false, amount: 0, currency: 'USDC', source: 'treasury',
+    };
+
+    let feeModel: FeeModel = {
+      lpSharePercent: 0,
+      payswapSharePercent: 100,
+      totalFeeBps: 80,
+    };
+
+    // ── Strategy-specific plan compilation ──────────────────────────────
+
+    switch (strategy) {
+      case 'LOCAL_RAIL':
+        this.compileLocalRail(input, treasuryActions, settlementActions);
+        break;
+
+      case 'RESERVE_TO_RESERVE':
+        this.compileReserveToReserve(input, treasuryActions, settlementActions);
+        break;
+
+      case 'RESERVE_TO_MARKET':
+        stablecoinUsage = this.compileReserveToMarket(
+          input, treasuryActions, liquidityActions, settlementActions,
+          requiredBandwidth, requiredEscrow,
+        );
+        feeModel = { lpSharePercent: 80, payswapSharePercent: 20, totalFeeBps: 120 };
+        break;
+
+      case 'MARKET_TO_RESERVE':
+        stablecoinUsage = this.compileMarketToReserve(
+          input, treasuryActions, liquidityActions, settlementActions,
+          requiredBandwidth,
+        );
+        feeModel = { lpSharePercent: 60, payswapSharePercent: 40, totalFeeBps: 100 };
+        break;
+
+      case 'MARKET_TO_MARKET':
+        stablecoinUsage = this.compileMarketToMarket(
+          input, treasuryActions, liquidityActions, settlementActions,
+          requiredBandwidth, requiredEscrow,
+        );
+        feeModel = { lpSharePercent: 90, payswapSharePercent: 10, totalFeeBps: 150 };
+        break;
+    }
+
+    // ── Fallback graph (deterministic) ──────────────────────────────────
+
+    const fallbackGraph = this.buildFallbackGraph(strategy, input);
+
+    // ── Rollback plan ───────────────────────────────────────────────────
+
+    const rollbackPlan = this.buildRollbackPlan(strategy, treasuryActions, liquidityActions);
 
     return {
-      planId: uid('lep'),
-      intentId: intent.intentId,
+      planId,
+      intentId: `intent_${planId}`,
       strategy,
+      fromCountry: input.fromCountry,
+      toCountry: input.toCountry,
+      fromCurrency: input.fromCurrency,
+      toCurrency: input.toCurrency,
+      amount: input.amount,
+      fxRate: input.fxRate,
       treasuryActions,
       liquidityActions,
       settlementActions,
       requiredBandwidth,
       requiredEscrow,
       reserveAware: true,
-      stablecoinUsage: requiredEscrow,
+      stablecoinUsage,
       feeModel,
       fallbackGraph,
       rollbackPlan,
-      createdAt: Date.now(),
+      compiledAt: Date.now(),
     };
   }
 
-  /** Select the settlement strategy based on reserve availability. */
-  private selectStrategy(intent: LiquidityIntent): SettlementStrategy {
-    if (intent.isLocal) return 'LOCAL_RAIL';
-    if (intent.senderHasReserve && intent.receiverHasReserve) return 'RESERVE_TO_RESERVE';
-    if (intent.senderHasReserve && !intent.receiverHasReserve) return 'RESERVE_TO_MARKET';
-    if (!intent.senderHasReserve && intent.receiverHasReserve) return 'MARKET_TO_RESERVE';
+  // ─── Strategy Selection ───────────────────────────────────────────────────
+
+  /**
+   * Select the settlement strategy based on reserve availability.
+   * Deterministic: same input = same strategy.
+   */
+  selectStrategy(input: PolicyEngineInput): SettlementStrategy {
+    // Strategy 1: Same country → LOCAL_RAIL
+    if (input.fromCountry === input.toCountry) {
+      return 'LOCAL_RAIL';
+    }
+
+    // Strategy 2: Both countries have fiat reserves → RESERVE_TO_RESERVE
+    if (input.senderReserve.hasFiatReserve && input.receiverReserve.hasFiatReserve) {
+      return 'RESERVE_TO_RESERVE';
+    }
+
+    // Strategy 3: Sender has reserve, receiver doesn't → RESERVE_TO_MARKET
+    if (input.senderReserve.hasFiatReserve && !input.receiverReserve.hasFiatReserve) {
+      return 'RESERVE_TO_MARKET';
+    }
+
+    // Strategy 4: Sender doesn't have reserve, receiver does → MARKET_TO_RESERVE
+    if (!input.senderReserve.hasFiatReserve && input.receiverReserve.hasFiatReserve) {
+      return 'MARKET_TO_RESERVE';
+    }
+
+    // Strategy 5: Neither has reserve → MARKET_TO_MARKET
     return 'MARKET_TO_MARKET';
   }
 
-  /** Generate treasury actions for the selected strategy. */
-  private generateTreasuryActions(intent: LiquidityIntent, strategy: SettlementStrategy): TreasuryAction[] {
-    const actions: TreasuryAction[] = [];
-    const { fromCountry, toCountry, amount, currency } = intent;
+  // ─── Strategy 1: LOCAL_RAIL ───────────────────────────────────────────────
 
-    switch (strategy) {
-      case 'LOCAL_RAIL':
-        // Credit reserve, mint twin tokens, credit recipient.
-        actions.push({ actionType: 'credit_reserve', accountId: `reserve_${fromCountry}`, currency, amount, reason: 'Credit sender reserve' });
-        actions.push({ actionType: 'mint_twin', accountId: `treasury_${toCountry}`, currency, amount, reason: 'Mint twin tokens for recipient' });
-        break;
+  /**
+   * Same country. Credit reserve, mint twin tokens, credit recipient.
+   * No stablecoins, no LPs.
+   */
+  private compileLocalRail(
+    input: PolicyEngineInput,
+    treasuryActions: TreasuryAction[],
+    settlementActions: SettlementAction[],
+  ): void {
+    // 1. Credit PaySwap fiat reserve with sender's funds
+    treasuryActions.push({
+      type: 'credit_fiat_reserve',
+      country: input.fromCountry,
+      currency: input.fromCurrency,
+      amount: input.amount,
+      reason: `LOCAL_RAIL: Credit reserve with sender's ${input.amount} ${input.fromCurrency}`,
+    });
 
-      case 'RESERVE_TO_RESERVE':
-        // Credit reserve A, mint country-B twin tokens, credit recipient.
-        actions.push({ actionType: 'credit_reserve', accountId: `reserve_${fromCountry}`, currency, amount, reason: 'Credit sender reserve' });
-        actions.push({ actionType: 'mint_twin', accountId: `treasury_${toCountry}`, currency, amount, reason: 'Mint twin tokens (reserve-backed)' });
-        break;
+    // 2. Mint twin tokens (1:1 with reserve credit)
+    treasuryActions.push({
+      type: 'mint_twin_tokens',
+      country: input.fromCountry,
+      currency: input.fromCurrency,
+      amount: input.amount,
+      reason: `LOCAL_RAIL: Mint ${input.amount} twin tokens for recipient`,
+    });
 
-      case 'RESERVE_TO_MARKET':
-        // Credit reserve A, purchase stablecoins if needed, lock stablecoins.
-        actions.push({ actionType: 'credit_reserve', accountId: `reserve_${fromCountry}`, currency, amount, reason: 'Credit sender reserve' });
-        const stablecoinInventory = this.inputs.getStablecoinInventory(currency);
-        if (stablecoinInventory < amount) {
-          actions.push({ actionType: 'purchase_stablecoin', accountId: `treasury_stablecoin_${fromCountry}`, currency, amount: amount - stablecoinInventory, reason: 'Purchase stablecoins for settlement' });
-        }
-        actions.push({ actionType: 'lock_stablecoin', accountId: `treasury_stablecoin_${fromCountry}`, currency, amount, reason: 'Lock stablecoins for escrow' });
-        break;
+    // 3. Settlement: immediate, no escrow, no LP
+    settlementActions.push({
+      type: 'create_contract',
+      amount: input.amount,
+      currency: input.fromCurrency,
+      reason: 'LOCAL_RAIL: Immediate settlement (same country, reserve-backed)',
+    });
 
-      case 'MARKET_TO_RESERVE':
-        // Obtain stablecoins from LP bandwidth, mint twin tokens.
-        actions.push({ actionType: 'purchase_stablecoin', accountId: `treasury_stablecoin_${fromCountry}`, currency, amount, reason: 'Obtain stablecoins via LP bandwidth' });
-        actions.push({ actionType: 'mint_twin', accountId: `treasury_${toCountry}`, currency, amount, reason: 'Mint twin tokens (stablecoin-backed)' });
-        break;
-
-      case 'MARKET_TO_MARKET':
-        // Obtain stablecoins, lock, sell in destination.
-        actions.push({ actionType: 'purchase_stablecoin', accountId: `treasury_stablecoin_${fromCountry}`, currency, amount, reason: 'Obtain stablecoins via LP/marketplace' });
-        actions.push({ actionType: 'lock_stablecoin', accountId: `treasury_stablecoin_${fromCountry}`, currency, amount, reason: 'Lock stablecoins for escrow' });
-        actions.push({ actionType: 'sell_stablecoin', accountId: `treasury_stablecoin_${toCountry}`, currency, amount, reason: 'Sell stablecoins in destination market' });
-        break;
-    }
-
-    return actions;
+    settlementActions.push({
+      type: 'close_contract',
+      amount: input.amount,
+      currency: input.fromCurrency,
+      reason: 'LOCAL_RAIL: Settlement complete',
+    });
   }
 
-  /** Generate liquidity actions (LP bandwidth usage). */
-  private generateLiquidityActions(intent: LiquidityIntent, strategy: SettlementStrategy): LiquidityAction[] {
-    const actions: LiquidityAction[] = [];
+  // ─── Strategy 2: RESERVE_TO_RESERVE ───────────────────────────────────────
 
-    switch (strategy) {
-      case 'LOCAL_RAIL':
-      case 'RESERVE_TO_RESERVE':
-        // No LP bandwidth needed — reserves handle everything.
-        break;
+  /**
+   * Both countries have fiat reserves. Credit reserve A, mint twin tokens B.
+   * No stablecoins, no LPs (unless reserve B is insufficient at redemption).
+   */
+  private compileReserveToReserve(
+    input: PolicyEngineInput,
+    treasuryActions: TreasuryAction[],
+    settlementActions: SettlementAction[],
+  ): void {
+    const recipientAmount = input.amount * input.fxRate;
 
-      case 'RESERVE_TO_MARKET':
-        // LP bandwidth needed for settlement in destination country.
-        actions.push({
-          actionType: 'lock_bandwidth', lpId: 'auto_select', country: intent.toCountry,
-          assetType: 'stablecoin', amount: intent.amount, reason: 'Lock LP bandwidth for settlement',
-        });
-        break;
+    // 1. Credit sender's country reserve
+    treasuryActions.push({
+      type: 'credit_fiat_reserve',
+      country: input.fromCountry,
+      currency: input.fromCurrency,
+      amount: input.amount,
+      reason: `RESERVE_TO_RESERVE: Credit ${input.fromCountry} reserve`,
+    });
 
-      case 'MARKET_TO_RESERVE':
-        // LP bandwidth needed for stablecoin acquisition in sender country.
-        actions.push({
-          actionType: 'lock_bandwidth', lpId: 'auto_select', country: intent.fromCountry,
-          assetType: 'stablecoin', amount: intent.amount, reason: 'Lock LP bandwidth for stablecoin acquisition',
-        });
-        break;
+    // 2. Mint recipient's country twin tokens
+    treasuryActions.push({
+      type: 'mint_twin_tokens',
+      country: input.toCountry,
+      currency: input.toCurrency,
+      amount: recipientAmount,
+      reason: `RESERVE_TO_RESERVE: Mint ${recipientAmount} ${input.toCurrency} twin tokens`,
+    });
 
-      case 'MARKET_TO_MARKET':
-        // LP bandwidth needed in both countries.
-        actions.push({
-          actionType: 'lock_bandwidth', lpId: 'auto_select', country: intent.fromCountry,
-          assetType: 'stablecoin', amount: intent.amount, reason: 'Lock LP bandwidth (sender)',
-        });
-        actions.push({
-          actionType: 'lock_bandwidth', lpId: 'auto_select', country: intent.toCountry,
-          assetType: 'stablecoin', amount: intent.amount, reason: 'Lock LP bandwidth (receiver)',
-        });
-        break;
-    }
+    // 3. Settlement: recipient gets twin tokens, can redeem later
+    settlementActions.push({
+      type: 'create_contract',
+      amount: recipientAmount,
+      currency: input.toCurrency,
+      reason: 'RESERVE_TO_RESERVE: Recipient receives twin tokens (redeemable later)',
+    });
 
-    return actions;
+    settlementActions.push({
+      type: 'close_contract',
+      amount: recipientAmount,
+      currency: input.toCurrency,
+      reason: 'RESERVE_TO_RESERVE: Twin tokens credited, settlement complete',
+    });
   }
 
-  /** Generate settlement actions. */
-  private generateSettlementActions(intent: LiquidityIntent, strategy: SettlementStrategy): SettlementAction[] {
-    const actions: SettlementAction[] = [];
+  // ─── Strategy 3: RESERVE_TO_MARKET ────────────────────────────────────────
 
-    if (strategy === 'LOCAL_RAIL' || strategy === 'RESERVE_TO_RESERVE') {
-      // Direct twin token credit — no settlement contract needed.
-      actions.push({
-        actionType: 'create_contract', network: 'internal', amount: intent.amount,
-        currency: intent.currency, recipient: intent.recipientAccountId,
-        reason: `Twin token credit (${strategy})`,
+  /**
+   * Sender has reserve, receiver doesn't. Stablecoins bridge the gap.
+   *
+   * Flow (with amendments):
+   *   1. Credit sender's reserve
+   *   2. Obtain stablecoins (treasury inventory or marketplace purchase)
+   *   3. Lock stablecoins in escrow
+   *   4. If LP fiat bandwidth in receiver country → attempt automatic fiat settlement
+   *   5. If successful → unlock stablecoins, send to LP
+   *   6. If failed/insufficient → create marketplace order in receiver country
+   *   7. LP claims → LP pays recipient → recipient confirms → release stablecoins
+   *
+   * LPs can provide BOTH fiat bandwidth AND stablecoin bandwidth.
+   * Fiat bandwidth: LP grants PaySwap approval to debit their bank/MoMo/PSP.
+   */
+  private compileReserveToMarket(
+    input: PolicyEngineInput,
+    treasuryActions: TreasuryAction[],
+    liquidityActions: LiquidityAction[],
+    settlementActions: SettlementAction[],
+    requiredBandwidth: LiquidityExecutionPlan['requiredBandwidth'],
+    requiredEscrow: LiquidityExecutionPlan['requiredEscrow'],
+  ): LiquidityExecutionPlan['stablecoinUsage'] {
+    const recipientAmount = input.amount * input.fxRate;
+
+    // 1. Credit sender's reserve
+    treasuryActions.push({
+      type: 'credit_fiat_reserve',
+      country: input.fromCountry,
+      currency: input.fromCurrency,
+      amount: input.amount,
+      reason: `RESERVE_TO_MARKET: Credit ${input.fromCountry} reserve`,
+    });
+
+    // 2. Check stablecoin inventory
+    const treasuryUSDC = input.treasuryStablecoins.find(s => s.currency === 'USDC');
+    const treasuryHasStablecoins = treasuryUSDC && treasuryUSDC.amount >= recipientAmount;
+
+    let stablecoinSource: 'treasury' | 'marketplace' | 'lp_bandwidth' = 'treasury';
+
+    if (!treasuryHasStablecoins) {
+      // 2a. Check LP stablecoin bandwidth first
+      const lpStablecoinBW = input.receiverBandwidth.find(
+        bw => bw.assetType === 'stablecoin' && bw.available >= recipientAmount && bw.status === 'active',
+      );
+
+      if (lpStablecoinBW) {
+        stablecoinSource = 'lp_bandwidth';
+        liquidityActions.push({
+          type: 'allocate_lp_bandwidth',
+          country: input.toCountry,
+          currency: 'USDC',
+          amount: recipientAmount,
+          lpId: lpStablecoinBW.lpId,
+          assetType: 'stablecoin',
+          reason: `RESERVE_TO_MARKET: Allocate LP stablecoin bandwidth`,
+        });
+      } else {
+        // 2b. Purchase stablecoins on marketplace
+        stablecoinSource = 'marketplace';
+        liquidityActions.push({
+          type: 'purchase_stablecoin',
+          country: input.fromCountry,
+          currency: 'USDC',
+          amount: recipientAmount,
+          reason: `RESERVE_TO_MARKET: Purchase stablecoins (treasury insufficient)`,
+        });
+      }
+    }
+
+    // 3. Lock stablecoins in escrow
+    liquidityActions.push({
+      type: 'lock_stablecoin',
+      country: input.toCountry,
+      currency: 'USDC',
+      amount: recipientAmount,
+      reason: `RESERVE_TO_MARKET: Lock stablecoins in escrow`,
+    });
+
+    requiredEscrow.push({
+      assetType: 'stablecoin',
+      currency: 'USDC',
+      amount: recipientAmount,
+    });
+
+    // 4. Check LP FIAT bandwidth in receiver country (amendment)
+    const lpFiatBW = input.receiverBandwidth.find(
+      bw => bw.assetType === 'fiat' &&
+            bw.currency === input.toCurrency &&
+            bw.available >= recipientAmount &&
+            bw.status === 'active' &&
+            bw.debitAuthorization?.authorized,
+    );
+
+    if (lpFiatBW) {
+      // 4a. Automatic fiat settlement via LP fiat bandwidth
+      liquidityActions.push({
+        type: 'allocate_lp_bandwidth',
+        country: input.toCountry,
+        currency: input.toCurrency,
+        amount: recipientAmount,
+        lpId: lpFiatBW.lpId,
+        assetType: 'fiat',
+        reason: `RESERVE_TO_MARKET: Allocate LP fiat bandwidth for auto-settlement`,
+      });
+
+      requiredBandwidth.push({
+        assetType: 'fiat',
+        country: input.toCountry,
+        currency: input.toCurrency,
+        amount: recipientAmount,
+      });
+
+      // 5. LP pays recipient via local rail (auto)
+      settlementActions.push({
+        type: 'create_contract',
+        lpId: lpFiatBW.lpId,
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'RESERVE_TO_MARKET: Auto-settlement via LP fiat bandwidth',
+      });
+
+      // 6. Recipient confirms
+      settlementActions.push({
+        type: 'recipient_confirm',
+        lpId: lpFiatBW.lpId,
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'RESERVE_TO_MARKET: Recipient confirms receipt',
+      });
+
+      // 7. Release stablecoins to LP
+      liquidityActions.push({
+        type: 'release_stablecoin',
+        country: input.toCountry,
+        currency: 'USDC',
+        amount: recipientAmount,
+        lpId: lpFiatBW.lpId,
+        reason: `RESERVE_TO_MARKET: Release stablecoins to LP (auto-settlement succeeded)`,
+      });
+
+      settlementActions.push({
+        type: 'release_escrow',
+        lpId: lpFiatBW.lpId,
+        amount: recipientAmount,
+        currency: 'USDC',
+        reason: 'RESERVE_TO_MARKET: Escrow released after auto-settlement',
+      });
+
+      settlementActions.push({
+        type: 'close_contract',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'RESERVE_TO_MARKET: Settlement complete (auto)',
       });
     } else {
-      // Full settlement contract lifecycle.
-      actions.push({
-        actionType: 'create_contract', network: 'stellar', amount: intent.amount,
-        currency: intent.currency, recipient: intent.recipientAccountId,
-        reason: `Settlement contract (${strategy})`,
+      // 4b. No fiat bandwidth → create marketplace order
+      settlementActions.push({
+        type: 'create_contract',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'RESERVE_TO_MARKET: Create marketplace settlement order (no fiat bandwidth)',
       });
-      actions.push({
-        actionType: 'fund_contract', network: 'stellar', amount: intent.amount,
-        currency: intent.currency, recipient: intent.recipientAccountId,
-        reason: 'Fund escrow',
+
+      requiredBandwidth.push({
+        assetType: 'stablecoin',
+        country: input.toCountry,
+        currency: 'USDC',
+        amount: recipientAmount,
       });
-      actions.push({
-        actionType: 'release_escrow', network: 'stellar', amount: intent.amount,
-        currency: intent.currency, recipient: intent.recipientAccountId,
-        reason: 'Release escrow after recipient confirmation',
+
+      // 8. LP claims
+      settlementActions.push({
+        type: 'lp_claim',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'RESERVE_TO_MARKET: LP claims settlement order',
       });
-      actions.push({
-        actionType: 'close_contract', network: 'stellar', amount: intent.amount,
-        currency: intent.currency, recipient: intent.recipientAccountId,
-        reason: 'Close settlement contract',
+
+      // 9. LP pays recipient
+      settlementActions.push({
+        type: 'lp_pay_recipient',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'RESERVE_TO_MARKET: LP pays recipient via local rail',
+      });
+
+      // 10. Recipient confirms
+      settlementActions.push({
+        type: 'recipient_confirm',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'RESERVE_TO_MARKET: Recipient confirms receipt',
+      });
+
+      // 11. Release stablecoins to LP
+      liquidityActions.push({
+        type: 'release_stablecoin',
+        country: input.toCountry,
+        currency: 'USDC',
+        amount: recipientAmount,
+        reason: `RESERVE_TO_MARKET: Release stablecoins to LP after confirmation`,
+      });
+
+      settlementActions.push({
+        type: 'release_escrow',
+        amount: recipientAmount,
+        currency: 'USDC',
+        reason: 'RESERVE_TO_MARKET: Escrow released after confirmation',
+      });
+
+      settlementActions.push({
+        type: 'close_contract',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'RESERVE_TO_MARKET: Settlement complete (marketplace)',
       });
     }
 
-    return actions;
-  }
-
-  /** Build a deterministic fallback graph. */
-  private buildFallbackGraph(intent: LiquidityIntent, primaryStrategy: SettlementStrategy): FallbackGraph {
-    const fallbacks: FallbackBranch[] = [];
-
-    // Fallback 1: Try marketplace if reserve fails.
-    if (primaryStrategy === 'RESERVE_TO_RESERVE' || primaryStrategy === 'LOCAL_RAIL') {
-      fallbacks.push({
-        branchId: 'fb_1', strategy: 'RESERVE_TO_MARKET',
-        description: 'If reserves insufficient, use marketplace for stablecoin settlement',
-        conditions: 'reserve_balance < amount',
-        treasuryActions: [{ actionType: 'purchase_stablecoin', accountId: `treasury_stablecoin_${intent.fromCountry}`, currency: intent.currency, amount: intent.amount, reason: 'Fallback: purchase stablecoins' }],
-        liquidityActions: [{ actionType: 'lock_bandwidth', lpId: 'auto_select', country: intent.toCountry, assetType: 'stablecoin', amount: intent.amount, reason: 'Fallback: LP bandwidth' }],
-      });
-    }
-
-    // Fallback 2: Cross-border reserve.
-    if (primaryStrategy !== 'MARKET_TO_MARKET') {
-      fallbacks.push({
-        branchId: 'fb_2', strategy: 'MARKET_TO_MARKET',
-        description: 'If all reserves fail, use full marketplace settlement',
-        conditions: 'all_reserves_insufficient',
-        treasuryActions: [
-          { actionType: 'purchase_stablecoin', accountId: `treasury_stablecoin_${intent.fromCountry}`, currency: intent.currency, amount: intent.amount, reason: 'Fallback: purchase stablecoins' },
-          { actionType: 'lock_stablecoin', accountId: `treasury_stablecoin_${intent.fromCountry}`, currency: intent.currency, amount: intent.amount, reason: 'Fallback: lock escrow' },
-        ],
-        liquidityActions: [
-          { actionType: 'lock_bandwidth', lpId: 'auto_select', country: intent.fromCountry, assetType: 'stablecoin', amount: intent.amount, reason: 'Fallback: sender bandwidth' },
-          { actionType: 'lock_bandwidth', lpId: 'auto_select', country: intent.toCountry, assetType: 'stablecoin', amount: intent.amount, reason: 'Fallback: receiver bandwidth' },
-        ],
-      });
-    }
-
-    // Final fallback: refund.
     return {
-      primary: primaryStrategy,
-      fallbacks,
-      finalFallback: 'refund',
+      required: true,
+      amount: recipientAmount,
+      currency: 'USDC',
+      source: stablecoinSource,
     };
   }
 
-  /** Build a rollback plan. */
-  private buildRollbackPlan(strategy: SettlementStrategy): RollbackStep[] {
-    const steps: RollbackStep[] = [
-      { step: 1, action: 'unlock_bandwidth', description: 'Release any locked LP bandwidth' },
-      { step: 2, action: 'unlock_stablecoins', description: 'Release locked stablecoin escrow' },
-      { step: 3, action: 'burn_twin_tokens', description: 'Burn any minted twin tokens' },
-      { step: 4, action: 'reverse_reserve_credit', description: 'Reverse any reserve credits' },
-      { step: 5, action: 'close_contract_disputed', description: 'Close settlement contract as disputed' },
-    ];
+  // ─── Strategy 4: MARKET_TO_RESERVE ────────────────────────────────────────
 
-    // Simpler rollback for local rail.
-    if (strategy === 'LOCAL_RAIL') {
-      return [
-        { step: 1, action: 'burn_twin_tokens', description: 'Burn minted twin tokens' },
-        { step: 2, action: 'reverse_reserve_credit', description: 'Reverse reserve credit' },
-      ];
+  /**
+   * Sender doesn't have reserve, receiver does. LP/market provides stablecoins
+   * on the sending side; twin tokens minted on the receiving side.
+   */
+  private compileMarketToReserve(
+    input: PolicyEngineInput,
+    treasuryActions: TreasuryAction[],
+    liquidityActions: LiquidityAction[],
+    settlementActions: SettlementAction[],
+    requiredBandwidth: LiquidityExecutionPlan['requiredBandwidth'],
+  ): LiquidityExecutionPlan['stablecoinUsage'] {
+    const recipientAmount = input.amount * input.fxRate;
+
+    // 1. Check LP stablecoin bandwidth in sender's country
+    const lpStablecoinBW = input.senderBandwidth.find(
+      bw => bw.assetType === 'stablecoin' && bw.available >= input.amount && bw.status === 'active',
+    );
+
+    let stablecoinSource: 'treasury' | 'marketplace' | 'lp_bandwidth' = 'lp_bandwidth';
+
+    if (lpStablecoinBW) {
+      // 1a. LP provides stablecoins directly
+      liquidityActions.push({
+        type: 'allocate_lp_bandwidth',
+        country: input.fromCountry,
+        currency: 'USDC',
+        amount: input.amount,
+        lpId: lpStablecoinBW.lpId,
+        assetType: 'stablecoin',
+        reason: `MARKET_TO_RESERVE: LP provides stablecoin bandwidth`,
+      });
+
+      requiredBandwidth.push({
+        assetType: 'stablecoin',
+        country: input.fromCountry,
+        currency: 'USDC',
+        amount: input.amount,
+      });
+    } else {
+      // 1b. Purchase stablecoins on marketplace
+      stablecoinSource = 'marketplace';
+      liquidityActions.push({
+        type: 'purchase_stablecoin',
+        country: input.fromCountry,
+        currency: 'USDC',
+        amount: input.amount,
+        reason: `MARKET_TO_RESERVE: Purchase stablecoins (no LP bandwidth)`,
+      });
     }
 
-    return steps;
+    // 2. Credit stablecoins to treasury reserve
+    treasuryActions.push({
+      type: 'credit_stablecoin_reserve',
+      country: input.fromCountry,
+      currency: 'USDC',
+      amount: input.amount,
+      reason: `MARKET_TO_RESERVE: Credit treasury stablecoin reserve`,
+    });
+
+    // 3. Mint recipient's country twin tokens
+    treasuryActions.push({
+      type: 'mint_twin_tokens',
+      country: input.toCountry,
+      currency: input.toCurrency,
+      amount: recipientAmount,
+      reason: `MARKET_TO_RESERVE: Mint ${recipientAmount} ${input.toCurrency} twin tokens`,
+    });
+
+    // 4. Settlement: recipient gets twin tokens
+    settlementActions.push({
+      type: 'create_contract',
+      amount: recipientAmount,
+      currency: input.toCurrency,
+      reason: 'MARKET_TO_RESERVE: Recipient receives twin tokens',
+    });
+
+    settlementActions.push({
+      type: 'close_contract',
+      amount: recipientAmount,
+      currency: input.toCurrency,
+      reason: 'MARKET_TO_RESERVE: Twin tokens credited',
+    });
+
+    return {
+      required: true,
+      amount: input.amount,
+      currency: 'USDC',
+      source: stablecoinSource,
+    };
+  }
+
+  // ─── Strategy 5: MARKET_TO_MARKET ─────────────────────────────────────────
+
+  /**
+   * Neither country has reserves. Stablecoins bridge both sides.
+   *
+   * Flow (with amendments):
+   *   1. Obtain stablecoins (LP bandwidth or marketplace) in sender country
+   *   2. Lock stablecoins in escrow
+   *   3. If LP fiat bandwidth in receiver country → attempt automatic fiat settlement
+   *   4. If successful → unlock stablecoins, send to LP
+   *   5. If failed/insufficient → create marketplace order in receiver country
+   *   6. LP claims → LP pays recipient → recipient confirms → release stablecoins
+   */
+  private compileMarketToMarket(
+    input: PolicyEngineInput,
+    treasuryActions: TreasuryAction[],
+    liquidityActions: LiquidityAction[],
+    settlementActions: SettlementAction[],
+    requiredBandwidth: LiquidityExecutionPlan['requiredBandwidth'],
+    requiredEscrow: LiquidityExecutionPlan['requiredEscrow'],
+  ): LiquidityExecutionPlan['stablecoinUsage'] {
+    const recipientAmount = input.amount * input.fxRate;
+
+    // 1. Obtain stablecoins in sender's country
+    const lpStablecoinBW = input.senderBandwidth.find(
+      bw => bw.assetType === 'stablecoin' && bw.available >= input.amount && bw.status === 'active',
+    );
+
+    let stablecoinSource: 'treasury' | 'marketplace' | 'lp_bandwidth' = 'lp_bandwidth';
+
+    if (lpStablecoinBW) {
+      liquidityActions.push({
+        type: 'allocate_lp_bandwidth',
+        country: input.fromCountry,
+        currency: 'USDC',
+        amount: input.amount,
+        lpId: lpStablecoinBW.lpId,
+        assetType: 'stablecoin',
+        reason: `MARKET_TO_MARKET: LP provides stablecoin bandwidth`,
+      });
+
+      requiredBandwidth.push({
+        assetType: 'stablecoin',
+        country: input.fromCountry,
+        currency: 'USDC',
+        amount: input.amount,
+      });
+    } else {
+      stablecoinSource = 'marketplace';
+      liquidityActions.push({
+        type: 'purchase_stablecoin',
+        country: input.fromCountry,
+        currency: 'USDC',
+        amount: input.amount,
+        reason: `MARKET_TO_MARKET: Purchase stablecoins (no LP bandwidth)`,
+      });
+    }
+
+    // 2. Credit treasury stablecoin reserve
+    treasuryActions.push({
+      type: 'credit_stablecoin_reserve',
+      country: input.fromCountry,
+      currency: 'USDC',
+      amount: input.amount,
+      reason: `MARKET_TO_MARKET: Credit treasury stablecoin reserve`,
+    });
+
+    // 3. Lock stablecoins in escrow
+    liquidityActions.push({
+      type: 'lock_stablecoin',
+      country: input.toCountry,
+      currency: 'USDC',
+      amount: recipientAmount,
+      reason: `MARKET_TO_MARKET: Lock stablecoins in escrow`,
+    });
+
+    requiredEscrow.push({
+      assetType: 'stablecoin',
+      currency: 'USDC',
+      amount: recipientAmount,
+    });
+
+    // 4. Check LP FIAT bandwidth in receiver country (amendment)
+    const lpFiatBW = input.receiverBandwidth.find(
+      bw => bw.assetType === 'fiat' &&
+            bw.currency === input.toCurrency &&
+            bw.available >= recipientAmount &&
+            bw.status === 'active' &&
+            bw.debitAuthorization?.authorized,
+    );
+
+    if (lpFiatBW) {
+      // 4a. Automatic fiat settlement
+      liquidityActions.push({
+        type: 'allocate_lp_bandwidth',
+        country: input.toCountry,
+        currency: input.toCurrency,
+        amount: recipientAmount,
+        lpId: lpFiatBW.lpId,
+        assetType: 'fiat',
+        reason: `MARKET_TO_MARKET: Allocate LP fiat bandwidth for auto-settlement`,
+      });
+
+      requiredBandwidth.push({
+        assetType: 'fiat',
+        country: input.toCountry,
+        currency: input.toCurrency,
+        amount: recipientAmount,
+      });
+
+      settlementActions.push({
+        type: 'create_contract',
+        lpId: lpFiatBW.lpId,
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'MARKET_TO_MARKET: Auto-settlement via LP fiat bandwidth',
+      });
+
+      settlementActions.push({
+        type: 'recipient_confirm',
+        lpId: lpFiatBW.lpId,
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'MARKET_TO_MARKET: Recipient confirms receipt',
+      });
+
+      liquidityActions.push({
+        type: 'release_stablecoin',
+        country: input.toCountry,
+        currency: 'USDC',
+        amount: recipientAmount,
+        lpId: lpFiatBW.lpId,
+        reason: `MARKET_TO_MARKET: Release stablecoins to LP (auto-settlement)`,
+      });
+
+      settlementActions.push({
+        type: 'release_escrow',
+        lpId: lpFiatBW.lpId,
+        amount: recipientAmount,
+        currency: 'USDC',
+        reason: 'MARKET_TO_MARKET: Escrow released (auto)',
+      });
+
+      settlementActions.push({
+        type: 'close_contract',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'MARKET_TO_MARKET: Settlement complete (auto)',
+      });
+    } else {
+      // 4b. Marketplace fallback
+      settlementActions.push({
+        type: 'create_contract',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'MARKET_TO_MARKET: Create marketplace settlement order',
+      });
+
+      requiredBandwidth.push({
+        assetType: 'stablecoin',
+        country: input.toCountry,
+        currency: 'USDC',
+        amount: recipientAmount,
+      });
+
+      settlementActions.push({
+        type: 'lp_claim',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'MARKET_TO_MARKET: LP claims settlement order',
+      });
+
+      settlementActions.push({
+        type: 'lp_pay_recipient',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'MARKET_TO_MARKET: LP pays recipient via local rail',
+      });
+
+      settlementActions.push({
+        type: 'recipient_confirm',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'MARKET_TO_MARKET: Recipient confirms receipt',
+      });
+
+      liquidityActions.push({
+        type: 'release_stablecoin',
+        country: input.toCountry,
+        currency: 'USDC',
+        amount: recipientAmount,
+        reason: `MARKET_TO_MARKET: Release stablecoins to LP after confirmation`,
+      });
+
+      settlementActions.push({
+        type: 'release_escrow',
+        amount: recipientAmount,
+        currency: 'USDC',
+        reason: 'MARKET_TO_MARKET: Escrow released after confirmation',
+      });
+
+      settlementActions.push({
+        type: 'close_contract',
+        amount: recipientAmount,
+        currency: input.toCurrency,
+        reason: 'MARKET_TO_MARKET: Settlement complete (marketplace)',
+      });
+    }
+
+    return {
+      required: true,
+      amount: recipientAmount,
+      currency: 'USDC',
+      source: stablecoinSource,
+    };
+  }
+
+  // ─── Fallback Graph ────────────────────────────────────────────────────────
+
+  /**
+   * Build a deterministic fallback graph for the selected strategy.
+   * No runtime replanning — all branches are compiled upfront.
+   */
+  private buildFallbackGraph(strategy: SettlementStrategy, input: PolicyEngineInput): FallbackGraph {
+    switch (strategy) {
+      case 'LOCAL_RAIL':
+        return {
+          primary: 'LOCAL_RAIL',
+          fallbacks: [
+            { condition: 'Reserve insufficient', strategy: 'CANCEL_REFUND', actions: ['Refund sender', 'No twin tokens minted'] },
+          ],
+        };
+
+      case 'RESERVE_TO_RESERVE':
+        return {
+          primary: 'RESERVE_TO_RESERVE',
+          fallbacks: [
+            { condition: 'Receiver reserve insufficient at redemption', strategy: 'RESERVE_TO_MARKET', actions: ['Consume LP bandwidth for shortfall', 'Only shortfall amount uses LPs'] },
+            { condition: 'No LP bandwidth available', strategy: 'CANCEL_REFUND', actions: ['Refund sender', 'Burn minted twin tokens'] },
+          ],
+        };
+
+      case 'RESERVE_TO_MARKET':
+        return {
+          primary: 'RESERVE_TO_MARKET',
+          fallbacks: [
+            { condition: 'Treasury stablecoins insufficient', strategy: 'RESERVE_TO_MARKET', actions: ['Purchase stablecoins on marketplace'] },
+            { condition: 'No LP fiat bandwidth for auto-settlement', strategy: 'RESERVE_TO_MARKET', actions: ['Create marketplace settlement order'] },
+            { condition: 'No LP claims settlement order', strategy: 'CANCEL_REFUND', actions: ['Refund sender', 'Return stablecoins to treasury'] },
+          ],
+        };
+
+      case 'MARKET_TO_RESERVE':
+        return {
+          primary: 'MARKET_TO_RESERVE',
+          fallbacks: [
+            { condition: 'No LP stablecoin bandwidth', strategy: 'MARKET_TO_RESERVE', actions: ['Purchase stablecoins on marketplace'] },
+            { condition: 'Marketplace purchase fails', strategy: 'CANCEL_REFUND', actions: ['Refund sender'] },
+          ],
+        };
+
+      case 'MARKET_TO_MARKET':
+        return {
+          primary: 'MARKET_TO_MARKET',
+          fallbacks: [
+            { condition: 'No LP stablecoin bandwidth in sender country', strategy: 'MARKET_TO_MARKET', actions: ['Purchase stablecoins on marketplace'] },
+            { condition: 'No LP fiat bandwidth for auto-settlement', strategy: 'MARKET_TO_MARKET', actions: ['Create marketplace settlement order in receiver country'] },
+            { condition: 'No LP claims settlement order', strategy: 'CANCEL_REFUND', actions: ['Refund sender', 'Return stablecoins to treasury'] },
+          ],
+        };
+    }
+  }
+
+  // ─── Rollback Plan ────────────────────────────────────────────────────────
+
+  /**
+   * Build a deterministic rollback plan for the selected strategy.
+   */
+  private buildRollbackPlan(
+    strategy: SettlementStrategy,
+    treasuryActions: TreasuryAction[],
+    liquidityActions: LiquidityAction[],
+  ): RollbackPlan {
+    const steps: RollbackStep[] = [];
+
+    // Reverse treasury actions in reverse order
+    for (const action of [...treasuryActions].reverse()) {
+      steps.push({
+        step: `Reverse: ${action.type}`,
+        action: this.reverseTreasuryAction(action),
+        condition: 'If execution fails after this action',
+      });
+    }
+
+    // Reverse liquidity actions in reverse order
+    for (const action of [...liquidityActions].reverse()) {
+      steps.push({
+        step: `Reverse: ${action.type}`,
+        action: this.reverseLiquidityAction(action),
+        condition: 'If execution fails after this action',
+      });
+    }
+
+    return { steps };
+  }
+
+  private reverseTreasuryAction(action: TreasuryAction): string {
+    switch (action.type) {
+      case 'credit_fiat_reserve': return `Debit ${action.amount} ${action.currency} from ${action.country} fiat reserve`;
+      case 'debit_fiat_reserve': return `Credit ${action.amount} ${action.currency} to ${action.country} fiat reserve`;
+      case 'mint_twin_tokens': return `Burn ${action.amount} ${action.currency} twin tokens`;
+      case 'burn_twin_tokens': return `Mint ${action.amount} ${action.currency} twin tokens`;
+      case 'credit_stablecoin_reserve': return `Debit ${action.amount} ${action.currency} from stablecoin reserve`;
+      case 'debit_stablecoin_reserve': return `Credit ${action.amount} ${action.currency} to stablecoin reserve`;
+      default: return `Reverse ${action.type}`;
+    }
+  }
+
+  private reverseLiquidityAction(action: LiquidityAction): string {
+    switch (action.type) {
+      case 'purchase_stablecoin': return `Sell ${action.amount} ${action.currency} back to marketplace`;
+      case 'sell_stablecoin': return `Buy back ${action.amount} ${action.currency}`;
+      case 'lock_stablecoin': return `Unlock ${action.amount} ${action.currency} from escrow`;
+      case 'release_stablecoin': return `Re-lock ${action.amount} ${action.currency} in escrow`;
+      case 'allocate_lp_bandwidth': return `Release ${action.amount} ${action.currency} LP bandwidth`;
+      case 'release_lp_bandwidth': return `Re-allocate ${action.amount} ${action.currency} LP bandwidth`;
+      default: return `Reverse ${action.type}`;
+    }
   }
 }
+
+// ─── Singleton ─────────────────────────────────────────────────────────────
+
+export const liquidityPolicyEngine = new LiquidityPolicyEngine();

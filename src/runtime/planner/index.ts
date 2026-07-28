@@ -26,6 +26,7 @@
 import type { RuntimeCommand } from '@/runtime/dispatcher/types';
 import type { DispatchResult } from '@/runtime/dispatcher/dispatcher';
 import { runtime } from '@/runtime';
+import { liquidityPolicyEngine, type LiquidityExecutionPlan } from '@/runtime/liquidity';
 
 // H-1 fix: import the persisted event store to flush after every dispatch.
 // This ensures events are written to the DB before the API returns,
@@ -306,13 +307,62 @@ class ExecutionPlanner {
           return { result: 'skipped', detail: `Intent skipped: ${err instanceof Error ? err.message : 'error'}` };
         }
 
-      case 'compiler':
+      case 'compiler': {
+        // M-RT-30: The Liquidity Policy Engine compiles the payment intent
+        // into a LiquidityExecutionPlan with the selected settlement strategy,
+        // treasury actions, liquidity actions, settlement actions, fallback
+        // graph, and rollback plan.
         try {
-          // The financial compiler produces an execution plan — record invocation
-          return { result: 'success', detail: 'Execution plan compiled', data: { planCompiled: true } };
+          // Build the policy engine input from the command + runtime state
+          const twin = runtime.controlPlane.buildDigitalTwin();
+          const fromCountry = (input.command.payload as any).corridor?.split('-')[0] ?? 'GH';
+          const toCountry = (input.command.payload as any).corridor?.split('-')[1] ?? fromCountry;
+          const fromCurrency = (input.command.payload as any).currency ?? (input.command.payload as any).sourceCurrency ?? 'GHS';
+          const toCurrency = (input.command.payload as any).destinationCurrency ?? fromCurrency;
+          const amount = input.amount;
+
+          const senderState = twin.countries.find(c => c.country === fromCountry);
+          const receiverState = twin.countries.find(c => c.country === toCountry);
+
+          const plan = liquidityPolicyEngine.compile({
+            fromCountry,
+            toCountry,
+            fromCurrency,
+            toCurrency,
+            amount,
+            fxRate: 1, // simplified — in production, use real FX rates
+            senderReserve: {
+              country: fromCountry,
+              currency: fromCurrency,
+              hasFiatReserve: (senderState?.fiatReserves ?? 0) > 0,
+              fiatReserveAmount: senderState?.fiatReserves ?? 0,
+              hasStablecoinReserve: (senderState?.stablecoinReserves ?? 0) > 0,
+              stablecoinReserveAmount: senderState?.stablecoinReserves ?? 0,
+              maturity: senderState?.maturity ?? 'stablecoin_only',
+            },
+            receiverReserve: {
+              country: toCountry,
+              currency: toCurrency,
+              hasFiatReserve: (receiverState?.fiatReserves ?? 0) > 0,
+              fiatReserveAmount: receiverState?.fiatReserves ?? 0,
+              hasStablecoinReserve: (receiverState?.stablecoinReserves ?? 0) > 0,
+              stablecoinReserveAmount: receiverState?.stablecoinReserves ?? 0,
+              maturity: receiverState?.maturity ?? 'stablecoin_only',
+            },
+            senderBandwidth: [],
+            receiverBandwidth: [],
+            treasuryStablecoins: [{ currency: 'USDC', amount: 100_000 }],
+          });
+
+          return {
+            result: 'success',
+            detail: `Liquidity plan compiled: strategy=${plan.strategy}, ${plan.treasuryActions.length} treasury actions, ${plan.liquidityActions.length} liquidity actions, ${plan.settlementActions.length} settlement actions`,
+            data: { plan, strategy: plan.strategy },
+          };
         } catch (err) {
           return { result: 'skipped', detail: `Compiler skipped: ${err instanceof Error ? err.message : 'error'}` };
         }
+      }
 
       case 'policy':
         try {
