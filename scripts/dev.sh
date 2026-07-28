@@ -20,5 +20,6 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 
 # Start the dev server (webpack mode — lower memory peak than turbopack
-# for the auth routes which load Prisma + bcrypt + NextAuth)
+# for the auth routes which load Prisma + bcrypt + NextAuth).
+# 768MB heap limit stays under the 4GB cgroup ceiling during route compilation.
 exec bunx next dev -p 3000 -H 0.0.0.0 --webpack 2>&1 | tee "$PROJECT_DIR/dev.log"
