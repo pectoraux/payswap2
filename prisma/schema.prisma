@@ -1,15 +1,15 @@
 // PaySwap — Production Prisma Schema
-// SQLite-ready (uses compatible types, normalized, indexed, soft-deletes, audit fields)
-// NOTE: SQLite does not support BigInt/Decimal/Json — all JSON is stored as String,
-// and all timestamps-as-integers are stored as Int.
+// PostgreSQL (Neon) — production database
+// BigInt supported for high-resolution timestamps.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -663,7 +663,7 @@ model EventRecord {
   eventId   String   @unique
   type      String
   payload   String
-  ts        Int      // SQLite does not support BigInt — store epoch-ms as Int
+  ts        BigInt    // epoch-ms — high-resolution timestamp
   frame     Int      @default(0)
   seq       Int      @default(0)
   createdAt DateTime @default(now())
@@ -676,7 +676,7 @@ model EventRecord {
 model LedgerSnapshotRecord {
   id           String   @id @default(cuid())
   snapshotId   String   @unique
-  asOfTs       Int      // SQLite does not support BigInt — store epoch-ms as Int
+  asOfTs       BigInt    // epoch-ms — high-resolution timestamp
   asOfSeq      Int
   accounts     String
   trialBalance String
@@ -841,7 +841,7 @@ model CheckpointRecord {
   id             String   @id @default(cuid())
   name           String   @unique
   lastSeq        Int      @default(0)
-  lastTs         Int      // SQLite does not support BigInt — store epoch-ms as Int
+  lastTs         BigInt    // epoch-ms — high-resolution timestamp
   lastSnapshotId String?
   totalCount     Int      @default(0)
   createdAt      DateTime @default(now())

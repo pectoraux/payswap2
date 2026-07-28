@@ -89,8 +89,8 @@ class CheckpointManager {
     await db.checkpointRecord.upsert({
       where: { name: 'ledger_snapshot' },
       // SQLite: lastTs stored as Int (schema changed from BigInt in task 2-prisma-fix)
-      create: { name: 'ledger_snapshot', lastSeq: currentSeq, lastTs: Date.now(), lastSnapshotId: snap.snapshotId, totalCount: 1 },
-      update: { lastSeq: currentSeq, lastTs: Date.now(), lastSnapshotId: snap.snapshotId, totalCount: { increment: 1 } },
+      create: { name: 'ledger_snapshot', lastSeq: currentSeq, lastTs: BigInt(Date.now()), lastSnapshotId: snap.snapshotId, totalCount: 1 },
+      update: { lastSeq: currentSeq, lastTs: BigInt(Date.now()), lastSnapshotId: snap.snapshotId, totalCount: { increment: 1 } },
     });
 
     return { snapshot: snap, skipped: false };

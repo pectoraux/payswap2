@@ -5,21 +5,21 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/marketplace/[slug]
+ * GET /api/marketplace/[id]
  *
- * Public plugin detail (no auth required). Returns the full PublicPlugin
+ * Public plugin detail (no auth required). Accepts either the plugin ID
+ * or the slug (the catalog tries both). Returns the full PublicPlugin
  * shape (capabilities, permissions, pricing, screenshots, dependencies,
  * changelog, verification, etc.).
- *
- * Returns 404 when the slug doesn't exist OR the plugin isn't published.
  */
 export async function GET(
   _req: NextRequest,
-  { params }: { params: Promise<{ slug: string }> },
+  { params }: { params: Promise<{ id: string }> },
 ) {
-  const { slug } = await params;
+  const { id } = await params;
   try {
-    const plugin = await pluginCatalog.getPlugin(slug);
+    // Try slug first (public-facing), then fall back to ID lookup.
+    const plugin = await pluginCatalog.getPlugin(id);
     if (!plugin) {
       return NextResponse.json(
         { ok: false, error: 'Plugin not found' },
@@ -28,7 +28,7 @@ export async function GET(
     }
     return NextResponse.json({ ok: true, plugin });
   } catch (err) {
-    console.error('[api/marketplace/[slug] GET] error:', err);
+    console.error('[api/marketplace/[id] GET] error:', err);
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },
       { status: 500 },

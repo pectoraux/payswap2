@@ -102,7 +102,7 @@ class EventStore {
               eventId: evt.id,
               type: evt.type,
               payload: JSON.stringify(evt.payload),
-              ts: evt.ts, // SQLite: stored as Int (schema changed from BigInt in task 2-prisma-fix)
+              ts: BigInt(evt.ts), // PostgreSQL: BigInt column
               frame: evt.frame,
               seq: this.nextSeq++,
             },

@@ -56,6 +56,16 @@ ls -lah
 DEFAULT_PACKAGED_DB_PATH="/app/db/custom.db"
 DEFAULT_PACKAGED_DATABASE_URL="file:$DEFAULT_PACKAGED_DB_PATH"
 
+# Source .env file if it exists (so Neon PostgreSQL DATABASE_URL takes precedence
+# over the SQLite fallback). This ensures the production DB connection is never
+# lost across restarts.
+if [ -f "$BUILD_DIR/.env" ]; then
+    set -a
+    . "$BUILD_DIR/.env"
+    set +a
+    echo "📄 Loaded .env from $BUILD_DIR/.env"
+fi
+
 # Python 依赖在构建阶段安装进部署产物，不复用 Sandbox 的 /home/z/.venv。
 # Next.js 及其启动的子进程都会继承这组路径。
 if [ -d "/app/python-runtime/site-packages" ]; then
