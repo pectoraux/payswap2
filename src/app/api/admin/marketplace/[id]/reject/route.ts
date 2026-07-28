@@ -1,0 +1,73 @@
+import { NextRequest, NextResponse } from 'next/server';
+import {
+  requireSession,
+  requireAdminSession,
+  unauthorized,
+  forbidden,
+} from '@/lib/api-auth';
+import { db } from '@/lib/db';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+/**
+ * POST /api/admin/marketplace/[id]/reject
+ *
+ * Reject a submitted marketplace plugin. Transitions to "rejected" status.
+ *
+ * Body: { notes?: string }
+ */
+export async function POST(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+  const session = await requireSession();
+  if (!session) return unauthorized();
+  const adminSession = await requireAdminSession();
+  if (!adminSession) return forbidden();
+  const adminId = (session.user as any)?.id as string;
+
+  let body: any = {};
+  try {
+    body = await req.json();
+  } catch {
+    body = {};
+  }
+
+  try {
+    const row = await db.extension.findUnique({ where: { id } });
+    if (!row) {
+      return NextResponse.json(
+        { ok: false, error: 'Plugin not found' },
+        { status: 404 },
+      );
+    }
+    if (!['submitted', 'static_analysis', 'security_scan', 'review', 'approved'].includes(row.status)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Cannot reject a plugin in status "${row.status}"`,
+        },
+        { status: 400 },
+      );
+    }
+
+    const updated = await db.extension.update({
+      where: { id },
+      data: {
+        status: 'rejected',
+        reviewedAt: new Date(),
+        reviewedBy: adminId,
+        reviewNotes: typeof body.notes === 'string' ? body.notes : 'Rejected by reviewer',
+      },
+    });
+    return NextResponse.json({ ok: true, plugin: updated });
+  } catch (err) {
+    console.error('[api/admin/marketplace/[id]/reject POST] error:', err);
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },
+      { status: 500 },
+    );
+  }
+}

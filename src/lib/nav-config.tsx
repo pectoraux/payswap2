@@ -57,6 +57,8 @@ import {
   Send,
   Fingerprint,
   Wrench,
+  Cloud,
+  Store,
 } from 'lucide-react';
 
 /**
@@ -183,7 +185,9 @@ export const adminNav: NavGroup[] = [
       { label: 'Merchants', href: '/admin/merchants', icon: <Package className="h-4 w-4" /> },
       { label: 'Identities', href: '/admin/identities', icon: <Fingerprint className="h-4 w-4" /> },
       { label: 'Extensions', href: '/admin/extensions', icon: <Boxes className="h-4 w-4" /> },
+      { label: 'Marketplace', href: '/admin/marketplace', icon: <Store className="h-4 w-4" /> },
       { label: 'Capability SDK', href: '/admin/sdk', icon: <Puzzle className="h-4 w-4" /> },
+      { label: 'Cloud', href: '/admin/cloud', icon: <Cloud className="h-4 w-4" /> },
     ],
   },
   {
@@ -351,6 +355,7 @@ export const developerNav: NavGroup[] = [
       { label: 'Webhooks', href: '/developers/webhooks', icon: <Webhook className="h-4 w-4" /> },
       { label: 'Simulator', href: '/developers/simulator', icon: <Cpu className="h-4 w-4" /> },
       { label: 'Extensions', href: '/developers/extensions', icon: <Boxes className="h-4 w-4" /> },
+      { label: 'Publish', href: '/developers/publish', icon: <Store className="h-4 w-4" /> },
       { label: 'Digital Twin', href: '/developers/digital-twin', icon: <Box className="h-4 w-4" /> },
       { label: 'Time Machine', href: '/developers/time-machine', icon: <Clock className="h-4 w-4" /> },
     ],
