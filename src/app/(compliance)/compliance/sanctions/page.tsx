@@ -24,6 +24,7 @@ import {
   fmtDate,
 } from '@/components/role-ui';
 import { Ban, AlertTriangle, ShieldCheck, Search } from 'lucide-react';
+import { AlertActions } from '@/components/compliance/alert-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -101,6 +102,7 @@ export default async function ComplianceSanctionsPage() {
                   <TableHead>Score</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Raised</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -129,6 +131,9 @@ export default async function ComplianceSanctionsPage() {
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {fmtDate(s.createdAt)}
+                    </TableCell>
+                    <TableCell>
+                      <AlertActions alertId={s.id} status={s.status} />
                     </TableCell>
                   </TableRow>
                 ))}

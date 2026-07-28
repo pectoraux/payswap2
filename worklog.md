@@ -3838,3 +3838,47 @@ Stage Summary:
 - API docs: restructured with 36 endpoints across 14 groups (Payments, Refunds, Payouts, Customers, Invoices, Webhooks, API Keys, Activity, LP, Treasury, Customer Wallet, Notifications, Developer Console, Webhook Events). Added 10 new endpoints (5 developer console + 4 customer wallet + 1 notifications). Each endpoint has method badge (GET=emerald, POST=teal, PATCH=amber, DELETE=rose) + path + description + auth badge + parameters table + curl/Node/Python request examples + JSON response examples (200 + error). All endpoints map to real route handlers in src/app/api/.
 - tsc: **0 errors** in scope (`src/app/(auth)`, `src/app/(developer)`, `src/components/notification-center.tsx`, `src/app/api/notifications`, `src/app/api/waitlist`, `src/lib/api-auth`, `src/lib/api-docs-data`, `src/lib/developer-context`, `src/lib/developer-scenarios`). 281 pre-existing errors elsewhere (runtime/protocol/tests — out of scope).
 - lint: **0 errors, 5 warnings** (all pre-existing `payswap-read-models/no-direct-prisma-write` architectural warnings on the waitlist create + admin waitlist approve flow — same pattern used by /api/invoices/create, /api/payments/create, /api/customer/wallet/*).
+
+---
+Task ID: 14-compliance-support-settings
+Agent: compliance-support-settings-agent
+Task: Compliance demo data + fix compliance pages + fix support search + fix settings pages
+
+Work Log:
+- Read worklog tail (Tasks 10, 12, 13) — absorbed prior context: Prisma fixed (sqlite, AMLAlert/ComplianceReview/SAR models), 9 demo logins work (compliance@payswap.demo / Payswap123456), dev server OOM-constrained (4GB cgroup, no swap — don't run `bun run dev`), use Preview Panel. Architectural `payswap-read-models/*` warnings on `db.payment` reads + `db.auditLog.create` writes are pre-existing across the codebase (same pattern as `/api/invoices/create`, `/api/payments/create`, customer portal) — non-blocking.
+- Verified compliance seed `scripts/seed-compliance.ts` already existed (544 lines, idempotent via deterministic `seed-compliance-*` ids). Re-ran it: `bun run scripts/seed-compliance.ts` → 🎉 8 AML alerts, 5 KYC reviews, 5 compliance cases, 1 SAR, 2 sanctions hits (alertType contains 'SANCTION'). Mix of severities (LOW/MEDIUM/HIGH/CRITICAL), statuses (OPEN/INVESTIGATING/ESCALATED/CLOSED/SAR_FILED), scenarios (structuring, velocity, sanctions fuzzy match, high-risk corridor, PEP, multi-day structuring). All linked to existing demo customer `customer@payswap.demo` + merchant `merchant@payswap.demo` + their payments/payouts.
+- Compliance pages audit:
+  - `compliance/page.tsx` (dashboard): KPI cards (open alerts / pending KYC / sanctions hits / open cases) + recent alerts table + severity mix bars + pending KYC reviews — all working, queries match schema. No fix needed.
+  - `compliance/alerts/page.tsx`: AML alerts table WITH `<AlertActions alertId status />` per row (Investigate/Escalate/Close/File SAR wired to PATCH /api/compliance/alerts/[id]). No fix needed.
+  - `compliance/cases/page.tsx`: Investigation cases table WITH `<CaseActions caseId status />` (Assign/Escalate/Approve/Reject/Close wired to PATCH /api/compliance/cases/[id]) + SARs table. No fix needed.
+  - `compliance/kyc/page.tsx`: KYC submissions table — **MISSING action column**. Created new API endpoint `PATCH /api/compliance/kyc/[id]` (action: APPROVE/REJECT/REQUEST_REVIEW, stamps reviewerId+reviewedAt, writes AuditLog, blocks terminal-state transitions with 409). Created new `<KycActions reviewId status />` component (Approve/Reject/Flag buttons, status-aware: PENDING→all 3, REVIEW_NEEDED→Approve/Reject, APPROVED/REJECTED→terminal). Added Actions column to KYC table.
+  - `compliance/sanctions/page.tsx`: Sanctions hits table (AMLAlerts with alertType contains 'SANCTION') — **MISSING action column**. Added `<AlertActions alertId status />` per row (reuses existing component since sanctions hits are AMLAlerts).
+- Support search diagnosis:
+  - API `/api/support/search` was already SQLite-correct (`{ contains: q }` without `mode: 'insensitive'`). Verified by running the exact Prisma queries directly against the DB: search for "Ama" → returns customer "Ama Serwaa". All 5 models (Payment, Payout, Merchant, Customer, Invoice) + all queried fields (reference, description, txHash, metadata, destination, reason, name, email, phone, legalName, website, registrationNumber, number) verified to exist in schema.
+  - Real bug #1: `src/components/support/quick-search.tsx:146` and `src/components/support/search-bar.tsx:109` had TypeScript errors — object literals `{ type: 'PAYMENT', items: ... }` were widened to `{ type: string }` instead of `{ type: ResultType }`. Fixed by explicitly typing the intermediate array as `Array<{ type: ResultType; items: SearchResult[] }>` before `.filter()`.
+  - Real bug #2: QuickSearch used `<PopoverTrigger asChild>` wrapping a div containing the input. Radix Popover.Trigger treats ANY click inside the trigger as a toggle — so clicking the input (e.g. to reposition cursor) while the popover was open would toggle it closed. Switched to `<PopoverAnchor asChild>` which only positions the content without making it a toggle. The popover now opens/closes purely based on the controlled `open` state (set after fetch) + Radix's outside-click handling.
+- Settings pages audit:
+  - Merchant `settings/page.tsx` + `settings-form.tsx`: form posts to PATCH /api/merchant/settings, calls `router.refresh()` after save. Working.
+  - Merchant `settings/organization/page.tsx` + `organization-settings-form.tsx`: form posts to PATCH /api/organization/[id]. **Missing `router.refresh()` after save** — added it. Now toast.success → router.refresh() so the server-rendered read-only sidebar (name, billingEmail, etc.) updates immediately.
+  - Merchant `settings/billing/page.tsx`: uses `<BillingPlanButton />` (verified in Task 10). No fix needed.
+  - Merchant `settings/team/page.tsx`: uses `<InviteTeamMemberDialog />` (verified in Task 10). No fix needed.
+  - Merchant `settings/api-keys/page.tsx`: uses `<CreateApiKeyDialog />` (verified in Task 10, scopes storage fixed to JSON.stringify). No fix needed.
+  - Merchant `settings/webhooks/page.tsx`: uses `<CreateWebhookDialog />` (verified in Task 10, events storage fixed to JSON.stringify). No fix needed.
+  - LP `lp/settings/page.tsx` + `lp-settings-form.tsx`: form posts to PATCH /api/lp/settings (feeBps, settlementSpeedMs, capacityAdjustments). Calls `window.location.reload()` after save. API validates 0-1000 bps fees, 100-60000ms speed, ≥0 capacity. Working.
+  - Treasury/Compliance/Support/Ops/Developer: no dedicated "settings" page exists (these roles manage profile via the shell header account dropdown). Not in scope.
+
+Stage Summary:
+- Compliance seed: `scripts/seed-compliance.ts` — seeded 8 AML alerts (2 LOW, 2 MEDIUM, 2 HIGH, 2 CRITICAL; statuses OPEN/INVESTIGATING/ESCALATED/CLOSED/SAR_FILED), 5 KYC reviews (PENDING/REVIEW_NEEDED/APPROVED/REJECTED/PENDING), 5 compliance cases (OPEN/ESCALATED/CLOSED/APPROVED), 1 SAR (FILED). All linked to demo customer+merchant. Idempotent — re-running skips existing rows.
+- Compliance pages fixed:
+  - `src/app/(compliance)/compliance/kyc/page.tsx` — added Actions column with `<KycActions />` (Approve/Reject/Flag)
+  - `src/app/(compliance)/compliance/sanctions/page.tsx` — added Actions column with `<AlertActions />` (Investigate/Escalate/Close/File SAR)
+  - Dashboard, alerts, cases pages already had action buttons — verified working, no changes needed
+- New files:
+  - `src/app/api/compliance/kyc/[id]/route.ts` (135 lines) — PATCH endpoint for KYC review actions
+  - `src/components/compliance/kyc-actions.tsx` (115 lines) — Approve/Reject/Flag buttons
+- Support search: 2 TypeScript errors in `quick-search.tsx` + `search-bar.tsx` (object literal type widening) — fixed. QuickSearch popover trigger behavior (Radix PopoverTrigger toggling on input click) — fixed by switching to PopoverAnchor. API was already SQLite-correct — verified by direct DB query test (search "Ama" → returns customer "Ama Serwaa").
+- Settings pages fixed:
+  - `src/components/merchant/organization-settings-form.tsx` — added `router.refresh()` after successful save (was missing — user saved but page didn't refresh to show new values)
+  - Merchant settings/organization/billing/team/api-keys/webhooks + LP settings — all verified working, no changes needed
+- tsc: **0 errors** in `src/app/(compliance)`, `src/app/(support)`, `src/app/api/compliance`, `src/app/api/support`, `src/components/compliance`, `src/components/support`, `src/components/merchant/organization-settings-form.tsx`, `src/components/lp/lp-settings-form.tsx`, `src/app/(merchant)/dashboard/settings`, `src/app/(lp)/lp/settings` (verified via targeted grep — `bunx tsc --noEmit 2>&1 | grep "error TS" | grep -E "<in-scope-patterns>"` → 0 matches). 279 pre-existing errors remain in tests/scripts/certification/skills/protocol (out of scope, unchanged).
+- lint: **0 errors, 246 pre-existing architectural warnings** (`payswap-read-models/*` — same pattern as `/api/invoices/create`, `/api/payments/create`, customer portal — non-blocking, consistent with codebase).

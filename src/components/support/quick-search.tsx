@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/button';
 import {
   Popover,
   PopoverContent,
-  PopoverTrigger,
+  PopoverAnchor,
 } from '@/components/ui/popover';
 import { StatusBadge } from '@/components/status-badge';
 import { fmtCurrency, fmtDate } from '@/components/role-ui';
@@ -145,12 +145,13 @@ export function QuickSearch() {
     Array<{ type: ResultType; items: SearchResult[] }>
   >(() => {
     if (!results) return [];
-    return [
+    const all: Array<{ type: ResultType; items: SearchResult[] }> = [
       { type: 'PAYMENT', items: results.payments },
       { type: 'PAYOUT', items: results.payouts },
       { type: 'MERCHANT', items: results.merchants },
       { type: 'CUSTOMER', items: results.customers },
-    ].filter((g) => g.items.length > 0);
+    ];
+    return all.filter((g) => g.items.length > 0);
   }, [results]);
 
   const hasQuery = query.trim().length >= 2;
@@ -175,7 +176,7 @@ export function QuickSearch() {
     <form onSubmit={gotoFullSearch} className="flex flex-col gap-3 sm:flex-row">
       <div ref={triggerRef} className="relative flex-1">
         <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
+          <PopoverAnchor asChild>
             <div className="relative w-full">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -204,7 +205,7 @@ export function QuickSearch() {
                 </button>
               )}
             </div>
-          </PopoverTrigger>
+          </PopoverAnchor>
           <PopoverContent
             className="w-[--radix-popover-trigger-width] min-w-[320px] p-0"
             align="start"

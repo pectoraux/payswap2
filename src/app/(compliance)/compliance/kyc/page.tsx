@@ -24,6 +24,7 @@ import {
   fmtDate,
 } from '@/components/role-ui';
 import { UserCheck, Clock, CheckCircle2, XCircle } from 'lucide-react';
+import { KycActions } from '@/components/compliance/kyc-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -98,6 +99,7 @@ export default async function ComplianceKycPage() {
                   <TableHead>Reviewer</TableHead>
                   <TableHead>Submitted</TableHead>
                   <TableHead>Reviewed</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -118,6 +120,9 @@ export default async function ComplianceKycPage() {
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {fmtDate(r.reviewedAt)}
+                    </TableCell>
+                    <TableCell>
+                      <KycActions reviewId={r.id} status={r.status} />
                     </TableCell>
                   </TableRow>
                 ))}

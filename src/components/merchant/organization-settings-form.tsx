@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Loader2, Save, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -54,6 +55,7 @@ export function OrganizationSettingsForm({
   organization,
   canEdit,
 }: OrganizationSettingsFormProps) {
+  const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [name, setName] = useState(organization.name);
   const [billingEmail, setBillingEmail] = useState(organization.billingEmail);
@@ -88,6 +90,7 @@ export function OrganizationSettingsForm({
         throw new Error(data?.error || 'Failed to save organization');
       }
       toast.success('Organization saved');
+      router.refresh();
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : 'Failed to save organization',

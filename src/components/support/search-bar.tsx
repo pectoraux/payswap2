@@ -107,13 +107,16 @@ export function SearchBar({ initialQuery = '' }: { initialQuery?: string } = {})
   }, [query]);
 
   const groups: Array<{ type: ResultType; items: SearchResult[] }> = results
-    ? [
-        { type: 'PAYMENT', items: results.payments },
-        { type: 'PAYOUT', items: results.payouts },
-        { type: 'MERCHANT', items: results.merchants },
-        { type: 'CUSTOMER', items: results.customers },
-        { type: 'INVOICE', items: results.invoices ?? [] },
-      ].filter((g) => g.items.length > 0)
+    ? (() => {
+        const all: Array<{ type: ResultType; items: SearchResult[] }> = [
+          { type: 'PAYMENT', items: results.payments },
+          { type: 'PAYOUT', items: results.payouts },
+          { type: 'MERCHANT', items: results.merchants },
+          { type: 'CUSTOMER', items: results.customers },
+          { type: 'INVOICE', items: results.invoices ?? [] },
+        ];
+        return all.filter((g) => g.items.length > 0);
+      })()
     : [];
 
   const hasQuery = query.trim().length >= 2;
