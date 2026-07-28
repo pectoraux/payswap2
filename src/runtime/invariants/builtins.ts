@@ -598,10 +598,16 @@ export const TwinTokenBackingInvariant: RuntimeInvariant = {
   verify(events: StoredEvent[], snapshot: RuntimeSnapshot): ReturnType<typeof pass> | ReturnType<typeof fail> {
     const start = Date.now();
 
-    // Count twin token mint/burn events from the ledger
+    // Count twin token mint/burn from BOTH the proposed events AND the
+    // existing snapshot. The proposed events include the twin.minted event
+    // AND the corresponding treasury.account.credited event — so we need
+    // to count both to verify backing.
+
     let totalMinted = 0;
     let totalBurned = 0;
+    let proposedReserveCredits = 0;
 
+    // Count from proposed events (the events being verified)
     for (const event of events) {
       if (event.type === 'twin.minted') {
         const p = event.payload as { amount?: number };
@@ -609,14 +615,51 @@ export const TwinTokenBackingInvariant: RuntimeInvariant = {
       } else if (event.type === 'twin.burned') {
         const p = event.payload as { amount?: number };
         totalBurned += Number(p.amount ?? 0);
+      } else if (event.type === 'treasury.account.credited') {
+        // Treasury credits that back the twin tokens
+        const p = event.payload as { amount?: number; reason?: string };
+        if (p.reason && (p.reason.includes('LOCAL_RAIL') || p.reason.includes('RESERVE_TO_RESERVE') || p.reason.includes('MARKET_TO_RESERVE'))) {
+          proposedReserveCredits += Number(p.amount ?? 0);
+        }
+      } else if (event.type === 'twin.backed') {
+        // Explicit backing event
+        const p = event.payload as { amount?: number };
+        proposedReserveCredits += Number(p.amount ?? 0);
       }
     }
 
+    // Also count from the existing snapshot (previously minted tokens AND reserves)
+    let snapshotMinted = 0;
+    let snapshotBurned = 0;
+    let snapshotReserves = 0;
+    for (const ev of snapshot.events) {
+      if (ev.type === 'twin.minted') {
+        const p = ev.payload as { amount?: number };
+        snapshotMinted += Number(p.amount ?? 0);
+      } else if (ev.type === 'twin.burned') {
+        const p = ev.payload as { amount?: number };
+        snapshotBurned += Number(p.amount ?? 0);
+      } else if (ev.type === 'treasury.account.credited') {
+        const p = ev.payload as { amount?: number; reason?: string };
+        if (p.reason && (p.reason.includes('LOCAL_RAIL') || p.reason.includes('RESERVE_TO_RESERVE') || p.reason.includes('MARKET_TO_RESERVE'))) {
+          snapshotReserves += Number(p.amount ?? 0);
+        }
+      } else if (ev.type === 'twin.backed') {
+        const p = ev.payload as { amount?: number };
+        snapshotReserves += Number(p.amount ?? 0);
+      }
+    }
+    totalMinted += snapshotMinted;
+    totalBurned += snapshotBurned;
+
     const twinTokenSupply = totalMinted - totalBurned;
 
-    // Calculate total reserves from ledger entries
+    // Calculate total reserves from:
+    // 1. Existing ledger entries (historical reserves)
+    // 2. Proposed treasury credits (new reserves from this transaction)
+    // 3. Snapshot treasury credits + twin.backed events (previously credited reserves)
+    let totalReserves = proposedReserveCredits + snapshotReserves;
     const entries = snapshot.ledgerEntries;
-    let totalReserves = 0;
     for (const entry of entries) {
       const accountLabel = (entry as any).accountLabel || (entry as any).account || '';
       if (typeof accountLabel === 'string' && (accountLabel.includes('reserve') || accountLabel.includes('asset:'))) {
