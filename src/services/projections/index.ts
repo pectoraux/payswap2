@@ -7,12 +7,22 @@
  *   - AnalyticsProjection: updates metrics (via ops registry)
  *   - NotificationProjection: could push notifications (future)
  *
+ * INTEGRATE-1 (runtime-integration-agent): Added two RUNTIME event
+ * subscribers (RefundPrismaSync + PayoutPrismaSync) that listen directly to
+ * the runtime EventStore (not the application eventBus) and upsert the Prisma
+ * Refund/Payout rows as derived projections. The PaymentProjection already
+ * writes to Prisma from inside the runtime kernel; refunds + payouts are
+ * synced here because their runtime projections are frozen.
+ *
  * Projections are registered once at module load. They use the global
- * eventBus singleton, so they work across Next.js dev module re-instantiation.
+ * eventBus + runtime singletons, so they work across Next.js dev module
+ * re-instantiation.
  */
 
 import { eventBus, type DomainEvent } from '../event-bus';
 import { db } from '@/lib/db';
+import { runtime } from '@/runtime';
+import type { StoredEvent } from '@/runtime';
 
 // ─── Activity Feed / Audit Log Projection ────────────────────────────────────
 // Every domain event creates an AuditLog entry, which powers:
@@ -130,11 +140,190 @@ eventBus.on('payment.completed', async (event: DomainEvent) => {
   }
 });
 
+// ─── INTEGRATE-1: Runtime Event Subscribers (Prisma sync) ───────────────────
+//
+// These subscribe to the RUNTIME EventStore (not the application eventBus)
+// and upsert Prisma rows as derived projections. The runtime is the source of
+// truth; Prisma is a query-optimized read model.
+//
+//   refund.requested + refund.executed → upsert Prisma Refund
+//   payout.recorded + payout.completed → upsert Prisma Payout
+//
+// Best-effort: failures are logged but never raised into the dispatcher
+// pipeline (the in-memory runtime projection is still authoritative).
+
+let runtimeSubscribersRegistered = false;
+function ensureRuntimeSubscribers() {
+  if (runtimeSubscribersRegistered) return;
+  runtimeSubscribersRegistered = true;
+
+  runtime.eventStore.subscribe(async (events: StoredEvent[]) => {
+    for (const ev of events) {
+      try {
+        if (ev.type === 'refund.requested') {
+          await syncRefundRecorded(ev);
+        } else if (ev.type === 'refund.executed') {
+          await syncRefundExecuted(ev);
+        } else if (ev.type === 'payout.recorded') {
+          await syncPayoutRecorded(ev);
+        } else if (ev.type === 'payout.completed') {
+          await syncPayoutCompleted(ev);
+        }
+      } catch {
+        // Non-fatal — Prisma projection lag is reconciled by the next backfill.
+      }
+    }
+  });
+}
+
+interface RefundRequestedPayload {
+  refundId: string;
+  merchantId: string;
+  paymentId: string;
+  amount: number;
+  type: string;
+  reason: string | null;
+  status: string;
+  requestedBy: string;
+  environment: string;
+  createdAt: number;
+}
+
+interface RefundExecutedPayload {
+  refundId: string;
+  executedAt: number;
+  processedAt?: number;
+}
+
+async function syncRefundRecorded(ev: StoredEvent): Promise<void> {
+  const p = ev.payload as unknown as RefundRequestedPayload;
+  await db.refund.upsert({
+    where: { id: p.refundId },
+    create: {
+      id: p.refundId,
+      merchantId: p.merchantId,
+      paymentId: p.paymentId,
+      amount: p.amount,
+      type: p.type,
+      reason: p.reason,
+      status: p.status,
+      requestedBy: p.requestedBy,
+      environment: p.environment,
+      createdAt: new Date(p.createdAt),
+    },
+    update: {
+      status: p.status,
+    },
+  });
+}
+
+async function syncRefundExecuted(ev: StoredEvent): Promise<void> {
+  const p = ev.payload as unknown as RefundExecutedPayload;
+  const processedAt = p.processedAt ?? p.executedAt;
+  await db.refund.update({
+    where: { id: p.refundId },
+    data: {
+      status: 'PROCESSED',
+      processedAt: new Date(processedAt),
+    },
+  }).catch(() => {
+    // Non-fatal — refund row may not yet exist if requested event is in flight.
+  });
+}
+
+interface PayoutRecordedPayload {
+  payoutId: string;
+  merchantId: string;
+  method: string;
+  sourceAmount: number;
+  sourceAsset: string;
+  sourceCurrency: string;
+  destinationCurrency: string;
+  destination?: string | null;
+  fxRate: number;
+  feeBps: number;
+  fee: number;
+  netAmount: number;
+  status: string;
+  txHash: string;
+  evidence?: string | null;
+  reason?: string | null;
+  environment?: string;
+  actorId?: string;
+  createdAt: number;
+  processedAt?: number | null;
+  completedAt?: number | null;
+}
+
+interface PayoutCompletedPayload {
+  payoutId: string;
+  amount: number;
+  net: number;
+  fee: number;
+  txHash: string;
+  completedAt: number;
+}
+
+async function syncPayoutRecorded(ev: StoredEvent): Promise<void> {
+  const p = ev.payload as unknown as PayoutRecordedPayload;
+  const env = p.environment ?? ev.metadata.environment;
+  await db.payout.upsert({
+    where: { id: p.payoutId },
+    create: {
+      id: p.payoutId,
+      merchantId: p.merchantId,
+      method: p.method,
+      sourceAmount: p.sourceAmount,
+      sourceAsset: p.sourceAsset,
+      sourceCurrency: p.sourceCurrency,
+      destinationCurrency: p.destinationCurrency,
+      destination: p.destination ?? null,
+      fxRate: p.fxRate,
+      feeBps: p.feeBps,
+      fee: p.fee,
+      netAmount: p.netAmount,
+      status: p.status,
+      txHash: p.txHash,
+      evidence: p.evidence ?? null,
+      reason: p.reason ?? null,
+      environment: env,
+      createdAt: new Date(p.createdAt),
+      processedAt: p.processedAt ? new Date(p.processedAt) : null,
+      completedAt: p.completedAt ? new Date(p.completedAt) : null,
+    },
+    update: {
+      status: p.status,
+      fee: p.fee,
+      netAmount: p.netAmount,
+    },
+  });
+}
+
+async function syncPayoutCompleted(ev: StoredEvent): Promise<void> {
+  const p = ev.payload as unknown as PayoutCompletedPayload;
+  await db.payout.update({
+    where: { id: p.payoutId },
+    data: {
+      status: 'COMPLETED',
+      txHash: p.txHash,
+      processedAt: new Date(p.completedAt),
+      completedAt: new Date(p.completedAt),
+    },
+  }).catch(() => {
+    // Non-fatal — payout row may not yet exist if recorded event is in flight.
+  });
+}
+
+// Register on module load.
+ensureRuntimeSubscribers();
+
 // ─── Self-registration ───────────────────────────────────────────────────────
 // This module self-registers on import. Importing it anywhere in the server
 // initializes all projections. The unified shell layout is a good place.
 export function initProjections() {
-  // Projections are already registered via eventBus.on() above.
-  // This function exists so the import can be explicit and tree-shakeable.
+  // Projections are already registered via eventBus.on() above + the runtime
+  // event store subscriber. This function exists so the import can be
+  // explicit and tree-shakeable.
+  ensureRuntimeSubscribers();
   return true;
 }

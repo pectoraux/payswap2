@@ -1,17 +1,35 @@
 /**
  * Payment Service — the single source of truth for payment creation.
  *
- * Every payment creation (API route, world simulator, admin simulate)
- * MUST go through this service. This ensures:
- *   1. Business rules are enforced once
- *   2. Domain events are always emitted
- *   3. Webhooks, audit logs, and activity feed are always updated
- *   4. The protocol trace is always recorded
+ * INTEGRATE-1 (runtime-integration-agent): Every payment now flows through the
+ * runtime kernel via `runtime.dispatcher.dispatch({ type: 'payment.create' })`.
+ * The dispatcher compiles the command into events (payment.recorded +
+ * payment.completed + ledger.entry.posted), verifies the constitution
+ * invariants, appends them to the EventStore, and the PaymentProjection
+ * upserts the Prisma `Payment` row as a derived projection.
+ *
+ * Application-level concerns (customer record upsert, webhook delivery, audit
+ * log) happen AFTER the dispatch succeeds. The `eventBus` events emitted here
+ * are now a NOTIFICATION layer (not the source of truth) — they tell the
+ * webhook/analytics projections that a payment happened, but the financial
+ * state lives in the runtime EventStore.
+ *
+ *   paymentService.create()
+ *     ├── 1. Upsert CustomerRecord (Prisma — application concern)
+ *     ├── 2. runtime.dispatcher.dispatch({ type: 'payment.create', ... })
+ *     │       ├── PaymentCommandHandler produces events
+ *     │       ├── InvariantEngine verifies constitution
+ *     │       ├── EventStore.append (atomic)
+ *     │       └── PaymentProjection upserts Prisma Payment
+ *     └── 3. eventBus.emit (notification layer for webhooks/audit)
  */
 
 import { db } from '@/lib/db';
 import { eventBus, createEvent } from './event-bus';
 import { v4 as uuidv4 } from 'uuid';
+import { runtime } from '@/runtime';
+import type { Environment } from '@/runtime';
+import type { DispatchResult } from '@/runtime';
 
 export interface CreatePaymentParams {
   merchantId: string;
@@ -39,11 +57,14 @@ export interface PaymentResult {
   amount: number;
   fee: number;
   netAmount: number;
+  // INTEGRATE-1: expose the dispatch result so callers can inspect the
+  // appended events (for tracing, the inspector, and tests).
+  dispatch?: DispatchResult;
 }
 
 class PaymentServiceClass {
   async create(params: CreatePaymentParams): Promise<PaymentResult> {
-    const ts = params.timestamp || new Date();
+    const ts = params.timestamp ?? new Date();
     const success = params.success ?? Math.random() < 0.95;
     const lpFeeBps = params.lpFeeBps ?? 80;
     const fee = Math.round(params.amount * (lpFeeBps / 10000) * 100) / 100;
@@ -52,7 +73,7 @@ class PaymentServiceClass {
       ? `SIM-${uuidv4().slice(0, 8)}`
       : `PAY-${uuidv4().slice(0, 8)}`;
 
-    // 1. Find or create customer record
+    // ── 1. Find or create customer record (application concern) ──────────
     let customerId: string | null = null;
     if (params.customerEmail && params.customerName) {
       let customer = await db.customerRecord.findFirst({
@@ -77,35 +98,55 @@ class PaymentServiceClass {
       customerId = customer.id;
     }
 
-    // 2. Create payment
-    const payment = await db.payment.create({
-      data: {
+    // ── 2. Dispatch through the runtime kernel ────────────────────────────
+    // The dispatcher compiles the command, verifies constitution invariants,
+    // appends events to the EventStore, and the PaymentProjection upserts the
+    // Prisma Payment row. This is the ONLY path to financial mutation.
+    const dispatch = await runtime.dispatcher.dispatch({
+      type: 'payment.create',
+      payload: {
         merchantId: params.merchantId,
-        customerId: null, // Payment.customerId references Customer table, not CustomerRecord
+        customerId: customerId ?? undefined,
         amount: params.amount,
         currency: params.currency,
         sourceCurrency: params.currency,
         destinationCurrency: params.currency,
-        status: success ? 'COMPLETED' : 'FAILED',
         method: params.method,
         corridor: `${params.currency}-${params.currency}`,
-        lpId: params.lpId || 'lp_simulated',
-        fee,
-        netAmount,
-        fxRate: 1,
-        reference,
         description: params.description,
-        settledAt: success ? ts : null,
+        reference,
+        lpId: params.lpId ?? 'lp_simulated',
+        lpFeeBps,
+        success,
+        customerName: params.customerName,
+        customerEmail: params.customerEmail,
+        actorId: params.actorId,
+        timestamp: ts.getTime(),
         environment: params.environment,
-        createdAt: ts,
-        updatedAt: ts,
+      },
+      metadata: {
+        actor: { id: params.actorId ?? 'system:payment-service', role: 'merchant' },
+        environment: (params.environment === 'live' ? 'live' : 'sandbox') as Environment,
+        correlationId: `payment-create-${uuidv4()}`,
+        source: 'api',
       },
     });
 
-    // 3. Emit domain events
+    if (!dispatch.success || !dispatch.entityId) {
+      throw new Error(
+        `Payment dispatch failed: ${dispatch.error ?? dispatch.message}`,
+      );
+    }
+
+    const paymentId = dispatch.entityId;
+    const status = success ? 'COMPLETED' : 'FAILED';
+
+    // ── 3. Emit application-level events (notification layer) ─────────────
+    // These are NOT the source of truth — they notify webhook/analytics
+    // projections. The financial truth lives in the runtime EventStore.
     if (params.emitEvents !== false) {
       const basePayload = {
-        paymentId: payment.id,
+        paymentId,
         reference,
         amount: params.amount,
         currency: params.currency,
@@ -120,7 +161,7 @@ class PaymentServiceClass {
 
       await eventBus.emit(createEvent({
         type: 'payment.created',
-        aggregateId: payment.id,
+        aggregateId: paymentId,
         aggregateType: 'Payment',
         merchantId: params.merchantId,
         environment: params.environment,
@@ -131,7 +172,7 @@ class PaymentServiceClass {
       if (success) {
         await eventBus.emit(createEvent({
           type: 'payment.completed',
-          aggregateId: payment.id,
+          aggregateId: paymentId,
           aggregateType: 'Payment',
           merchantId: params.merchantId,
           environment: params.environment,
@@ -141,7 +182,7 @@ class PaymentServiceClass {
       } else {
         await eventBus.emit(createEvent({
           type: 'payment.failed',
-          aggregateId: payment.id,
+          aggregateId: paymentId,
           aggregateType: 'Payment',
           merchantId: params.merchantId,
           environment: params.environment,
@@ -152,12 +193,13 @@ class PaymentServiceClass {
     }
 
     return {
-      id: payment.id,
+      id: paymentId,
       reference,
-      status: payment.status,
+      status,
       amount: params.amount,
       fee,
       netAmount,
+      dispatch,
     };
   }
 }

@@ -5,6 +5,20 @@
  * Handlers are PURE: they compute events, they don't append them.
  *
  * The dispatcher handles the actual append (after invariant verification).
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * INTEGRATE-1 (runtime-integration-agent): The PaymentCommandHandler,
+ * RefundCommandHandler, and PayoutCommandHandler now produce the FULL event
+ * chain needed by the Economic Kernel:
+ *
+ *   payment.create  → payment.recorded + payment.completed + ledger.entry.posted
+ *   refund.create   → refund.requested  + refund.executed  + ledger.entry.posted
+ *   payout.create   → payout.recorded   + payout.completed + ledger.entry.posted
+ *
+ * Each "ledger.entry.posted" event contains a balanced double-entry journal
+ * (Σ debits == Σ credits) so the Economic Ledger can derive per-payment
+ * accounting entries from the event store alone.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import type { RuntimeCommand } from './types';
@@ -25,21 +39,138 @@ import type {
   WalletDebitCommand,
   WalletReserveCommand,
   WalletReleaseCommand,
+  CreatePayoutCommand,
+  CreatePayoutPayload,
 } from './types';
+
+// ─── Enhanced Payloads (INTEGRATE-1) ──────────────────────────────────────
+//
+// The frozen `CreatePaymentPayload` in types.ts is intentionally minimal so we
+// accept the additional financial fields (lpId, lpFeeBps, success, customer
+// contact) the runtime needs to compile a complete payment + ledger entry.
+// The service layer passes these via the command payload; the handler reads
+// them through this extended interface. No mutation of the frozen kernel.
+
+interface EnhancedPaymentPayload extends CreatePaymentPayload {
+  lpId?: string;
+  lpFeeBps?: number;
+  success?: boolean;
+  customerName?: string;
+  customerEmail?: string;
+  actorId?: string;
+  timestamp?: number;
+  environment?: string;
+  description?: string;
+  reference?: string;
+}
+
+interface EnhancedRefundPayload extends CreateRefundPayload {
+  environment?: string;
+  actorId?: string;
+  timestamp?: number;
+  reason?: string;
+}
+
+interface EnhancedPayoutPayload extends CreatePayoutPayload {
+  feeBps?: number;
+  fee?: number;
+  netAmount?: number;
+  txHash?: string;
+  evidence?: string;
+  destination?: string;
+  environment?: string;
+  actorId?: string;
+  timestamp?: number;
+  success?: boolean;
+}
+
+// ─── Journal helpers (INTEGRATE-1) ────────────────────────────────────────
+//
+// Pure helpers that build balanced `ledger.entry.posted` events. Every entry
+// has Σ debits == Σ credits (within a cent of floating-point epsilon).
+
+interface JournalLine {
+  account: string;
+  debit: number;
+  credit: number;
+  description?: string;
+}
+
+function buildLedgerEntryEvent(
+  env: string,
+  correlationId: string,
+  paymentRef: string,
+  description: string,
+  lines: JournalLine[],
+): UncommittedEvent {
+  const debitSum = lines.reduce((s, l) => s + l.debit, 0);
+  const creditSum = lines.reduce((s, l) => s + l.credit, 0);
+  return {
+    type: 'ledger.entry.posted',
+    streamId: `${env}:ledger:${paymentRef}`,
+    streamType: 'ledger',
+    kind: 'domain',
+    payload: {
+      entryId: uid('je'),
+      refId: paymentRef,
+      refType: 'payment',
+      description,
+      lines,
+      debitTotal: Math.round(debitSum * 100) / 100,
+      creditTotal: Math.round(creditSum * 100) / 100,
+      isBalanced: Math.abs(debitSum - creditSum) < 0.01,
+      postedAt: Date.now(),
+      correlationId,
+    } as unknown as Record<string, unknown>,
+  };
+}
 
 // ─── Payment Command Handler ───────────────────────────────────────────────
 
-/** Handles "payment.create" — produces a payment.recorded event. */
+/**
+ * Handles "payment.create" — produces the full payment lifecycle event chain:
+ *
+ *   1. payment.recorded   (status PENDING) — always
+ *   2. payment.completed  (status COMPLETED) — when payload.success !== false
+ *      OR
+ *      payment.failed     (status FAILED)    — when payload.success === false
+ *   3. ledger.entry.posted — only when the payment succeeds, containing the
+ *      balanced double-entry journal:
+ *        Debit  asset:merchant_receivable        amount
+ *        Credit liability:lp_payable             netAmount
+ *        Credit equity:fee_income                fee
+ *
+ * The PaymentProjection consumes (1) + (2) to upsert the Prisma Payment row.
+ * The ledger event (3) is the source of truth for the Economic Ledger's
+ * per-payment journal entries.
+ */
 export class PaymentCommandHandler implements CommandHandler<CreatePaymentCommand> {
   readonly commandType = 'payment.create';
-  readonly description = 'Create a new payment (produces payment.recorded event)';
+  readonly description = 'Create a new payment (produces payment.recorded + payment.completed/failed + ledger.entry.posted)';
 
   handle(command: CreatePaymentCommand, _snapshot: RuntimeSnapshot): CommandResult {
-    const payload = command.payload;
+    const payload = command.payload as EnhancedPaymentPayload;
+    const env = command.metadata.environment;
     const paymentId = uid('pay');
-    const streamId = `${command.metadata.environment}:payment:${paymentId}`;
+    const streamId = `${env}:payment:${paymentId}`;
+    const now = payload.timestamp ?? Date.now();
 
-    const event: UncommittedEvent = {
+    // Compile financial terms (fee / net) — same formula as the legacy
+    // paymentService so the projected row matches the existing schema.
+    const lpId = payload.lpId ?? 'lp_simulated';
+    const lpFeeBps = payload.lpFeeBps ?? 80;
+    const fee = Math.round(payload.amount * (lpFeeBps / 10000) * 100) / 100;
+    const success = payload.success ?? true;
+    const netAmount = success
+      ? Math.round((payload.amount - fee) * 100) / 100
+      : 0;
+    const reference = payload.reference ?? `PAY-${paymentId.slice(-8)}`;
+    const corridor = payload.corridor ?? `${payload.currency}-${payload.currency}`;
+
+    const events: UncommittedEvent[] = [];
+
+    // 1. payment.recorded (PENDING) — the immutable financial fact.
+    events.push({
       type: 'payment.recorded',
       streamId,
       streamType: 'payment',
@@ -48,48 +179,117 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
         paymentId,
         merchantId: payload.merchantId,
         customerId: payload.customerId ?? null,
-        reference: payload.reference ?? null,
+        reference,
         amount: payload.amount,
         currency: payload.currency,
-        sourceCurrency: payload.sourceCurrency ?? null,
-        destinationCurrency: payload.destinationCurrency ?? null,
+        sourceCurrency: payload.sourceCurrency ?? payload.currency,
+        destinationCurrency: payload.destinationCurrency ?? payload.currency,
         status: 'PENDING',
         method: payload.method ?? null,
-        corridor: payload.corridor ?? null,
-        lpId: null,
-        fee: 0,
-        netAmount: payload.amount,
+        corridor,
+        lpId,
+        fee,
+        netAmount,
         fxRate: 1,
         description: payload.description ?? null,
-        createdAt: Date.now(),
+        createdAt: now,
         settledAt: null,
+        customerName: payload.customerName ?? null,
+        customerEmail: payload.customerEmail ?? null,
+        environment: env,
+        actorId: payload.actorId ?? command.metadata.actor.id,
       } as unknown as Record<string, unknown>,
-    };
+    });
+
+    // 2. payment.completed OR payment.failed — the lifecycle transition.
+    if (success) {
+      events.push({
+        type: 'payment.completed',
+        streamId,
+        streamType: 'payment',
+        kind: 'domain',
+        payload: {
+          paymentId,
+          intentId: command.metadata.commandId ?? command.metadata.correlationId,
+          planId: `plan_${paymentId}`,
+          amount: payload.amount,
+          from: payload.sourceCurrency ?? payload.currency,
+          to: payload.destinationCurrency ?? payload.currency,
+          lpId,
+          feeBps: lpFeeBps,
+          fee,
+          netAmount,
+          settledAt: now,
+        } as unknown as Record<string, unknown>,
+      });
+
+      // 3. ledger.entry.posted — balanced double-entry for the settlement.
+      events.push(buildLedgerEntryEvent(
+        env,
+        command.metadata.correlationId,
+        paymentId,
+        `Payment ${paymentId} settled (amount=${payload.amount} ${payload.currency}, fee=${fee}, net=${netAmount})`,
+        [
+          { account: 'asset:merchant_receivable', debit: payload.amount, credit: 0, description: `Merchant receivable for ${payload.merchantId}` },
+          { account: 'liability:lp_payable', debit: 0, credit: netAmount, description: `LP payable to ${lpId}` },
+          { account: 'equity:fee_income', debit: 0, credit: fee, description: `Fee income (${lpFeeBps} bps)` },
+        ],
+      ));
+    } else {
+      events.push({
+        type: 'payment.failed',
+        streamId,
+        streamType: 'payment',
+        kind: 'domain',
+        payload: {
+          paymentId,
+          intentId: command.metadata.commandId ?? command.metadata.correlationId,
+          reason: 'Simulated failure',
+          failedAt: now,
+        } as unknown as Record<string, unknown>,
+      });
+    }
 
     return {
       success: true,
       commandType: this.commandType,
-      events: [event],
+      events,
       streamId,
       entityId: paymentId,
-      message: `Payment ${paymentId} created`,
+      message: `Payment ${paymentId} ${success ? 'recorded + completed' : 'recorded + failed'} (${events.length} events)`,
     };
   }
 }
 
 // ─── Refund Command Handlers ───────────────────────────────────────────────
 
-/** Handles "refund.create" — produces a refund.requested event. */
+/**
+ * Handles "refund.create" — produces the full refund lifecycle event chain:
+ *
+ *   1. refund.requested  (status PENDING) — always
+ *   2. refund.executed   (status PROCESSED) — always (refunds in the app are
+ *      processed synchronously; the manual approve/reject flow is a separate
+ *      concern that goes through refund.execute)
+ *   3. ledger.entry.posted — balanced reversal of the original payment:
+ *        Debit  liability:lp_payable             refundAmount
+ *        Debit  equity:fee_income                 proportionalFee (0 for now)
+ *        Credit asset:merchant_receivable         refundAmount
+ */
 export class RefundCommandHandler implements CommandHandler<CreateRefundCommand> {
   readonly commandType = 'refund.create';
-  readonly description = 'Create a new refund request (produces refund.requested event)';
+  readonly description = 'Create a new refund (produces refund.requested + refund.executed + ledger.entry.posted)';
 
   handle(command: CreateRefundCommand, _snapshot: RuntimeSnapshot): CommandResult {
-    const payload = command.payload;
+    const payload = command.payload as EnhancedRefundPayload;
+    const env = command.metadata.environment;
     const refundId = uid('ref');
-    const streamId = `${command.metadata.environment}:refund:${refundId}`;
+    const streamId = `${env}:refund:${refundId}`;
+    const now = payload.timestamp ?? Date.now();
 
-    const event: UncommittedEvent = {
+    const events: UncommittedEvent[] = [];
+
+    // 1. refund.requested (PENDING)
+    events.push({
       type: 'refund.requested',
       streamId,
       streamType: 'refund',
@@ -103,18 +303,44 @@ export class RefundCommandHandler implements CommandHandler<CreateRefundCommand>
         reason: payload.reason ?? null,
         status: 'PENDING',
         requestedBy: payload.requestedBy,
-        environment: command.metadata.environment,
-        createdAt: Date.now(),
+        environment: env,
+        createdAt: now,
       } as unknown as Record<string, unknown>,
-    };
+    });
+
+    // 2. refund.executed (PROCESSED) — refunds are processed synchronously
+    //    in the application; the approve/reject flow is a separate concern.
+    events.push({
+      type: 'refund.executed',
+      streamId,
+      streamType: 'refund',
+      kind: 'domain',
+      payload: {
+        refundId,
+        executedAt: now + 1, // +1ms to ensure ordering after requested
+        processedAt: now + 1,
+      } as unknown as Record<string, unknown>,
+    });
+
+    // 3. ledger.entry.posted — balanced reversal.
+    events.push(buildLedgerEntryEvent(
+      env,
+      command.metadata.correlationId,
+      refundId,
+      `Refund ${refundId} executed (payment=${payload.paymentId}, amount=${payload.amount})`,
+      [
+        { account: 'liability:lp_payable', debit: payload.amount, credit: 0, description: `Reverse LP payable for refund of ${payload.paymentId}` },
+        { account: 'asset:merchant_receivable', debit: 0, credit: payload.amount, description: `Reverse merchant receivable for ${payload.merchantId}` },
+      ],
+    ));
 
     return {
       success: true,
       commandType: this.commandType,
-      events: [event],
+      events,
       streamId,
       entityId: refundId,
-      message: `Refund ${refundId} created`,
+      message: `Refund ${refundId} requested + executed (${events.length} events)`,
     };
   }
 }
@@ -167,6 +393,114 @@ export class ExecuteRefundCommandHandler implements CommandHandler<ExecuteRefund
       streamId,
       entityId: payload.refundId,
       message: `Refund ${payload.refundId} executed`,
+    };
+  }
+}
+
+// ─── Payout Command Handler (INTEGRATE-1) ──────────────────────────────────
+
+/**
+ * Handles "payout.create" — produces the full payout lifecycle event chain:
+ *
+ *   1. payout.recorded   (status COMPLETED) — always
+ *   2. payout.completed  — always (payouts in the app complete synchronously)
+ *   3. ledger.entry.posted — balanced double-entry:
+ *        Debit  liability:merchant_payable    netAmount + fee
+ *        Credit asset:cash                    netAmount
+ *        Credit equity:fee_income             fee
+ *
+ * The Prisma Payout table is updated by the payout runtime subscriber
+ * registered in src/services/projections/index.ts.
+ */
+export class PayoutCommandHandler implements CommandHandler<CreatePayoutCommand> {
+  readonly commandType = 'payout.create';
+  readonly description = 'Create a new payout (produces payout.recorded + payout.completed + ledger.entry.posted)';
+
+  handle(command: CreatePayoutCommand, _snapshot: RuntimeSnapshot): CommandResult {
+    const payload = command.payload as EnhancedPayoutPayload;
+    const env = command.metadata.environment;
+    const payoutId = uid('payout');
+    const streamId = `${env}:payout:${payoutId}`;
+    const now = payload.timestamp ?? Date.now();
+
+    const sourceAmount = payload.sourceAmount;
+    const feeBps = payload.feeBps ?? 50;
+    const fee = payload.fee ?? Math.round(sourceAmount * (feeBps / 10000) * 100) / 100;
+    const netAmount = payload.netAmount ?? Math.round((sourceAmount - fee) * 100) / 100;
+    const success = payload.success ?? true;
+    const txHash = payload.txHash ?? `sim_tx_${payoutId.slice(-8)}`;
+
+    const events: UncommittedEvent[] = [];
+
+    // 1. payout.recorded (COMPLETED — payouts settle synchronously)
+    events.push({
+      type: 'payout.recorded',
+      streamId,
+      streamType: 'payout',
+      kind: 'domain',
+      payload: {
+        payoutId,
+        merchantId: payload.merchantId,
+        method: payload.method,
+        sourceAmount,
+        sourceAsset: payload.sourceAsset,
+        sourceCurrency: payload.sourceCurrency,
+        destinationCurrency: payload.destinationCurrency,
+        destination: payload.destination ?? null,
+        fxRate: 1,
+        feeBps,
+        fee,
+        netAmount,
+        status: success ? 'COMPLETED' : 'FAILED',
+        txHash,
+        evidence: payload.evidence ?? JSON.stringify({ source: 'open_banking', verificationLevel: 'institutional' }),
+        reason: payload.reason ?? null,
+        environment: env,
+        actorId: payload.actorId ?? command.metadata.actor.id,
+        createdAt: now,
+        processedAt: success ? now : null,
+        completedAt: success ? now : null,
+      } as unknown as Record<string, unknown>,
+    });
+
+    if (success) {
+      // 2. payout.completed
+      events.push({
+        type: 'payout.completed',
+        streamId,
+        streamType: 'payout',
+        kind: 'domain',
+        payload: {
+          payoutId,
+          amount: sourceAmount,
+          net: netAmount,
+          fee,
+          txHash,
+          completedAt: now,
+        } as unknown as Record<string, unknown>,
+      });
+
+      // 3. ledger.entry.posted — balanced payout entry.
+      events.push(buildLedgerEntryEvent(
+        env,
+        command.metadata.correlationId,
+        payoutId,
+        `Payout ${payoutId} completed (gross=${sourceAmount}, fee=${fee}, net=${netAmount})`,
+        [
+          { account: 'liability:merchant_payable', debit: sourceAmount, credit: 0, description: `Merchant payable for ${payload.merchantId}` },
+          { account: 'asset:cash', debit: 0, credit: netAmount, description: `Cash disbursed to ${payload.merchantId}` },
+          { account: 'equity:fee_income', debit: 0, credit: fee, description: `Payout fee income (${feeBps} bps)` },
+        ],
+      ));
+    }
+
+    return {
+      success: true,
+      commandType: this.commandType,
+      events,
+      streamId,
+      entityId: payoutId,
+      message: `Payout ${payoutId} ${success ? 'recorded + completed' : 'recorded + failed'} (${events.length} events)`,
     };
   }
 }
@@ -490,6 +824,7 @@ export const BUILTIN_HANDLERS: CommandHandler[] = [
   new PaymentCommandHandler(),
   new RefundCommandHandler(),
   new ExecuteRefundCommandHandler(),
+  new PayoutCommandHandler(),
   new ReserveLiquidityCommandHandler(),
   new ReleaseLiquidityCommandHandler(),
   new WalletCreditCommandHandler(),

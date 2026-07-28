@@ -24,6 +24,7 @@ export {
   PaymentCommandHandler,
   RefundCommandHandler,
   ExecuteRefundCommandHandler,
+  PayoutCommandHandler,
   ReserveLiquidityCommandHandler,
   ReleaseLiquidityCommandHandler,
   WalletCreditCommandHandler,
