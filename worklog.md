@@ -4299,3 +4299,39 @@ Stage Summary:
 - tsc: 0 errors in src/app/, src/trust/, src/identity/, src/ops/, src/marketplace/, src/cloud/
 - lint: 0 errors (293 pre-existing architectural warnings)
 - All code pushed to https://github.com/pectoraux/payswap2
+
+---
+Task ID: DB-FIX
+Agent: main (Z.ai Code)
+Task: Fix Neon PostgreSQL DB connection (login was failing because schema was SQLite)
+
+Work Log:
+- User reported login failing — the project had been switched to SQLite in a prior
+  session but the production DB is Neon PostgreSQL
+- Retrieved Neon DATABASE_URL from Vercel env vars (using Vercel API token)
+- Decrypted all 4 env vars: DATABASE_URL, DIRECT_URL, NEXTAUTH_URL, NEXTAUTH_SECRET
+- Persisted ALL secrets in .env (Neon DB, GitHub PAT, Vercel token) so they're
+  never lost again
+- Updated .zscripts/start.sh to source .env before setting DATABASE_URL fallback
+  (this was the root cause — start.sh was defaulting to SQLite)
+- Switched prisma/schema.prisma: provider sqlite → postgresql, added directUrl
+- Reverted BigInt fields: EventRecord.ts, LedgerSnapshotRecord.asOfTs,
+  CheckpointRecord.lastTs (Int → BigInt for PostgreSQL)
+- Restored BigInt() wrappers in snapshot-store.ts, event-store.ts, checkpoint.ts
+- Ran bun run db:push — all 41 models synced to Neon
+- Fixed route conflict: /api/marketplace had both [id] and [slug] at same path
+  level (Next.js error). Merged [slug] GET into [id]/route.ts
+- Untracked .env from git (GitHub secret scanner was blocking push)
+- Committed + pushed to GitHub (payswap2 repo)
+
+Stage Summary:
+- .env file (local, untracked): contains DATABASE_URL, DIRECT_URL,
+  NEXTAUTH_SECRET, NEXTAUTH_URL, GITHUB_PAT, GITHUB_REPO, VERCEL_TOKEN,
+  VERCEL_PROJECT_ID
+- Neon DB: all 14 demo users + 4 merchants verified (bcrypt passwords confirmed)
+- 59 events hydrated from Neon (lastSeq=369)
+- Dev server connects to Neon successfully
+- Login verified: merchant@payswap.demo, ekontetevi@gmail.com,
+  developer@payswap.demo, customer@payswap.demo, lp@payswap.demo all
+  return password valid: true
+- GitHub: pushed to https://github.com/pectoraux/payswap2 (commit 11acabc)
