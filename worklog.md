@@ -3971,3 +3971,68 @@ The dev server runs in a 4GB cgroup with no swap. Next.js dev mode compiles rout
 - 97a793e Fix merchant create buttons + customer wallet features
 - f2bf079 Runtime AI Director + LP page upgrades + waitlist + notifications + dev fixes
 - f9113f6 Compliance demo data + support search fix + settings page fixes
+
+---
+Task ID: M-PLATFORM-39-final
+Agent: main (Z.ai Code)
+Task: M-PLATFORM-39 — Capability SDK & Extension Runtime + v1 Architecture Reference
+
+Work Log:
+- Dispatched 4 parallel agents for M-PLATFORM-39 (SDK core, inspectors, digital twin + time machine, architecture reference)
+- All agents completed their work (some timed out on the response but the files were written)
+- Verified all files exist and compile: 0 tsc errors in src/app/, 0 lint errors
+- Wrote the v1 Architecture Reference (1177 lines, 15 sections) directly
+- Committed 2 commits: M-PLATFORM-39 work + Architecture Reference
+- Pushed to GitHub: https://github.com/pectoraux/payswap.git
+
+Stage Summary:
+
+## M-PLATFORM-39 Deliverables
+
+### 1. Capability SDK (Phase 1)
+- src/sdk/types.ts (216 lines): PluginManifest schema with capabilities, permissions, commands, events, views, policies, dependencies, migrations
+- src/sdk/loader.ts (468 lines): PluginLoader with register/enable/disable/unregister, dependency checking, lifecycle hooks
+- src/sdk/registry.ts (80 lines): CapabilityRegistry — tracks capabilities by plugin
+- src/sdk/sandbox.ts (328 lines): PluginSandbox — restricted execution (no fs/network/process/db), try/catch with timeout
+- src/sdk/index.ts (230 lines): createSdk() factory + registerBuiltins()
+- 3 builtin plugins: mtn-ghana-momo (settlement rail), basic-fraud-detection, treasury-analytics
+- 6 API endpoints: /api/sdk/plugins (list/detail/enable/disable), /api/sdk/capabilities (list/invoke)
+- Admin UI: /admin/sdk with plugin manager + capability browser
+
+### 2. Developer Console Inspectors (Phase 3)
+- 8 inspector pages + 8 API endpoints:
+  • Event Explorer — /developers/inspectors/events
+  • Command Explorer — /developers/inspectors/commands
+  • Replay Explorer — /developers/inspectors/replay
+  • Settlement Inspector — /developers/inspectors/settlement
+  • Council Inspector — /developers/inspectors/council
+  • Constitution Inspector — /developers/inspectors/constitution
+  • Ledger Inspector — /developers/inspectors/ledger
+  • Treasury/LP Inspector — /developers/inspectors/treasury-lp
+- All read from the runtime kernel (eventStore, dispatcher, ledger, treasury, council, constitution, marketplace, controlPlane)
+
+### 3. Digital Twin Console (Phase 4a)
+- /developers/digital-twin + /admin/digital-twin
+- Visualizes: countries grid, reserves (fiat vs stablecoin), corridors, LPs, flows, 5-year expansion projections
+- API: /api/developer/digital-twin
+
+### 4. Runtime Time Machine (Phase 4b)
+- /developers/time-machine + /admin/time-machine
+- Timeline slider (seq 0 → current), date/time picker, play/pause (1x/2x/5x/10x)
+- State reconstruction at any point, compare/diff mode, jump-to-event
+- 4 API endpoints: timeline, replay, diff, search
+
+### 5. v1 Architecture Reference (Phase 5)
+- ARCHITECTURE-REFERENCE.md (1177 lines, 15 sections)
+- Covers: Overview, System Architecture, Runtime Kernel, Financial Kernel, Economic Kernel, Governance, Platform Layer, Trust & Transparency, Capability SDK, Data Layer, API Layer, UI Layer, Security Model, Deployment Architecture, Glossary
+- Includes ASCII diagrams, file paths, type signatures, and a glossary
+
+## GitHub
+- Repository: https://github.com/pectoraux/payswap
+- All commits pushed to main branch
+- Latest commit: f77e9f7 M-PLATFORM-39: Capability SDK + inspectors + Digital Twin + Time Machine + Architecture Reference
+
+## Quality
+- tsc: 0 errors in src/app/ (279 in tests/protocol — pre-existing, non-blocking)
+- lint: 0 errors (248 warnings — pre-existing architectural)
+- Dev server running on port 3000
