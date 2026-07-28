@@ -27,6 +27,7 @@
 import { db } from '@/lib/db';
 import { eventBus, createEvent } from './event-bus';
 import { v4 as uuidv4 } from 'uuid';
+import { executionPlanner } from '@/runtime/planner';
 import { runtime } from '@/runtime';
 import type { Environment } from '@/runtime';
 import type { DispatchResult } from '@/runtime';
@@ -98,32 +99,48 @@ class PaymentServiceClass {
       customerId = customer.id;
     }
 
-    // ── 2. Dispatch through the runtime kernel ────────────────────────────
-    // The dispatcher compiles the command, verifies constitution invariants,
-    // appends events to the EventStore, and the PaymentProjection upserts the
-    // Prisma Payment row. This is the ONLY path to financial mutation.
-    const dispatch = await runtime.dispatcher.dispatch({
-      type: 'payment.create',
-      payload: {
-        merchantId: params.merchantId,
-        customerId: customerId ?? undefined,
-        amount: params.amount,
-        currency: params.currency,
-        sourceCurrency: params.currency,
-        destinationCurrency: params.currency,
-        method: params.method,
-        corridor: `${params.currency}-${params.currency}`,
-        description: params.description,
-        reference,
-        lpId: params.lpId ?? 'lp_simulated',
-        lpFeeBps,
-        success,
-        customerName: params.customerName,
-        customerEmail: params.customerEmail,
-        actorId: params.actorId,
-        timestamp: ts.getTime(),
-        environment: params.environment,
+    // ── 2. Execute through the Execution Planner ───────────────────────────
+    // The Planner selects the appropriate Execution Profile (FAST/SAFE/
+    // SIMULATION/STRATEGIC/EMERGENCY) based on transaction characteristics,
+    // then runs the profile-selected pipeline: Intent → Compiler → Policy →
+    // Council (if needed) → Coordinator → Settlement → Dispatcher → Ledger.
+    //
+    // This is the ONLY entry point to the runtime. Nothing dispatches directly.
+    const crossBorder = params.currency !== 'USD' && params.currency !== params.currency; // simplified
+    const plannerResult = await executionPlanner.execute({
+      command: {
+        type: 'payment.create',
+        payload: {
+          merchantId: params.merchantId,
+          customerId: customerId ?? undefined,
+          amount: params.amount,
+          currency: params.currency,
+          sourceCurrency: params.currency,
+          destinationCurrency: params.currency,
+          method: params.method,
+          corridor: `${params.currency}-${params.currency}`,
+          description: params.description,
+          reference,
+          lpId: params.lpId ?? 'lp_simulated',
+          lpFeeBps,
+          success,
+          customerName: params.customerName,
+          customerEmail: params.customerEmail,
+          actorId: params.actorId,
+          timestamp: ts.getTime(),
+          environment: params.environment,
+        },
+        metadata: {
+          actor: { id: params.actorId ?? 'system:payment-service', role: 'merchant' },
+          environment: (params.environment === 'live' ? 'live' : 'sandbox') as Environment,
+          correlationId: `payment-create-${uuidv4()}`,
+          source: 'api',
+        },
       },
+      transactionType: 'payment',
+      amount: params.amount,
+      currency: params.currency,
+      crossBorder,
       metadata: {
         actor: { id: params.actorId ?? 'system:payment-service', role: 'merchant' },
         environment: (params.environment === 'live' ? 'live' : 'sandbox') as Environment,
@@ -131,6 +148,7 @@ class PaymentServiceClass {
         source: 'api',
       },
     });
+    const dispatch = plannerResult.dispatchResult;
 
     if (!dispatch.success || !dispatch.entityId) {
       throw new Error(

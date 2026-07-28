@@ -13,6 +13,7 @@
 import { eventBus, createEvent } from './event-bus';
 import { v4 as uuidv4 } from 'uuid';
 import { runtime } from '@/runtime';
+import { executionPlanner } from '@/runtime/planner';
 import type { Environment } from '@/runtime';
 import type { DispatchResult } from '@/runtime';
 
@@ -64,28 +65,40 @@ class PayoutServiceClass {
       verificationLevel: 'institutional',
     });
 
-    // ── 1. Dispatch through the runtime kernel ────────────────────────────
-    const dispatch = await runtime.dispatcher.dispatch({
-      type: 'payout.create',
-      payload: {
-        merchantId: params.merchantId,
-        method: params.method,
-        sourceAmount: params.amount,
-        sourceAsset: `TWIN${params.currency}`,
-        sourceCurrency: params.currency,
-        destinationCurrency: params.currency,
-        destination,
-        fxRate: 1,
-        feeBps: 50,
-        fee,
-        netAmount: net,
-        txHash,
-        evidence,
-        environment: params.environment,
-        actorId: params.actorId,
-        timestamp: ts.getTime(),
-        success: true,
+    // ── 1. Execute through the Execution Planner ───────────────────────────
+    const plannerResult = await executionPlanner.execute({
+      command: {
+        type: 'payout.create',
+        payload: {
+          merchantId: params.merchantId,
+          method: params.method,
+          sourceAmount: params.amount,
+          sourceAsset: `TWIN${params.currency}`,
+          sourceCurrency: params.currency,
+          destinationCurrency: params.currency,
+          destination,
+          fxRate: 1,
+          feeBps: 50,
+          fee,
+          netAmount: net,
+          txHash,
+          evidence,
+          environment: params.environment,
+          actorId: params.actorId,
+          timestamp: ts.getTime(),
+          success: true,
+        },
+        metadata: {
+          actor: { id: params.actorId ?? 'system:payout-service', role: 'merchant' },
+          environment: (params.environment === 'live' ? 'live' : 'sandbox') as Environment,
+          correlationId: `payout-create-${uuidv4()}`,
+          source: 'api',
+        },
       },
+      transactionType: 'payout',
+      amount: params.amount,
+      currency: params.currency,
+      crossBorder: false,
       metadata: {
         actor: { id: params.actorId ?? 'system:payout-service', role: 'merchant' },
         environment: (params.environment === 'live' ? 'live' : 'sandbox') as Environment,
@@ -93,6 +106,7 @@ class PayoutServiceClass {
         source: 'api',
       },
     });
+    const dispatch = plannerResult.dispatchResult;
 
     if (!dispatch.success || !dispatch.entityId) {
       throw new Error(

@@ -17,6 +17,7 @@
 import { eventBus, createEvent } from './event-bus';
 import { v4 as uuidv4 } from 'uuid';
 import { runtime } from '@/runtime';
+import { executionPlanner } from '@/runtime/planner';
 import type { Environment } from '@/runtime';
 import type { DispatchResult } from '@/runtime';
 
@@ -50,20 +51,32 @@ class RefundServiceClass {
   async create(params: CreateRefundParams): Promise<RefundResult> {
     const ts = params.timestamp || new Date();
 
-    // ── 1. Dispatch through the runtime kernel ────────────────────────────
-    const dispatch = await runtime.dispatcher.dispatch({
-      type: 'refund.create',
-      payload: {
-        merchantId: params.merchantId,
-        paymentId: params.paymentId,
-        amount: params.amount,
-        type: params.type,
-        reason: params.reason,
-        requestedBy: params.actorId || 'system',
-        environment: params.environment,
-        actorId: params.actorId,
-        timestamp: ts.getTime(),
+    // ── 1. Execute through the Execution Planner ───────────────────────────
+    const plannerResult = await executionPlanner.execute({
+      command: {
+        type: 'refund.create',
+        payload: {
+          merchantId: params.merchantId,
+          paymentId: params.paymentId,
+          amount: params.amount,
+          type: params.type,
+          reason: params.reason,
+          requestedBy: params.actorId || 'system',
+          environment: params.environment,
+          actorId: params.actorId,
+          timestamp: ts.getTime(),
+        },
+        metadata: {
+          actor: { id: params.actorId ?? 'system:refund-service', role: 'merchant' },
+          environment: (params.environment === 'live' ? 'live' : 'sandbox') as Environment,
+          correlationId: `refund-create-${uuidv4()}`,
+          source: 'api',
+        },
       },
+      transactionType: 'refund',
+      amount: params.amount,
+      currency: 'USD',
+      crossBorder: false,
       metadata: {
         actor: { id: params.actorId ?? 'system:refund-service', role: 'merchant' },
         environment: (params.environment === 'live' ? 'live' : 'sandbox') as Environment,
@@ -71,6 +84,7 @@ class RefundServiceClass {
         source: 'api',
       },
     });
+    const dispatch = plannerResult.dispatchResult;
 
     if (!dispatch.success || !dispatch.entityId) {
       throw new Error(
