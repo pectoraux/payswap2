@@ -1,74 +1,45 @@
-import { promises as fs } from 'fs';
-import path from 'path';
-
 /**
  * Featured-extensions store.
  *
- * The Prisma schema (added by Task 2-prisma-fix) does NOT have a `featured`
- * boolean on `Extension`. The schema is frozen for this task, so we track
- * featured IDs in a JSON file on disk. The data is hot-cached in memory for
- * fast read access on every request.
+ * The Prisma schema does NOT have a `featured` boolean on `Extension`.
+ * We track featured IDs in an in-memory Set. This avoids using Node.js
+ * `fs`/`path` modules (which break client-side bundling).
  *
- * File:  <project-root>/data/featured-extensions.json
- * Shape: { "extensionId": true, ... }
+ * The data is process-scoped — it resets on server restart. For production
+ * persistence, this should be moved to a DB column or Redis.
  */
 
-const FILE_PATH = path.join(process.cwd(), 'data', 'featured-extensions.json');
+// Use globalThis to survive HMR in dev mode
+const globalForFeatured = globalThis as unknown as {
+  __featuredExtensions?: Set<string>;
+};
 
-let cache: Set<string> | null = null;
-let writeChain: Promise<void> = Promise.resolve();
+const cache: Set<string> = globalForFeatured.__featuredExtensions ?? new Set<string>();
+globalForFeatured.__featuredExtensions = cache;
 
-async function load(): Promise<Set<string>> {
-  if (cache) return cache;
-  try {
-    const raw = await fs.readFile(FILE_PATH, 'utf-8');
-    const parsed = JSON.parse(raw) as Record<string, boolean>;
-    cache = new Set(
-      Object.entries(parsed)
-        .filter(([, v]) => v === true)
-        .map(([k]) => k),
-    );
-  } catch {
-    cache = new Set();
-  }
-  return cache;
-}
-
-async function persist(next: Set<string>): Promise<void> {
-  // Serialize writes so concurrent toggles don't clobber each other.
-  writeChain = writeChain.then(async () => {
-    try {
-      const obj: Record<string, boolean> = {};
-      for (const id of next) obj[id] = true;
-      await fs.mkdir(path.dirname(FILE_PATH), { recursive: true });
-      await fs.writeFile(FILE_PATH, JSON.stringify(obj, null, 2), 'utf-8');
-    } catch (err) {
-      // Non-fatal — the in-memory cache still works for this server process.
-      console.error('[extension-featured] persist failed:', err);
-    }
-  });
-  await writeChain;
+// Seed with some defaults on first access
+if (cache.size === 0) {
+  // Mark a few extensions as featured by default (based on seed data slugs)
+  cache.add('slack-notifications');
+  cache.add('quickbooks-sync');
+  cache.add('advanced-analytics');
 }
 
 export async function getFeaturedIds(): Promise<Set<string>> {
-  return load();
+  return cache;
 }
 
 export async function isFeatured(id: string): Promise<boolean> {
-  const set = await load();
-  return set.has(id);
+  return cache.has(id);
 }
 
 export async function setFeatured(id: string, value: boolean): Promise<boolean> {
-  const set = await load();
-  if (value) set.add(id);
-  else set.delete(id);
-  await persist(set);
+  if (value) cache.add(id);
+  else cache.delete(id);
   return value;
 }
 
 export async function toggleFeatured(id: string): Promise<boolean> {
-  const set = await load();
-  const next = !set.has(id);
+  const next = !cache.has(id);
   return setFeatured(id, next);
 }
