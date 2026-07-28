@@ -1,9 +1,8 @@
-import { Plus } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/page-header';
 import { PaymentsTable, type PaymentRow } from '@/components/merchant/payments-table';
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
+import { CreatePaymentLinkDialog } from '@/components/merchant/create-payment-link-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,11 +31,7 @@ export default async function PaymentsPage() {
       <PageHeader
         title="Payments"
         description="All payments accepted by your merchant account."
-        actions={
-          <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-            <Plus className="h-4 w-4" /> New Payment Link
-          </Button>
-        }
+        actions={<CreatePaymentLinkDialog />}
       />
       <PaymentsTable payments={rows} />
     </div>

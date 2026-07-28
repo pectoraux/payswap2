@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Plus, ArrowDownToLine } from 'lucide-react';
+import { ArrowDownToLine } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -11,6 +11,7 @@ import {
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
 import { formatCurrency, formatDate, statusBadgeClass } from '@/lib/format';
+import { CreatePayoutDialog } from '@/components/merchant/create-payout-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,11 +29,7 @@ export default async function PayoutsPage() {
       <PageHeader
         title="Payouts"
         description="Money sent to bank accounts, mobile wallets, and on-chain addresses."
-        actions={
-          <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-            <Plus className="h-4 w-4" /> New Payout
-          </Button>
-        }
+        actions={<CreatePayoutDialog />}
       />
 
       {payouts.length === 0 ? (

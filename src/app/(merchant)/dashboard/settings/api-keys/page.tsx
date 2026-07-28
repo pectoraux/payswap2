@@ -1,5 +1,4 @@
-import { Plus, KeyRound } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { KeyRound } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/page-header';
@@ -10,6 +9,7 @@ import {
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
 import { formatRelative, statusBadgeClass } from '@/lib/format';
+import { CreateApiKeyDialog } from '@/components/merchant/create-api-key-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,11 +36,7 @@ export default async function ApiKeysPage() {
       <PageHeader
         title="API Keys"
         description="Use API keys to authenticate requests to the PaySwap REST API."
-        actions={
-          <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-            <Plus className="h-4 w-4" /> Create Key
-          </Button>
-        }
+        actions={<CreateApiKeyDialog />}
       />
 
       {keys.length === 0 ? (

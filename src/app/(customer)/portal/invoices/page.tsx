@@ -25,8 +25,11 @@ import {
   fmtDateShort,
 } from '@/components/role-ui';
 import { FileText, Clock, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { PayInvoiceButton } from '@/components/customer/pay-invoice-button';
 
 export const dynamic = 'force-dynamic';
+
+const PAYABLE_STATUSES = new Set(['SENT', 'OVERDUE', 'PENDING']);
 
 export default async function CustomerInvoicesPage() {
   const session = await getServerSession(authOptions);
@@ -35,7 +38,7 @@ export default async function CustomerInvoicesPage() {
   const account = userId
     ? await db.account.findFirst({
         where: { userId, type: 'CUSTOMER' },
-        include: { customer: true },
+        include: { customer: true, wallets: true },
       })
     : null;
 
@@ -45,6 +48,7 @@ export default async function CustomerInvoicesPage() {
         where: { customerId: customer.id },
         orderBy: { createdAt: 'desc' },
         take: 100,
+        include: { merchant: true },
       })
     : [];
 
@@ -55,11 +59,16 @@ export default async function CustomerInvoicesPage() {
   const overdue = invoices.filter((i) => i.status === 'OVERDUE');
   const currency = invoices[0]?.currency || 'GHS';
 
+  // Map invoice currency → wallet balance for that currency (for "Pay with wallet" affordance).
+  const walletByCurrency = new Map(
+    (account?.wallets ?? []).map((w) => [w.currency, w.balance]),
+  );
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Invoices"
-        description="Outstanding and paid invoices billed to you."
+        description="Outstanding and paid invoices billed to you. Pay any unpaid invoice directly from your wallet."
       />
 
       {!customer ? (
@@ -124,32 +133,59 @@ export default async function CustomerInvoicesPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Number</TableHead>
+                      <TableHead>From</TableHead>
                       <TableHead>Total</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Due date</TableHead>
-                      <TableHead>Issued</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {invoices.map((inv) => (
-                      <TableRow key={inv.id}>
-                        <TableCell className="font-mono text-xs font-semibold">
-                          {inv.number}
-                        </TableCell>
-                        <TableCell className="font-semibold tabular-nums">
-                          {fmtCurrency(inv.total, inv.currency)}
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge status={inv.status} />
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {fmtDateShort(inv.dueDate)}
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {fmtDateShort(inv.createdAt)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {invoices.map((inv) => {
+                      const payable = PAYABLE_STATUSES.has(inv.status);
+                      const walletBalance = walletByCurrency.get(inv.currency) ?? 0;
+                      const canAfford = walletBalance >= inv.total;
+                      return (
+                        <TableRow key={inv.id}>
+                          <TableCell className="font-mono text-xs font-semibold">
+                            {inv.number}
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {inv.merchant?.name ?? '—'}
+                          </TableCell>
+                          <TableCell className="font-semibold tabular-nums">
+                            {fmtCurrency(inv.total, inv.currency)}
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge status={inv.status} />
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {fmtDateShort(inv.dueDate)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {payable ? (
+                              <div className="flex flex-col items-end gap-1">
+                                <PayInvoiceButton
+                                  invoice={{
+                                    id: inv.id,
+                                    number: inv.number,
+                                    total: inv.total,
+                                    currency: inv.currency,
+                                  }}
+                                />
+                                {!canAfford && (
+                                  <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                                    Wallet short: {fmtCurrency(inv.total - walletBalance, inv.currency)}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}

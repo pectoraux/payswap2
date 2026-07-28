@@ -28,8 +28,15 @@ import { SearchBar } from '@/components/support/search-bar';
 
 export const dynamic = 'force-dynamic';
 
-export default async function SupportSearchPage() {
+export default async function SupportSearchPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
   const session = await getServerSession(authOptions);
+  const sp = await searchParams;
+  const initialQuery =
+    typeof sp.q === 'string' ? sp.q.slice(0, 200) : '';
 
   // Recent entities surfaced as the "browse" view alongside the live search.
   const [recentUsers, recentMerchants, recentPayments] = await Promise.all([
@@ -86,7 +93,7 @@ export default async function SupportSearchPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <SearchBar />
+          <SearchBar initialQuery={initialQuery} />
         </CardContent>
       </Card>
 

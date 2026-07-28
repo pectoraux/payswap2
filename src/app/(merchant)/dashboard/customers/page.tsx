@@ -1,5 +1,4 @@
-import { Plus, Users as UsersIcon } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Users as UsersIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
 import { EmptyState } from '@/components/empty-state';
@@ -9,6 +8,7 @@ import {
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/format';
+import { CreateCustomerDialog } from '@/components/merchant/create-customer-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,11 +28,7 @@ export default async function CustomersPage() {
       <PageHeader
         title="Customers"
         description="People and businesses that have paid you."
-        actions={
-          <Button variant="outline">
-            <Plus className="h-4 w-4" /> Add Customer
-          </Button>
-        }
+        actions={<CreateCustomerDialog />}
       />
 
       {customers.length === 0 ? (

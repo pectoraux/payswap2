@@ -15,6 +15,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
+import { FieldHelp } from '@/components/lp/field-help';
 
 export interface LpSettingsData {
   id: string;
@@ -112,9 +113,16 @@ export function LpSettingsForm({ lp }: { lp: LpSettingsData }) {
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label htmlFor="speed" className="text-xs uppercase tracking-wide text-muted-foreground">
-                Target settlement time
-              </Label>
+              <div className="flex items-center gap-1.5">
+                <Label htmlFor="speed" className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Target settlement time
+                </Label>
+                <FieldHelp
+                  title="Target settlement time"
+                  description="The maximum latency you commit to for settling routed payments. Lower values attract more flow (the router prefers faster LPs) but raise the bar on operational readiness."
+                  example="e.g., 2000ms = 2 seconds — competitive for African mobile-money corridors."
+                />
+              </div>
               <span className="rounded bg-emerald-500/10 px-2 py-0.5 text-sm font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
                 {(speedMs / 1000).toFixed(2)}s
               </span>
@@ -161,8 +169,24 @@ export function LpSettingsForm({ lp }: { lp: LpSettingsData }) {
             <div className="space-y-3">
               <div className="grid grid-cols-[1fr_120px_160px] gap-3 px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                 <div>Corridor</div>
-                <div className="text-right">Fee (bps)</div>
-                <div className="text-right">Capacity (USD)</div>
+                <div className="flex items-center justify-end gap-1">
+                  Fee (bps)
+                  <FieldHelp
+                    title="Fee (bps)"
+                    description="Per-corridor fee in basis points. 100 bps = 1%. Higher = more revenue per settlement but lower routing priority."
+                    example="e.g., 50 bps on a $1,000 settlement = $5 fee."
+                    size="sm"
+                  />
+                </div>
+                <div className="flex items-center justify-end gap-1">
+                  Capacity (USD)
+                  <FieldHelp
+                    title="Capacity (USD)"
+                    description="Max notional you'll settle on this corridor at once. Caps your exposure."
+                    example="e.g., $50K — router keeps routing until open positions hit $50K."
+                    size="sm"
+                  />
+                </div>
               </div>
               <Separator />
               {corridors.map((c) => (

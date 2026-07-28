@@ -1,5 +1,4 @@
-import { Plus, UserCog } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { UserCog } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/page-header';
@@ -10,6 +9,7 @@ import {
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
 import { formatDate, formatRelative, statusBadgeClass } from '@/lib/format';
+import { InviteTeamMemberDialog } from '@/components/merchant/invite-team-member-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,11 +26,7 @@ export default async function TeamPage() {
       <PageHeader
         title="Team"
         description="Invite teammates and grant scoped access to your merchant account."
-        actions={
-          <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-            <Plus className="h-4 w-4" /> Invite Member
-          </Button>
-        }
+        actions={<InviteTeamMemberDialog />}
       />
 
       {members.length === 0 ? (

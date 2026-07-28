@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
       label,
       keyPrefix,
       keyHash,
-      scopes: scopes.join(','),
+      scopes: JSON.stringify(scopes),
       status: 'ACTIVE',
       environment: env,
     },

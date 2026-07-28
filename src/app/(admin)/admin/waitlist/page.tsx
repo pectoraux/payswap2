@@ -20,6 +20,10 @@ export default async function AdminWaitlistPage() {
     company: e.company,
     country: e.country,
     businessType: e.businessType,
+    accountType: e.accountType,
+    useCase: e.useCase,
+    monthlyVolume: e.monthlyVolume,
+    referralSource: e.referralSource,
     status: e.status,
     createdAt: e.createdAt.toISOString(),
     reviewedAt: e.reviewedAt?.toISOString() ?? null,
@@ -29,7 +33,7 @@ export default async function AdminWaitlistPage() {
     <div className="space-y-6">
       <PageHeader
         title="Waitlist"
-        description="Review applications and convert promising leads into merchants."
+        description="Review applications and convert promising leads into active accounts."
       />
       <WaitlistManager entries={rows} />
     </div>

@@ -48,6 +48,45 @@ export async function requireMerchant() {
 }
 
 /**
+ * Resolve the authenticated customer for the current session.
+ *
+ * Looks for a CUSTOMER role on the user, then resolves the
+ * Account/Customer/Wallet chain. Returns the customer row,
+ * its primary account, and the wallet list.
+ *
+ * If the user is not authenticated → redirects to /login.
+ * If the user has no customer account → redirects to /unauthorized.
+ */
+export async function requireCustomer() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    redirect('/login');
+  }
+
+  const userId = (session.user as { id?: string }).id;
+  if (!userId) {
+    redirect('/login');
+  }
+
+  const account = await db.account.findFirst({
+    where: { userId, type: 'CUSTOMER' },
+    include: { customer: true, wallets: true },
+  });
+
+  if (!account?.customer) {
+    redirect('/unauthorized');
+  }
+
+  return {
+    session,
+    userId,
+    account,
+    customer: account.customer,
+    wallets: account.wallets,
+  };
+}
+
+/**
  * Resolve the authenticated admin (ADMIN or SUPER_ADMIN).
  *
  * Redirects to /login when unauthenticated, /unauthorized when

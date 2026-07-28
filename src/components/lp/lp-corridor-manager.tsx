@@ -8,6 +8,7 @@ import {
   Route,
   Save,
   AlertCircle,
+  ArrowRight,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -31,6 +32,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { CurrencySelect } from '@/components/lp/currency-select';
+import { FieldHelp } from '@/components/lp/field-help';
 
 export interface CorridorRow {
   corridor: string;
@@ -78,7 +81,7 @@ export function LpCorridorManager({
     const s = sourceCcy.trim().toUpperCase();
     const d = destCcy.trim().toUpperCase();
     if (!/^[A-Z]{3}$/.test(s) || !/^[A-Z]{3}$/.test(d)) {
-      toast.error('Currencies must be 3-letter codes (e.g. GHS, KES)');
+      toast.error('Pick a source and destination currency from the dropdown');
       return;
     }
     if (s === d) {
@@ -200,35 +203,62 @@ export function LpCorridorManager({
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={addCorridor} className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[1fr_auto_1fr]">
                   <div className="space-y-1.5">
-                    <Label htmlFor="src">Source currency</Label>
-                    <Input
+                    <div className="flex items-center gap-1.5">
+                      <Label htmlFor="src" className="text-xs uppercase tracking-wide text-muted-foreground">
+                        Source currency
+                      </Label>
+                      <FieldHelp
+                        title="Source currency"
+                        description="The currency the merchant's customer pays in. This is the 'inflow' side of the corridor — funds you receive from the payer."
+                        example="e.g., GHS for a Ghanaian customer paying for a service priced in NGN."
+                      />
+                    </div>
+                    <CurrencySelect
                       id="src"
                       value={sourceCcy}
-                      onChange={(e) => setSourceCcy(e.target.value)}
-                      placeholder="GHS"
-                      maxLength={3}
-                      className="uppercase"
-                      required
+                      onValueChange={setSourceCcy}
+                      placeholder="Source (e.g. GHS)"
+                      size="md"
+                      allowedCodes={existingCurrencies.length > 0 ? undefined : undefined}
                     />
                   </div>
+                  <div className="hidden items-center justify-center pb-2 sm:flex">
+                    <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                  </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="dst">Destination currency</Label>
-                    <Input
+                    <div className="flex items-center gap-1.5">
+                      <Label htmlFor="dst" className="text-xs uppercase tracking-wide text-muted-foreground">
+                        Destination currency
+                      </Label>
+                      <FieldHelp
+                        title="Destination currency"
+                        description="The currency the merchant receives the payout in. This is the 'outflow' side of the corridor — funds you send to the payee."
+                        example="e.g., NGN for a Nigerian merchant receiving payout from a Ghanaian payer."
+                      />
+                    </div>
+                    <CurrencySelect
                       id="dst"
                       value={destCcy}
-                      onChange={(e) => setDestCcy(e.target.value)}
-                      placeholder="KES"
-                      maxLength={3}
-                      className="uppercase"
-                      required
+                      onValueChange={setDestCcy}
+                      placeholder="Destination (e.g. NGN)"
+                      size="md"
                     />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label htmlFor="new-fee">Fee (bps)</Label>
+                    <div className="flex items-center gap-1.5">
+                      <Label htmlFor="new-fee" className="text-xs uppercase tracking-wide text-muted-foreground">
+                        Fee (bps)
+                      </Label>
+                      <FieldHelp
+                        title="Fee (basis points)"
+                        description="The fee you charge for settling payments on this corridor, in basis points. 100 bps = 1%. Higher fees mean more revenue per settlement but lower routing priority."
+                        example="e.g., 50 bps = 0.50% fee. A $1,000 settlement earns you $5."
+                      />
+                    </div>
                     <Input
                       id="new-fee"
                       type="number"
@@ -241,7 +271,16 @@ export function LpCorridorManager({
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="new-cap">Capacity (USD)</Label>
+                    <div className="flex items-center gap-1.5">
+                      <Label htmlFor="new-cap" className="text-xs uppercase tracking-wide text-muted-foreground">
+                        Capacity (USD)
+                      </Label>
+                      <FieldHelp
+                        title="Corridor capacity"
+                        description="The maximum notional volume you're willing to settle on this corridor at any one time. Limits your downside if a corridor goes bad. Draws from your total stake."
+                        example="e.g., $50,000 means the router will keep routing payments to you until your open positions on this corridor hit $50K."
+                      />
+                    </div>
                     <Input
                       id="new-cap"
                       type="number"
@@ -256,7 +295,7 @@ export function LpCorridorManager({
                 </div>
                 {existingCurrencies.length > 0 && (
                   <p className="text-[11px] text-muted-foreground">
-                    Supported currencies you already hold: {existingCurrencies.join(', ')}
+                    Currencies you already hold: {existingCurrencies.join(', ')}
                   </p>
                 )}
                 <DialogFooter>
@@ -269,7 +308,7 @@ export function LpCorridorManager({
                   </Button>
                   <Button
                     type="submit"
-                    disabled={adding}
+                    disabled={adding || !sourceCcy || !destCcy}
                     className="bg-emerald-600 text-white hover:bg-emerald-700"
                   >
                     {adding ? (
@@ -350,9 +389,17 @@ export function LpCorridorManager({
                     {/* Right: fee + capacity inputs + actions */}
                     <div className="flex flex-wrap items-end gap-2">
                       <div className="space-y-1">
-                        <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                          Fee (bps)
-                        </Label>
+                        <div className="flex items-center gap-1">
+                          <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                            Fee (bps)
+                          </Label>
+                          <FieldHelp
+                            title="Fee (bps)"
+                            description="Your fee for settling on this corridor, in basis points. 100 bps = 1%."
+                            example="e.g., 50 bps on a $1,000 settlement = $5 fee to you."
+                            size="sm"
+                          />
+                        </div>
                         <Input
                           type="number"
                           min="0"
@@ -366,9 +413,17 @@ export function LpCorridorManager({
                         />
                       </div>
                       <div className="space-y-1">
-                        <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                          Capacity
-                        </Label>
+                        <div className="flex items-center gap-1">
+                          <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                            Capacity
+                          </Label>
+                          <FieldHelp
+                            title="Capacity (USD)"
+                            description="Max notional you'll settle at once on this corridor. Caps your exposure."
+                            example="e.g., $50K caps open positions on this corridor at $50K."
+                            size="sm"
+                          />
+                        </div>
                         <Input
                           type="number"
                           min="0"

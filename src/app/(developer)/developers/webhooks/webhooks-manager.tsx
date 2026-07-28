@@ -100,6 +100,12 @@ interface Props {
 }
 
 function parseEvents(raw: string): string[] {
+  try {
+    const v = JSON.parse(raw);
+    if (Array.isArray(v)) return v.filter((x) => typeof x === 'string');
+  } catch {
+    // fall through — also accept comma-separated.
+  }
   return raw
     .split(',')
     .map((s) => s.trim())

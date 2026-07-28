@@ -85,6 +85,10 @@ model WaitlistEntry {
   phone        String?
   country      String
   businessType String?  // INDIVIDUAL, SMALL_BUSINESS, ENTERPRISE, STARTUP, NGO
+  accountType  String?  // MERCHANT, LP, DEVELOPER, CUSTOMER, OTHER
+  useCase      String?  // free-text "what do you want to use PaySwap for?"
+  monthlyVolume String? // <10K, 10K-100K, 100K-1M, >1M
+  referralSource String? // how did you hear about us
   status       String   @default("PENDING") // PENDING, APPROVED, REJECTED, CONVERTED
   notes        String?
   reviewedBy   String?
@@ -93,6 +97,7 @@ model WaitlistEntry {
 
   @@index([status])
   @@index([country])
+  @@index([accountType])
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

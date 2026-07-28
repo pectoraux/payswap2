@@ -181,7 +181,7 @@ export async function POST(req: NextRequest) {
         merchantId,
         url,
         secretHash,
-        events: events.join(','),
+        events: JSON.stringify(events),
         status: 'ACTIVE',
       },
     });

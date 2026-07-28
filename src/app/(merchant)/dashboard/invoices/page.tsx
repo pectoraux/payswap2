@@ -1,5 +1,4 @@
-import { Plus, FileText } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { FileText } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/page-header';
@@ -10,6 +9,7 @@ import {
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
 import { formatCurrency, formatDate, statusBadgeClass } from '@/lib/format';
+import { CreateInvoiceDialog } from '@/components/merchant/create-invoice-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,11 +27,7 @@ export default async function InvoicesPage() {
       <PageHeader
         title="Invoices"
         description="Bill customers with itemised invoices, due dates, and automatic reminders."
-        actions={
-          <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-            <Plus className="h-4 w-4" /> New Invoice
-          </Button>
-        }
+        actions={<CreateInvoiceDialog />}
       />
 
       {invoices.length === 0 ? (

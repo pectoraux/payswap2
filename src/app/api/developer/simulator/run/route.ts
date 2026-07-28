@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession, unauthorized } from '@/lib/api-auth';
-import { simulationEngine, KERNEL_VERSION } from '@/kernel';
+import { simulationEngine, KERNEL_VERSION, permissionEngine } from '@/kernel';
 import { findScenario } from '@/lib/developer-scenarios';
 import type { SimulationResult } from '@/kernel';
 
@@ -119,8 +119,20 @@ export async function POST(req: NextRequest) {
   try {
     const simScenario = scenario.build();
     const start = Date.now();
+    // Register the developer as an actor with `kernel:simulate` capability so
+    // the simulator can run on their behalf. The kernel's permission engine
+    // only ships a single pre-registered `simulator` actor — every other
+    // caller (including developers in the dev console) must be granted the
+    // capability explicitly. This is a sandboxed simulation; no production
+    // state is mutated.
+    const actorId = `developer:${userId}`;
+    permissionEngine.register({
+      id: actorId,
+      name: `Developer ${userId.slice(-8)}`,
+      capabilities: new Set(['kernel:simulate']),
+    });
     const result: SimulationResult = simulationEngine.run(simScenario, {
-      actorId: `developer:${userId}`,
+      actorId,
     });
     const elapsed = Date.now() - start;
 

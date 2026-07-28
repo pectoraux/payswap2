@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { StatusBadge } from '@/components/status-badge';
 import { fmtDate, fmtCurrency } from '@/components/role-ui';
 
-type ResultType = 'PAYMENT' | 'PAYOUT' | 'MERCHANT' | 'CUSTOMER';
+type ResultType = 'PAYMENT' | 'PAYOUT' | 'MERCHANT' | 'CUSTOMER' | 'INVOICE';
 
 interface SearchResult {
   id: string;
@@ -34,6 +34,7 @@ interface SearchResponse {
   payouts: SearchResult[];
   merchants: SearchResult[];
   customers: SearchResult[];
+  invoices: SearchResult[];
   total: number;
 }
 
@@ -42,6 +43,7 @@ const TYPE_LABELS: Record<ResultType, string> = {
   PAYOUT: 'Payouts',
   MERCHANT: 'Merchants',
   CUSTOMER: 'Customers',
+  INVOICE: 'Invoices',
 };
 
 const TYPE_TONES: Record<ResultType, string> = {
@@ -49,15 +51,19 @@ const TYPE_TONES: Record<ResultType, string> = {
   PAYOUT: 'bg-teal-500/10 text-teal-600 dark:text-teal-400',
   MERCHANT: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
   CUSTOMER: 'bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  INVOICE: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
 };
 
 /**
  * Debounced search input that hits GET /api/support/search?q=<term> and
  * renders the results grouped by type (Payments, Payouts, Merchants,
  * Customers). Used on the support search page.
+ *
+ * Pass `initialQuery` to seed the input (e.g. from a `?q=…` URL param) so
+ * deep-linking from the QuickSearch dropdown works.
  */
-export function SearchBar() {
-  const [query, setQuery] = useState('');
+export function SearchBar({ initialQuery = '' }: { initialQuery?: string } = {}) {
+  const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,7 +112,8 @@ export function SearchBar() {
         { type: 'PAYOUT', items: results.payouts },
         { type: 'MERCHANT', items: results.merchants },
         { type: 'CUSTOMER', items: results.customers },
-      ]
+        { type: 'INVOICE', items: results.invoices ?? [] },
+      ].filter((g) => g.items.length > 0)
     : [];
 
   const hasQuery = query.trim().length >= 2;

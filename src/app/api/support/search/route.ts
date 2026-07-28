@@ -11,7 +11,7 @@ const SUPPORT_ROLES = new Set(['SUPPORT', 'ADMIN', 'SUPER_ADMIN']);
 /** Convert a Prisma model row to a flattened search-result shape. */
 interface SearchResult {
   id: string;
-  type: 'PAYMENT' | 'PAYOUT' | 'MERCHANT' | 'CUSTOMER';
+  type: 'PAYMENT' | 'PAYOUT' | 'MERCHANT' | 'CUSTOMER' | 'INVOICE';
   label: string;
   subtitle: string;
   status: string;
@@ -22,11 +22,35 @@ interface SearchResult {
 }
 
 /**
+ * Best-effort parse of a JSON-encoded destination payload (Payout.destination
+ * is stored as a JSON string). Returns a human-readable subtitle on success,
+ * or the raw string if parsing fails.
+ */
+function describeDestination(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const parts: string[] = [];
+      if (typeof v.accountName === 'string') parts.push(v.accountName);
+      if (typeof v.bankAccount === 'string') parts.push(`••••${v.bankAccount.slice(-4)}`);
+      if (typeof v.msisdn === 'string') parts.push(v.msisdn);
+      if (typeof v.address === 'string') parts.push(v.address);
+      if (parts.length > 0) return parts.join(' · ');
+    }
+    return String(v);
+  } catch {
+    return raw;
+  }
+}
+
+/**
  * GET /api/support/search?q=<term>
  *
- * Global support search across payments, payouts, merchants and customers.
- * Matches case-insensitively on IDs, references, names, emails, phone numbers
- * and destinations. Returns up to 25 hits per category, grouped by type.
+ * Global support search across payments, payouts, merchants, customers and
+ * invoices. Matches case-insensitively on IDs, references, names, emails,
+ * phone numbers and destinations. Returns up to 25 hits per category,
+ * grouped by type.
  */
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -47,6 +71,7 @@ export async function GET(req: NextRequest) {
       payouts: [],
       merchants: [],
       customers: [],
+      invoices: [],
       total: 0,
     });
   }
@@ -56,7 +81,7 @@ export async function GET(req: NextRequest) {
   // argument is rejected by the SQLite Prisma engine, so we drop it here.)
   const insensitive = { contains: q };
 
-  const [payments, payouts, merchants, customers] = await Promise.all([
+  const [payments, payouts, merchants, customers, invoices] = await Promise.all([
     db.payment.findMany({
       where: {
         OR: [
@@ -109,6 +134,16 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: 'desc' },
       take: 25,
     }),
+    db.invoice.findMany({
+      where: {
+        OR: [
+          { id: q },
+          { number: insensitive },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 25,
+    }),
   ]);
 
   const paymentResults: SearchResult[] = payments.map((p) => ({
@@ -127,7 +162,8 @@ export async function GET(req: NextRequest) {
     id: p.id,
     type: 'PAYOUT',
     label: p.id,
-    subtitle: p.destination || p.method || '—',
+    subtitle:
+      describeDestination(p.destination) || p.method || '—',
     status: p.status,
     amount: p.sourceAmount,
     currency: p.sourceCurrency,
@@ -155,11 +191,24 @@ export async function GET(req: NextRequest) {
     url: `/dashboard/customers/${c.id}`,
   }));
 
+  const invoiceResults: SearchResult[] = invoices.map((inv) => ({
+    id: inv.id,
+    type: 'INVOICE',
+    label: inv.number,
+    subtitle: inv.merchantId,
+    status: inv.status,
+    amount: inv.total,
+    currency: inv.currency,
+    createdAt: inv.createdAt,
+    url: `/dashboard/invoices`,
+  }));
+
   const total =
     paymentResults.length +
     payoutResults.length +
     merchantResults.length +
-    customerResults.length;
+    customerResults.length +
+    invoiceResults.length;
 
   return NextResponse.json({
     query: q,
@@ -167,6 +216,7 @@ export async function GET(req: NextRequest) {
     payouts: payoutResults,
     merchants: merchantResults,
     customers: customerResults,
+    invoices: invoiceResults,
     total,
   });
 }

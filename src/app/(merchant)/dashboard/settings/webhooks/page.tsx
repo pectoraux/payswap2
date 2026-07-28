@@ -1,5 +1,4 @@
-import { Plus, Webhook as WebhookIcon } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Webhook as WebhookIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/page-header';
@@ -10,6 +9,7 @@ import {
 import { requireMerchant } from '@/lib/auth-guards';
 import { db } from '@/lib/db';
 import { formatRelative, statusBadgeClass } from '@/lib/format';
+import { CreateWebhookDialog } from '@/components/merchant/create-webhook-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,11 +37,7 @@ export default async function WebhooksPage() {
       <PageHeader
         title="Webhooks"
         description="Receive real-time event notifications when payments and payouts change state."
-        actions={
-          <Button className="bg-emerald-600 text-white hover:bg-emerald-700">
-            <Plus className="h-4 w-4" /> Add Endpoint
-          </Button>
-        }
+        actions={<CreateWebhookDialog />}
       />
 
       {endpoints.length === 0 ? (
