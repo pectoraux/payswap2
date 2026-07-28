@@ -59,6 +59,10 @@ import {
   Wrench,
   Cloud,
   Store,
+  ShieldCheck,
+  FileOutput,
+  FileSignature,
+  Radio,
 } from 'lucide-react';
 
 /**
@@ -202,6 +206,9 @@ export const adminNav: NavGroup[] = [
       { label: 'Simulations', href: '/admin/simulations', icon: <History className="h-4 w-4" /> },
       { label: 'Audit Trail', href: '/admin/audit', icon: <Shield className="h-4 w-4" /> },
       { label: 'Claims', href: '/admin/claims', icon: <Scale className="h-4 w-4" /> },
+      { label: 'Settlement Contracts', href: '/admin/settlement-contracts', icon: <FileSignature className="h-4 w-4" /> },
+      { label: 'Proof of Reserves', href: '/admin/proof-of-reserves', icon: <ShieldCheck className="h-4 w-4" /> },
+      { label: 'Regulator Exports', href: '/admin/regulator-exports', icon: <FileOutput className="h-4 w-4" /> },
     ],
   },
 ];
@@ -242,6 +249,7 @@ export const lpNav: NavGroup[] = [
       { label: 'Positions', href: '/lp/positions', icon: <Briefcase className="h-4 w-4" /> },
       { label: 'Corridors', href: '/lp/corridors', icon: <Route className="h-4 w-4" /> },
       { label: 'Settlements', href: '/lp/settlements', icon: <ArrowLeftRight className="h-4 w-4" /> },
+      { label: 'Bandwidth', href: '/lp/bandwidth', icon: <Gauge className="h-4 w-4" /> },
       { label: 'Profitability', href: '/lp/profitability', icon: <TrendingUp className="h-4 w-4" /> },
     ],
   },
@@ -325,6 +333,7 @@ export const opsNav: NavGroup[] = [
       { label: 'Metrics', href: '/ops/metrics', icon: <BarChart3 className="h-4 w-4" /> },
       { label: 'Incidents', href: '/ops/incidents', icon: <AlertTriangle className="h-4 w-4" /> },
       { label: 'Status', href: '/ops/status', icon: <Activity className="h-4 w-4" /> },
+      { label: 'Circuit Breakers', href: '/ops/circuit-breakers', icon: <Radio className="h-4 w-4" /> },
       { label: 'SRE', href: '/ops/sre', icon: <Terminal className="h-4 w-4" /> },
     ],
   },

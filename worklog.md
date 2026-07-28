@@ -4403,3 +4403,59 @@ Stage Summary:
   • `/dashboard/claims` page + `claims-manager.tsx` (~640 lines) — list + create Dialog + detail Sheet + add-evidence Dialog + cast-vote buttons
   • Added `Claims` to admin `System` nav + merchant `Manage Business` nav (icon: Scale)
 - tsc: 0 | lint: 0
+
+---
+Task ID: FRONTEND-1
+Agent: frontend-ui-agent
+Task: Build missing frontend UI pages for all new features
+
+Work Log:
+- Read worklog tail (last 100 lines) to align with project conventions: server-component page + client `*-viewer.tsx` pattern, in-memory runtime engines, `requireAdmin()` / role layout guards, shadcn/ui component set, `PageHeader` from `src/components/page-header.tsx`, `max-h-[…] overflow-y-auto` for tables.
+- Inspected target API routes + service singletons: `/api/regulatory/proof-of-reserves` (+ `proofOfReservesService`), `/api/regulatory/export` (+ `regulatorExportService`), `/api/ops/circuit-breakers` (+ `circuitBreakerRegistry`), `/api/runtime/settlement-contracts` (+ `settlementContractEngine`), `/api/runtime/bandwidth` (+ `bandwidthEngine`), `/api/runtime/planner` (+ `executionPlanner`). Confirmed their DTO shapes so the viewer components stay strongly typed.
+- Inspected reference pages for styling conventions: `/admin/audit`, `/admin/claims`, `/admin/identities`, `/ops/health`, `/ops/maintenance`, `/lp/settlements`.
+
+Page 1 — `/admin/proof-of-reserves`:
+- `src/app/(admin)/admin/proof-of-reserves/page.tsx` (server component): calls `requireAdmin()`, generates the initial proof via `proofOfReservesService.generate()`, passes it to the viewer.
+- `src/app/(admin)/admin/proof-of-reserves/proof-of-reserves-viewer.tsx` (client): 4 KPI cards (Total Reserves / Total Liabilities / Solvency Ratio / Reserve Ratio), verified-failed banner with SHA-256 hash, two scrollable tables (Reserves by Currency — fiat + stablecoin, Liabilities by Currency — twin tokens + pending settlements + wallet balances). "Generate Proof" button calls `GET /api/regulatory/proof-of-reserves` and refreshes.
+
+Page 2 — `/admin/regulator-exports`:
+- `src/app/(admin)/admin/regulator-exports/page.tsx` (server): `requireAdmin()`, renders the viewer.
+- `src/app/(admin)/admin/regulator-exports/regulator-exports-viewer.tsx` (client): export type selector (full / aml / travel_rule / proof_of_reserves / audit_trail) + From/To date pickers + "Generate Export" button calling `GET /api/regulatory/export?type=…&from=…&to=…`. Renders the result with exportId, period, signature status, SHA-256 integrity hash, and a structured payload view (summary chips + collapsible arrays + JSON fallback). Special-cases the nested Proof of Reserves payload to render KPI tiles instead of raw JSON.
+
+Page 3 — `/ops/circuit-breakers`:
+- `src/app/(ops)/ops/circuit-breakers/page.tsx` (server): reads `circuitBreakerRegistry.getAllStats()` directly, passes initial state to viewer.
+- `src/app/(ops)/ops/circuit-breakers/circuit-breakers-viewer.tsx` (client): 4 KPI cards (Total / Closed / Half-Open / Open), scrollable table with service name, state badge, failure/success counts, total calls, last failure/success timestamps. "Reset All" button uses an `AlertDialog` confirmation, POSTs to `/api/ops/circuit-breakers`, then refreshes. "Refresh" button re-fetches GET.
+
+Page 4 — `/admin/settlement-contracts`:
+- `src/app/(admin)/admin/settlement-contracts/page.tsx` (server): `requireAdmin()`, reads `settlementContractEngine.list()`, passes serialized contracts to viewer.
+- `src/app/(admin)/admin/settlement-contracts/settlement-contracts-viewer.tsx` (client): 4 KPI cards (Total / In-flight / Released-Closed / Expired-Disputed). Filter by status (`Select`) + free-text search (`Input`). Scrollable table with contract id, status, corridor (country + currency), amount, escrow, LP, created/claimed/confirmed timestamps. Click a row to open a `Sheet` with corridor + amount cards and the full lifecycle (created → funded → claimed → confirmed → released → closed → expiresAt).
+
+Page 5 — `/lp/bandwidth`:
+- Added `POST /api/runtime/bandwidth` (no src/runtime changes — the route handler calls `bandwidthEngine.register()`). Validates country (ISO 2) / currency (ISO 3) / assetType / capacity / bond, resolves the caller's LP id from the session (falls back to `seed-lp-1`), optionally attaches a debit authorization for fiat positions.
+- `src/app/(lp)/lp/bandwidth/page.tsx` (server): reads `bandwidthEngine.listAll()`, resolves LP id, passes positions to viewer.
+- `src/app/(lp)/lp/bandwidth/bandwidth-viewer.tsx` (client): 4 KPI cards (Total Capacity / Available / Escrow+Bond / Debit-Authorized). Scrollable table with LP, country, asset-type badge (with icon), currency, capacity, reserved, used, available, escrow, bond, status + participation mode, debit-authorization badge. "Register Bandwidth" `Dialog` with country / asset type / currency / capacity / bond / participation mode + (for fiat) debit connector + account id.
+
+Page 6 — Execution Planner Telemetry (added to `/admin/runtime`):
+- New shared wrapper `src/components/admin/planner/planner-telemetry-panel.tsx`: fetches `GET /api/runtime/planner`, passes `stats` + `recentTraces` to the existing `ExecutionTraceViewer` from `src/components/admin/planner/execution-trace-viewer.tsx`. Includes a manual Refresh button.
+- `src/app/(admin)/admin/runtime/page.tsx`: imported `PlannerTelemetryPanel` and rendered it just below the page header (above the simulator tabs). The panel shows total traced / avg / p95 / success rate cards, profile distribution badges (FAST/SAFE/SIMULATION/STRATEGIC/EMERGENCY), and recent execution traces as expandable cards with per-stage timing.
+
+Nav-config updates (`src/lib/nav-config.tsx`):
+- Added `ShieldCheck`, `FileOutput`, `FileSignature`, `Radio` to the lucide imports.
+- Admin "System" group: added "Settlement Contracts" → `/admin/settlement-contracts`, "Proof of Reserves" → `/admin/proof-of-reserves`, "Regulator Exports" → `/admin/regulator-exports`.
+- Ops "Operations" group: added "Circuit Breakers" → `/ops/circuit-breakers`.
+- LP "Liquidity" group: added "Bandwidth" → `/lp/bandwidth`.
+
+Stage Summary:
+- Pages built:
+  • `/admin/proof-of-reserves` (page.tsx + proof-of-reserves-viewer.tsx)
+  • `/admin/regulator-exports` (page.tsx + regulator-exports-viewer.tsx)
+  • `/ops/circuit-breakers` (page.tsx + circuit-breakers-viewer.tsx)
+  • `/admin/settlement-contracts` (page.tsx + settlement-contracts-viewer.tsx)
+  • `/lp/bandwidth` (page.tsx + bandwidth-viewer.tsx)
+  • New `PlannerTelemetryPanel` mounted into `/admin/runtime` page
+  • New `POST /api/runtime/bandwidth` handler (alongside existing GET)
+- Nav items added:
+  • Admin → System → Settlement Contracts, Proof of Reserves, Regulator Exports
+  • Ops → Operations → Circuit Breakers
+  • LP → Liquidity → Bandwidth
+- tsc: 0 (in src/app, src/components, src/lib) | lint: 0 errors, 310 pre-existing warnings

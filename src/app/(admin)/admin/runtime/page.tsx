@@ -28,6 +28,7 @@ import { ProtocolScenariosPanel } from '@/components/simulator/protocol-scenario
 import { ReplayStepper } from '@/components/simulator/replay-stepper';
 import { ThemeToggle } from '@/components/simulator/theme-toggle';
 import { RuntimeAIDirector as AiDirector } from '@/components/admin/runtime-ai-director';
+import { PlannerTelemetryPanel } from '@/components/admin/planner/planner-telemetry-panel';
 import type { SimulationScenario, SimulationResult, CurrencyCode } from '@/kernel';
 
 /**
@@ -205,6 +206,13 @@ export default function RuntimeConsole() {
           {error}
         </div>
       )}
+
+      {/*
+        M-EXEC telemetry: recent execution traces, profile distribution,
+        avg/p95 duration, success rate. Loads from /api/runtime/planner and
+        renders the shared ExecutionTraceViewer component.
+      */}
+      <PlannerTelemetryPanel />
 
       {result && (
         <div className="flex items-center gap-2 flex-wrap">
