@@ -19,5 +19,6 @@ if [ -f "$PROJECT_DIR/.env" ]; then
   set +a
 fi
 
-# Start the dev server (turbopack for lower memory usage)
-exec bun next dev -p 3000 -H 0.0.0.0 2>&1 | tee "$PROJECT_DIR/dev.log"
+# Start the dev server (webpack mode — lower memory peak than turbopack
+# for the auth routes which load Prisma + bcrypt + NextAuth)
+exec bunx next dev -p 3000 -H 0.0.0.0 --webpack 2>&1 | tee "$PROJECT_DIR/dev.log"
