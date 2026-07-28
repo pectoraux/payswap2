@@ -15,6 +15,15 @@ import { runtime } from '../../index';
 
 // ─── Types (what pages receive — never Prisma types) ────────────────────────
 
+// TODO(HARDEN): The three view types below (PaymentView, RefundView, WalletView)
+// are duplicated 2-3x across the codebase per the HARDEN-1 audit:
+//   - PaymentView: also defined in runtime/engines/payments/types.ts
+//   - RefundView:  also defined in runtime/engines/refunds/types.ts
+//   - WalletView:  also defined in runtime/engines/wallets/types.ts AND in
+//                  components/customer/customer-wallet-actions.tsx
+// Consolidate to a single canonical definition in engines/*/types.ts and
+// re-export from here. Tracked by HARDEN-1 audit (priority fix #9).
+
 export interface PaymentView {
   id: string;
   reference: string;

@@ -9,7 +9,20 @@ import { webhookEngine } from '@/protocol/webhooks/engine';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** GET /api/ops/health — overall runtime health snapshot. */
+/** GET /api/ops/health — overall runtime health snapshot.
+ *
+ * TODO(HARDEN): This is one of 6 overlapping health/overview endpoints per
+ * the HARDEN-1 audit:
+ *   - `/api/ops/health`              (THIS — canonical runtime health)
+ *   - `/api/ops/sre/health-check`    (SRE deep-check incl. connectors-v2)
+ *   - `/api/resilience/health`       (circuit-breaker-specific — keep)
+ *   - `/api/protocol/health`         (protocol-level — fold in or remove)
+ *   - `/api/ops/overview`            (ops rollup — fold into THIS)
+ *   - `/api/developer/overview`      (role-scoped developer — keep)
+ * Consolidate to 3 canonical: THIS (runtime), `/api/resilience/health`
+ * (circuit breakers), `/api/developer/overview` (developer-scoped). Tracked
+ * by HARDEN-1 audit (priority fix #8).
+ */
 export async function GET() {
   const engines = ENGINES;
   const online = engines.filter((e) => e.status === 'online').length;

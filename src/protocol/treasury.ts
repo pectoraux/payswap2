@@ -1,5 +1,5 @@
 /**
- * PaySwap Protocol — Treasury Module.
+ * PaySwap Protocol — Treasury Module (v1).
  *
  * The treasury is autonomous but never free liquidity. It manages:
  *   - Reserve health (replenish, rebalance)
@@ -9,6 +9,14 @@
  *
  * Treasury recommendations are produced by the Treasury AI, but execution
  * requires protocol approval (no autonomous balance changes).
+ *
+ * TODO(HARDEN): This is the v1 treasury module (180 lines). The richer
+ * implementation lives in `src/protocol/treasury-v2/` (16 sub-engines, ~4961
+ * lines, used by `/api/treasury/freeze` + `/api/treasury/rebalance`). This v1
+ * is still used by 4 callers (`/api/treasury/status`, `/api/protocol/health`,
+ * `kernel/simulation.ts`, `protocol/ops/dashboards.ts`). Migrate those 4
+ * callers to v2 then delete this file. Tracked by HARDEN-1 audit (priority
+ * fix #6 / treasury consolidation).
  */
 import { uid, round } from '@/kernel/support';
 import { eventEngine } from '@/kernel/event';

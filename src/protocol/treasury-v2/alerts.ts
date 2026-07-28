@@ -50,7 +50,7 @@ export class AlertEngine {
   /**
    * Raise an alert. Deduplicates by (type, target) — if an unresolved alert
    * with the same type and target already exists, no new alert is created.
-   * Emits a `treasury.alert` event with the alert payload.
+   * Emits a `treasury.alerted` event with the alert payload.
    *
    * Returns the alert (either the newly-raised one or the pre-existing
    * unresolved one).
@@ -78,7 +78,7 @@ export class AlertEngine {
     this.activeIndex.set(dedupKey, alert.id);
     this.targetByAlertId.set(alert.id, target);
 
-    eventEngine.emit('treasury.alert', {
+    eventEngine.emit('treasury.alerted', {
       alertId: alert.id,
       severity: alert.severity,
       type: alert.type,
@@ -89,7 +89,7 @@ export class AlertEngine {
     }, 0);
 
     // Specific event types for downstream subscribers.
-    eventEngine.emit(`treasury.alert.${alert.type}`, {
+    eventEngine.emit(`treasury.alerted.${alert.type}`, {
       alertId: alert.id,
       severity: alert.severity,
       currency: alert.currency,

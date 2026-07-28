@@ -112,7 +112,7 @@ export class TreasuryEngine {
     this.timers = [stopCheck, stopForecast];
 
     this.initialised = true;
-    eventEngine.emit('treasury.initialised', {
+    eventEngine.emit('treasury.initialized', {
       checkIntervalMs: this.opts.checkIntervalMs,
       forecastIntervalMs: this.opts.forecastIntervalMs,
       ts: nowTs(),

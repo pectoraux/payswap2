@@ -432,6 +432,15 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   projectionRunner.start(eventStore);
 
   // Amendment 1 engines — interface-only implementations for M-RT-1.
+  // TODO(HARDEN): 9 NoOp stub engines below never got real implementations
+  // (NoOpEconomicHealthDashboard, NoOpMultiHopRouter, NoOpCapabilityDiscoveryEngine,
+  // NoOpCorridorDiscoveryEngine, NoOpReserveDiscoveryEngine, NoOpLPGrowthEngine,
+  // NoOpTreasuryGrowthEngine, NoOpEconomicScoreEngine, NoOpCounterfactualEngine).
+  // Either implement or explicitly mark as "deferred — interface only" with a
+  // tracking issue. The 4 NoOps with real replacements (NoOpOpportunityDiscoveryEngine,
+  // NoOpLiquidityIntelligenceEngine, NoOpFinancialCompiler, NoOpFinancialKnowledgeGraph)
+  // can be deleted once callers are migrated to v2/eco-intelligence/RealFinancialCompiler.
+  // Tracked by HARDEN-1 audit (priority fix #5).
   const reserveMarketState = new InMemoryReserveMarket();
   const liquidityStrategyMarketplace = new InMemoryLiquidityStrategyMarketplace();
   const liquidityIntelligence = new NoOpLiquidityIntelligenceEngine();

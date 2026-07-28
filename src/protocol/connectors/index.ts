@@ -1,5 +1,5 @@
 /**
- * PaySwap Protocol — Connector Architecture.
+ * PaySwap Protocol — Connector Architecture (v1).
  *
  * Connectors CANNOT modify state. They only produce Evidence.
  *
@@ -9,6 +9,12 @@
  *
  * The planner consumes evidence (via the Confidence Service), never connectors
  * directly. This makes replacing evidence sources trivial.
+ *
+ * TODO(HARDEN): A richer v2 connector module exists at `src/protocol/connectors-v2/`
+ * (16 files, ~1900 lines) with retry / idempotency / rate-limiter. This v1 is
+ * still used by 6 routes (`/api/protocol/health`, `/api/payment-links`,
+ * `/api/payments`, ops pages, providers). Pick v2 as canonical, migrate the 6
+ * v1 callers, then delete v1. Tracked by HARDEN-1 audit (duplicate services table).
  */
 import { createEvidence, type Evidence, type EvidenceSource, type VerificationLevel } from '@/kernel/evidence';
 import { uid } from '@/kernel/support';

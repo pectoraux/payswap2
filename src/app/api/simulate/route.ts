@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import ZAI from 'z-ai-web-dev-sdk';
 import { db } from '@/lib/db';
+import { callLLM } from '@/lib/ai-helpers';
 import {
   simulationEngine,
   defaultScenario,
@@ -61,7 +61,6 @@ export async function POST(req: NextRequest) {
 }
 
 async function generateLLMNarrative(result: SimulationResult): Promise<string | null> {
-  const zai = await ZAI.create();
   const decisions = result.plan.reasoning.decisions
     .map((d: AIDecision) => `- ${d.step}: ${d.rationale}`)
     .join('\n');
@@ -84,16 +83,11 @@ Amendments: ${result.amendments.length}. Insurance claims: ${result.insuranceCla
 
 Explain in 2-3 sentences why the planner chose this liquidity path and whether it is safe to settle autonomously.`;
 
-  const completion = await zai.chat.completions.create({
-    messages: [
-      { role: 'assistant', content: system },
-      { role: 'user', content: user },
-    ],
-    thinking: { type: 'disabled' },
-  });
-
-  const text = completion.choices[0]?.message?.content?.trim();
-  return text && text.length > 0 ? text : null;
+  // Routed through the shared `callLLM` helper (HARDEN-FIX) so this endpoint
+  // gets the same 5-min cache, defensive error handling, and consistent SDK
+  // usage as the other AI endpoints. Returns null on failure → caller falls
+  // back to the deterministic narrative already on `result.plan.reasoning`.
+  return callLLM(system, user);
 }
 
 async function persistRun(result: SimulationResult): Promise<void> {

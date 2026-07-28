@@ -1,6 +1,4 @@
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { db } from '@/lib/db';
+import Link from 'next/link';
 import {
   Card,
   CardContent,
@@ -16,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { StatusBadge } from '@/components/status-badge';
+import { Badge } from '@/components/ui/badge';
 import {
   KpiCard,
   EmptyState,
@@ -24,52 +22,56 @@ import {
   fmtDate,
 } from '@/components/role-ui';
 import { UserCheck, Clock, CheckCircle2, XCircle } from 'lucide-react';
-import { KycActions } from '@/components/compliance/kyc-actions';
+import { KycTrustActions } from '@/components/compliance/kyc-trust-actions';
+import { kycService } from '@/trust';
 
 export const dynamic = 'force-dynamic';
 
-export default async function ComplianceKycPage() {
-  const session = await getServerSession(authOptions);
+export default async function ComplianceKycPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ type?: string; status?: string }>;
+}) {
+  const sp = await searchParams;
+  const typeFilter = sp.type as any;
+  const statusFilter = sp.status as any;
 
-  const reviews = await db.complianceReview.findMany({
-    where: { type: 'KYC' },
-    orderBy: { createdAt: 'desc' },
-    take: 100,
+  const verifications = await kycService.list({
+    type: typeFilter,
+    status: statusFilter,
   });
-
-  const pending = reviews.filter((r) => r.status === 'PENDING').length;
-  const approved = reviews.filter((r) => r.status === 'APPROVED').length;
-  const rejected = reviews.filter((r) => r.status === 'REJECTED').length;
+  const stats = await kycService.stats();
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="KYC review"
-        description="Identity verification submissions awaiting compliance review."
+        title="KYC / KYB review"
+        description="Identity verification dossiers for individuals (KYC) and businesses (KYB)."
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
           label="Pending"
-          value={pending.toString()}
+          value={stats.pending + stats.inReview}
+          hint={`${stats.inReview} in review`}
           icon={<Clock className="h-4 w-4" />}
           tone="amber"
         />
         <KpiCard
           label="Approved"
-          value={approved.toString()}
+          value={stats.approved}
           icon={<CheckCircle2 className="h-4 w-4" />}
           tone="emerald"
         />
         <KpiCard
           label="Rejected"
-          value={rejected.toString()}
+          value={stats.rejected}
           icon={<XCircle className="h-4 w-4" />}
           tone="rose"
         />
         <KpiCard
-          label="Total"
-          value={reviews.length.toString()}
+          label="Expired"
+          value={stats.expired}
           icon={<UserCheck className="h-4 w-4" />}
           tone="teal"
         />
@@ -77,60 +79,167 @@ export default async function ComplianceKycPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">KYC submissions</CardTitle>
-          <CardDescription>
-            {reviews.length} submission{reviews.length === 1 ? '' : 's'} on record
-          </CardDescription>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="text-base">Verifications</CardTitle>
+              <CardDescription>
+                {verifications.length} verification
+                {verifications.length === 1 ? '' : 's'} on record
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <FilterChip
+                href="/compliance/kyc"
+                label="All"
+                active={!typeFilter}
+              />
+              <FilterChip
+                href="/compliance/kyc?type=kyc"
+                label="KYC (individual)"
+                active={typeFilter === 'kyc'}
+              />
+              <FilterChip
+                href="/compliance/kyc?type=kyb"
+                label="KYB (business)"
+                active={typeFilter === 'kyb'}
+              />
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
-          {reviews.length === 0 ? (
+          {verifications.length === 0 ? (
             <EmptyState
               icon={<UserCheck className="h-6 w-6" />}
-              title="No KYC submissions"
+              title="No verifications"
               description="When merchants or customers submit identity verification, the review will appear here."
             />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Entity</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Reviewer</TableHead>
-                  <TableHead>Submitted</TableHead>
-                  <TableHead>Reviewed</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {reviews.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-mono text-xs">
-                      {r.entityType}:{r.entityId.slice(0, 8)}
-                    </TableCell>
-                    <TableCell className="text-xs">{r.type}</TableCell>
-                    <TableCell>
-                      <StatusBadge status={r.status} />
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {r.reviewerId ? r.reviewerId.slice(0, 8) : '—'}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {fmtDate(r.createdAt)}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {fmtDate(r.reviewedAt)}
-                    </TableCell>
-                    <TableCell>
-                      <KycActions reviewId={r.id} status={r.status} />
-                    </TableCell>
+            <div className="max-h-[600px] overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Entity</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Documents</TableHead>
+                    <TableHead>Checks</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Submitted</TableHead>
+                    <TableHead>Reviewed</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {verifications.map((v) => (
+                    <TableRow key={v.id}>
+                      <TableCell className="font-mono text-xs">
+                        {v.entityId.slice(0, 12)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={
+                            v.type === 'kyb'
+                              ? 'border-violet-500/40 text-violet-600 dark:text-violet-400'
+                              : 'border-teal-500/40 text-teal-600 dark:text-teal-400'
+                          }
+                        >
+                          {v.type.toUpperCase()}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {v.documents.length} doc
+                        {v.documents.length === 1 ? '' : 's'}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        <div className="flex flex-wrap gap-1">
+                          {v.verifications.slice(0, 3).map((c, i) => (
+                            <span
+                              key={i}
+                              className={`rounded px-1 py-0.5 text-[9px] font-medium uppercase ${
+                                c.status === 'pass'
+                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                                  : c.status === 'fail'
+                                  ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
+                                  : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                              }`}
+                              title={c.detail ?? c.type}
+                            >
+                              {c.type}
+                            </span>
+                          ))}
+                          {v.verifications.length > 3 && (
+                            <span className="text-[9px] text-muted-foreground">
+                              +{v.verifications.length - 3}
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <KycStatusPill status={v.status} />
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {fmtDate(new Date(v.submittedAt))}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {v.reviewedAt ? fmtDate(new Date(v.reviewedAt)) : '—'}
+                      </TableCell>
+                      <TableCell>
+                        <KycTrustActions
+                          verificationId={v.id}
+                          status={v.status}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function KycStatusPill({ status }: { status: string }) {
+  const tone =
+    status === 'approved'
+      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+      : status === 'rejected'
+      ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
+      : status === 'expired'
+      ? 'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400'
+      : status === 'in_review'
+      ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+      : 'bg-teal-500/10 text-teal-600 dark:text-teal-400';
+  return (
+    <span
+      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${tone}`}
+    >
+      {status.replace('_', ' ')}
+    </span>
+  );
+}
+
+function FilterChip({
+  href,
+  label,
+  active,
+}: {
+  href: string;
+  label: string;
+  active: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+        active
+          ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+          : 'border-border text-muted-foreground hover:bg-accent/40'
+      }`}
+    >
+      {label}
+    </Link>
   );
 }

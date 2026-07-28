@@ -67,8 +67,9 @@ const IMPACT_META: Record<
 
 /**
  * LpAiRecommendations — a self-contained card that fetches AI-generated
- * optimization recommendations for the LP from `/api/ai/lp-recommendations`
- * and renders them with impact badges.
+ * optimization recommendations for the LP from `/api/lp/ai-assistant`
+ * (GET — consolidated with the LP AI chat endpoint in HARDEN-FIX) and
+ * renders them with impact badges.
  *
  * States: loading skeleton, error with retry, empty, and populated.
  */
@@ -83,7 +84,7 @@ export function LpAiRecommendations() {
     setError(null);
     setEmpty(false);
     try {
-      const res = await fetch('/api/ai/lp-recommendations?refresh=1', {
+      const res = await fetch('/api/lp/ai-assistant?refresh=1', {
         cache: 'no-store',
       });
       const json = (await res.json()) as RecommendationsResponse & {

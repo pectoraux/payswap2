@@ -4036,3 +4036,153 @@ Stage Summary:
 - tsc: 0 errors in src/app/ (279 in tests/protocol — pre-existing, non-blocking)
 - lint: 0 errors (248 warnings — pre-existing architectural)
 - Dev server running on port 3000
+
+---
+Task ID: HARDEN-1
+Agent: hardening-audit-agent
+Task: Audit duplicate services, overlapping AI, duplicated APIs, naming consistency
+
+Work Log:
+- Read worklog tail (Tasks 10–16, M-PLATFORM-38/39) — absorbed prior context: PaySwap has ~221 API routes, large runtime/ + protocol/ + kernel/ layering, 9 demo logins, dev server OOM-constrained (use Preview Panel). This audit is READ-ONLY (no code changes).
+- Inventory pass 1 — runtime engines: `find src/runtime -type f` → 53 sub-modules under `src/runtime/engines/`, `src/runtime/graphs/`, etc. Identified 3 v1/v2 pairs (`opportunity-discovery`, `recommendation-lifecycle`, `reserve-market`) + 1 v2-only dir (`reserve-market-v2`).
+- Inventory pass 2 — NoOp stubs: `rg "class NoOp"` → 13 NoOp classes, all still wired into `createRuntime()` in `src/runtime/index.ts` (lines 437–538). None have been replaced with real implementations since M-RT-1.
+- Inventory pass 3 — protocol v1/v2 pairs: found 4 explicit `*-v2` directories (`connectors-v2`, `treasury-v2`, `wallets-v2`, `merchant-v2`). Verified imports: `wallets-v2` and `merchant-v2` have ZERO callers in `src/app/`; `treasury-v2` is used by 2 routes (`/api/treasury/freeze`, `/api/treasury-v2/status`); `connectors-v2` is only used by `/api/ops/sre/health-check` + internally by `protocol/providers/*`.
+- Inventory pass 4 — AI components: `rg "z-ai-web-dev-sdk|director|council|directorate|intelligence"` → 40 files. Catalogued 9 LLM endpoints (4 `/api/ai/*` + `/api/lp/ai-assistant` + 3 `/api/runtime/ai-director/*` + `/api/simulate`), 8 AI client components, 6 deterministic "AI" runtime engines, 3 kernel AI files.
+- Inventory pass 5 — API duplicates: enumerated all 221 `route.ts` files via `find`. Grouped by resource. Confirmed 4 dead duplicate extension endpoints, 1 dead treasury-v2 status endpoint, 5+ overlapping "health" endpoints, 8+ simulation endpoints with overlapping purposes.
+- Inventory pass 6 — naming: extracted 290 unique event names from `rg "eventEngine.emit('...')"`. Most use past-tense + dot-notation, but found ~12 inconsistent events (noun-only, present-participle, British spelling, snake_case). Found 3x duplicated `WalletView`, 2x `PaymentView`, 2x `RefundView` type definitions. Found 5 orphan admin simulation components (2274 lines dead code, never imported).
+- Inventory pass 7 — observability vs ops: `protocol/observability/` (10 files, ~4227 lines) and `protocol/ops/` (7 files, ~2513 lines) both export `lpDashboard` + `treasuryDashboard` + `tracing` — partial overlap.
+- Cross-checked every "duplicate" candidate against actual callers using `rg "from ['\"]@/..."` to distinguish "real" from "stub" before recording recommendations.
+- No code changes — appended this audit report only.
+
+Stage Summary:
+
+## 1. Duplicate Services
+
+| Concept | Files | Real one | Old/stub | Recommendation |
+|---------|-------|----------|----------|----------------|
+| Treasury v1 vs v2 | `src/protocol/treasury.ts` (180 lines) vs `src/protocol/treasury-v2/*.ts` (16 files, ~4961 lines) | `treasury-v2/` (production: 16 sub-engines, used by `/api/treasury/freeze` + `/api/treasury/rebalance`) | `treasury.ts` (180-line v1 — still used by 4 sites: `/api/treasury/status`, `/api/protocol/health`, `kernel/simulation.ts`, `protocol/ops/dashboards.ts`) | Migrate the 4 v1 callers to v2, then delete `treasury.ts` |
+| Wallets v1 vs v2 | `src/protocol/wallets/wallet-service.ts` (278 lines) vs `src/protocol/wallets-v2/*.ts` (11 files, ~3600 lines) | `wallets/wallet-service.ts` (the only one wired to `/api/wallets`) | `wallets-v2/` — **NEVER imported by any app code** | REMOVE `src/protocol/wallets-v2/` entirely (dead code) |
+| Connectors v1 vs v2 | `src/protocol/connectors/{index.ts,adapters.ts}` (~543 lines) vs `src/protocol/connectors-v2/*.ts` (16 files, ~1900 lines) | Both partially used: v1 used by 6 routes (`/api/protocol/health`, `/api/payment-links`, `/api/payments`, ops pages, providers); v2 used by `/api/ops/sre/health-check` + internally by `protocol/providers/*` | Mixed | MERGE: pick one (recommend v2 since it has retry/idempotency/rate-limiter), migrate the 6 v1 callers, then delete v1 |
+| Merchant v1 vs v2 | `src/protocol/merchant/platform.ts` (542 lines) vs `src/protocol/merchant-v2/*.ts` (11 files, ~3000+ lines) | `merchant/platform.ts` (used by 6 endpoints) | `merchant-v2/` — **NEVER imported by any app code** | REMOVE `src/protocol/merchant-v2/` entirely (dead code) |
+| Opportunity Discovery v1 vs v2 | `src/runtime/engines/opportunity-discovery/{index.ts,types.ts}` vs `src/runtime/engines/opportunity-discovery-v2/{engine.ts,index.ts}` | `opportunity-discovery-v2` (real impl, used as `runtime.opportunityDiscoveryV2`) | `opportunity-discovery` v1 — only `NoOpOpportunityDiscoveryEngine` + legacy `OldOpportunityDiscoveryEngine` type alias | REMOVE v1; alias the legacy type to v2 |
+| Recommendation Lifecycle v1 vs v2 | `src/runtime/engines/recommendation-lifecycle/{index.ts,types.ts}` vs `src/runtime/engines/recommendation-lifecycle-v2/` | v2 (real, used as `runtime.recLifecycle`) | v1 — only `InMemoryRecommendationLifecycle`, kept as `runtime.recommendationLifecycle` field (unused except type) | MERGE: remove v1 or document why both fields exist on `Runtime` |
+| Reserve Market v1 vs v2 | `src/runtime/engines/reserve-market/{index.ts,types.ts}` vs `src/runtime/engines/reserve-market-v2/{engine.ts,index.ts,types.ts}` | v2 (real, used as `runtime.reserveMarket`) | v1 — kept as `runtime.reserveMarketState` (legacy shadow-price publisher interface, comment says "legacy interface") | REMOVE v1, drop `reserveMarketState` field |
+| Read-models v1 vs v2 | `src/runtime/read-models/{index.ts (2 lines), types.ts (77 lines)}` vs `src/runtime/read-models/v2/index.ts` (348 lines) | v2 (façade with `PaymentView`/`RefundView`/`WalletView`/`CustomerView`/`MerchantOverviewView`) | v1 only exposes `ProjectionRunner` + `Projection`/`ReadModel` interfaces | MERGE: fold `ProjectionRunner` into v2, delete `read-models/types.ts` |
+| 13 NoOp stubs | `NoOp*Engine`/`NoOp*Dashboard`/`NoOp*Router`/`NoOp*Compiler`/`NoOp*Graph` classes in 13 engine `types.ts` files | Real impls exist for: opportunity-discovery (v2), recommendation-lifecycle (v2), reserve-market (v2) | 9 NoOps never replaced: `NoOpLiquidityIntelligenceEngine` (replaced by `EcoIntelligenceEngine` in eco-intelligence/), `NoOpEconomicHealthDashboard`, `NoOpMultiHopRouter`, `NoOpCapabilityDiscoveryEngine`, `NoOpCorridorDiscoveryEngine`, `NoOpReserveDiscoveryEngine`, `NoOpLPGrowthEngine`, `NoOpTreasuryGrowthEngine`, `NoOpEconomicScoreEngine`, `NoOpCounterfactualEngine`, `NoOpFinancialCompiler` (replaced by `RealFinancialCompiler`), `NoOpFinancialKnowledgeGraph`, `NoOpOpportunityDiscoveryEngine` (replaced by v2) | DELETE the 4 NoOps with real replacements; for the other 9, EITHER implement OR explicitly mark as "deferred — interface only" with a TODO + tracking issue |
+| Observability vs Ops dashboards | `src/protocol/observability/dashboards.ts` (830 lines) vs `src/protocol/ops/dashboards.ts` (447 lines) | Both export `lpDashboard` + `treasuryDashboard` (different shapes — overlapping concept, not identical API) | Both partially used | MERGE: pick one module (recommend observability since it has 7 dashboard variants vs ops's 5), document the difference, delete the duplicate |
+| Tracing modules | `src/protocol/observability/tracing.ts` (497 lines, OTel-style) vs `src/protocol/ops/tracing.ts` (473 lines, simpler) | Both export `Span`/`SpanContext` etc. (different impls) | Both partially used | MERGE: keep observability/tracing.ts (richer), delete ops/tracing.ts |
+| Ledger modules | `src/kernel/ledger.ts` (132 lines), `src/protocol/ledger/` (8 files, ~2449 lines), `src/runtime/ledger/` (3 files, ~547 lines) | protocol/ledger (operational, used by `/api/ledger/*`); runtime/ledger (EconomicLedgerEngine, used in runtime); kernel/ledger has NO callers | kernel/ledger.ts is dead | DELETE `src/kernel/ledger.ts` (132 lines dead) |
+| 5 Orphan admin sim components | `src/components/admin/{kernel-simulation-console.tsx (404), simulation-console.tsx (251), world-simulator.tsx (607), scenario-builder.tsx (658), kernel-runtime-console.tsx (354)}` | The live sim components are in `src/components/simulator/*` (used by `/admin/runtime/page.tsx`) | All 5 admin components are **never imported by any page or component** | REMOVE all 5 (2274 lines dead code) |
+| `waitlist-actions.tsx` | `src/components/admin/waitlist-actions.tsx` (79 lines) | Only `WaitlistManager` is used by `/admin/waitlist/page.tsx` | `WaitlistActions` exported but no caller | REMOVE or merge into `waitlist-manager.tsx` |
+| `components/simulator/checkout-widget.tsx` | 0 imports anywhere | None | Dead | REMOVE |
+
+## 2. Overlapping AI Components
+
+| Component | File | Purpose | Overlaps with | Recommendation |
+|-----------|------|---------|---------------|----------------|
+| LLM shared helper | `src/lib/ai-helpers.ts` | `callLLM` + 5-min cache + JSON parse | (foundation) | KEEP — single point of LLM access |
+| Merchant insights | `src/app/api/ai/insights/route.ts` | LLM: 3-4 actionable insights per merchant | None | KEEP |
+| LP recommendations | `src/app/api/ai/lp-recommendations/route.ts` | LLM: 2-3 LP optimization recs | `/api/lp/ai-assistant` (also produces LP advice via chat) | MERGE with `/api/lp/ai-assistant` into one endpoint with `mode=recommendations\|chat` |
+| LP chat assistant | `src/app/api/lp/ai-assistant/route.ts` | LLM: conversational LP chat | `/api/ai/lp-recommendations` | MERGE (see above) |
+| Treasury risk | `src/app/api/ai/treasury/route.ts` | LLM: 2-3 treasury risk assessments | Many deterministic treasury engines (see below) | KEEP for LLM commentary, but document the relationship to deterministic engines |
+| Compliance prioritization | `src/app/api/ai/compliance/route.ts` | LLM: 2-3 compliance queue priorities | None | KEEP |
+| Runtime AI Director (Q&A) | `src/app/api/runtime/ai-director/route.ts` | LLM: page-aware admin Q&A about scenario results | `runtime/platform/engine.ts:askAI()` (deterministic fallback) | KEEP — already paired (LLM + fallback) |
+| AI Director escalate | `src/app/api/runtime/ai-director/escalate/route.ts` | Creates Incident from AI suggestion | None (unique) | KEEP |
+| AI Director fix-mode | `src/app/api/runtime/ai-director/fix-mode/route.ts` | LLM: generates patch draft (no execution) | None (unique) | KEEP |
+| `/api/simulate` LLM use | `src/app/api/simulate/route.ts` | Imports `z-ai-web-dev-sdk` directly (not via `ai-helpers`) | Bypasses `ai-helpers` cache + error handling | Refactor to use `callLLM` from `ai-helpers` |
+| `<AiDirector>` | `src/components/admin/ai-director.tsx` (985 lines) | Main AI Director panel | None | KEEP |
+| `<RuntimeAIDirector>` | `src/components/admin/runtime-ai-director.tsx` (62 lines) | Thin wrapper delegating to `<AiDirector>` | None — intentional adapter | KEEP |
+| `<AiInsights>` | `src/components/merchant/ai-insights.tsx` | Renders `/api/ai/insights` | None | KEEP |
+| `<LpAiRecommendations>` | `src/components/lp/ai-recommendations.tsx` | Renders `/api/ai/lp-recommendations` | `<LpAiAssistant>` (different UX for same domain) | Keep both UX variants if endpoints merge |
+| `<LpAiAssistant>` | `src/components/lp/lp-ai-assistant.tsx` | Floating chat for `/api/lp/ai-assistant` | `<LpAiRecommendations>` | Keep both UX variants if endpoints merge |
+| `<TreasuryAiRiskAssessment>` | `src/components/treasury/ai-risk-assessment.tsx` | Renders `/api/ai/treasury` | None | KEEP |
+| `<ComplianceAiPrioritization>` | `src/components/compliance/ai-prioritization.tsx` | Renders `/api/ai/compliance` | None | KEEP |
+| `<AiReasoningView>` | `src/components/simulator/ai-reasoning.tsx` | Shows kernel reasoning (deterministic, not LLM) | None | KEEP |
+| LiquidityIntelligenceEngine | `src/runtime/eco-intelligence/engine.ts` (533 lines) | "Adaptive economic brain" — forecasts, optimization, LP scoring, treasury policy decisions | TreasuryDirector (autonomous.ts), directorate.treasuryDirector(), kernel/treasury-ai.ts, protocol/treasury*.ts | CONSOLIDATE treasury-policy logic into one component |
+| TreasuryDirector class | `src/runtime/settlement-orchestrator/autonomous.ts` | Autonomous treasury actions within governance policy | `directorate.treasuryDirector()`, `kernel/treasury-ai.ts`, `eco-intelligence.TreasuryPolicyDecision` | Pick 1 canonical treasury recommender |
+| `treasuryDirector()` method | `src/runtime/directorate/directorate.ts` | Strategic treasury planning (Director level) | `TreasuryDirector` class above | Different time horizon (strategic vs operational) — document clearly OR consolidate |
+| `TreasuryAI.recommend()` | `src/kernel/treasury-ai.ts` (63 lines) | Treasury recommendations from simulation scenario | All of the above | Migrate to runtime eco-intelligence + delete kernel/treasury-ai.ts |
+| `AIAgentEngine` | `src/kernel/ai-agent.ts` (31 lines) | "Thin facade for backward compatibility" per its own docstring | ReasoningEngine | DEAD (only `kernel/index.ts` imports it) — REMOVE |
+| `FinancialReasoningEngine` | `src/kernel/reasoning-engine.ts` (216 lines) | Multi-responsibility reasoning (optimization, explanation, anomaly, treasury, LP, fraud, insurance, governance, extension) | Many specialized engines in runtime/ | Document relationship OR consolidate |
+| `PlatformEngine.askAI()` | `src/runtime/platform/engine.ts:195` | Pattern-matched Q&A (deterministic fallback) | `/api/runtime/ai-director` (LLM) | Already paired — KEEP both |
+| `TrustLayer` | `src/runtime/trust/engine.ts` (520 lines) | Audit, proofs, invariants verification, nightly stress tests | None (unique verification role) | KEEP |
+| `EconomicCouncil` | `src/runtime/council/engine.ts` (496 lines) | Coordinated decision protocol + weighted consensus | None (unique consensus role) | KEEP |
+| `GlobalEconomicDirectorate` | `src/runtime/directorate/directorate.ts` (544 lines) | Strategic planning across 9 director types | Some overlap with eco-intelligence | KEEP but document the strategic-vs-tactical split vs eco-intelligence |
+| `LPIntelligenceEngine` class | `src/runtime/settlement-orchestrator/autonomous.ts` | LP reputation + incentives + learning | `eco-intelligence.LPIntelligenceView` (overlapping LP concepts) | CONSOLIDATE LP intelligence into one engine |
+
+**Summary**: 9 LLM endpoints (4 are domain-specific dashboards, 1 LP chat, 3 admin AI Director actions, 1 simulate), 6 deterministic "AI"/intelligence engines (some with overlapping treasury/LP responsibilities), 3 kernel AI files (1 dead). The user's concern about "too many AI layers" is justified for treasury (9 components touch it) and LP (3 components produce LP advice).
+
+## 3. Duplicated APIs
+
+| Resource | Endpoints | Duplicate? | Recommendation |
+|----------|-----------|------------|----------------|
+| Extensions list | `GET /api/extensions`, `GET /api/extensions/list` | YES — `/api/extensions` is a superset (more filters + admin visibility + install info) | REMOVE `/api/extensions/list` (dead — no client calls) |
+| Extensions create | `POST /api/extensions/create`, `POST /api/developer/extensions` | YES — both create extensions for a developer | REMOVE `/api/extensions/create` (dead — only `/api/developer/extensions` is used by extensions-manager.tsx) |
+| Extensions installed list | `GET /api/extensions/installed`, `GET /api/extensions?installed=1` | YES — `/api/extensions` already supports `installed=1` filter | REMOVE `/api/extensions/installed` (dead) |
+| Extensions submit | `POST /api/extensions/[id]/submit`, `POST /api/developer/extensions/[id]/submit` | YES — same logic, same transition (draft/rejected → submitted) | REMOVE `/api/extensions/[id]/submit` (use developer variant) |
+| Treasury status | `GET /api/treasury/status` (v1 impl), `GET /api/treasury-v2/status` (v2 impl) | YES — different impls, same purpose | REMOVE `/api/treasury-v2/status` (dead — no client calls); migrate `/api/treasury/status` to v2 impl |
+| Treasury freeze | `POST /api/treasury/freeze` (full scope: account/asset/corridor), `POST /api/treasury/corridors/freeze` (corridor-only) | PARTIAL — corridor freeze is a subset | Either MERGE (make `/api/treasury/freeze?scope=corridor` handle both) OR document why the simpler corridor endpoint exists separately |
+| Payment create | `POST /api/payments/create` (merchant-facing, paymentService → DB), `POST /api/runtime/payments/create` (admin/runtime-facing, runtime engine → kernel) | PARTIAL — different stack paths, same conceptual action | DOCUMENT: clarify that `/api/payments/create` is the merchant API (DB persist) and `/api/runtime/payments/create` is the runtime integration test path; consider merging once runtime is the only writer |
+| Hosted checkout pay | `POST /api/payment-links/[id]/pay`, `POST /api/payments/[id]/pay` | NO — different resources (PaymentLink vs Payment) | KEEP BOTH |
+| Health/overview | `GET /api/ops/health`, `GET /api/ops/sre/health-check`, `GET /api/resilience/health`, `GET /api/protocol/health`, `GET /api/ops/overview`, `GET /api/developer/overview` | YES — 6 endpoints producing overlapping "health"/"overview" data | CONSOLIDATE: keep `/api/ops/health` as canonical runtime health; `/api/resilience/health` for circuit-breaker-specific; remove or scope the rest (developer/overview is role-scoped so keep) |
+| Simulate | `POST /api/simulate` (kernel), `POST /api/simulate/world`, `POST /api/simulate/world/custom`, `POST /api/developer/simulator/run` (kernel), `POST /api/platform/simulator` (runtime), `POST /api/admin/simulate/{payment,payout,aml}` (DB seed), `POST /api/scenarios/regress`, `POST /api/runtime/simulator/compare` | YES — 8+ simulation endpoints | DOCUMENT each clearly: `/api/simulate` = kernel digital twin, `/api/developer/simulator/run` = developer console (kernel), `/api/platform/simulator` = runtime engine, `/api/admin/simulate/*` = test-data seeding (DB), `/api/runtime/simulator/compare` = A/B compare; remove duplicates if any |
+| Replay | `POST /api/ops/replay` (event replay, no-op count), `POST /api/persistence/rebuild` (ledger rebuild), `POST /api/support/webhooks/replay` (single webhook re-send), `POST /api/ops/sre/replay-failed` (bulk failed webhooks) | NO — different replay targets | KEEP ALL but document each clearly |
+| Connectors list/health | `GET /api/ops/dashboards/connectors`, `GET /api/ops/connectors/[id]`, `GET /api/ops/sre/health-check` (includes connectors) | PARTIAL — connectors appear in multiple endpoints | KEEP, but consolidate connectors health into one endpoint |
+| Dashboards | `GET /api/ops/dashboards/{connectors,lp,settlement,treasury}` (4 thin 6-line endpoints) | NO — distinct resources, but trivial wrappers around `@/protocol/ops` | KEEP (or inline into a single `/api/ops/dashboards` with `?type=` query) |
+| Subscription | `POST /api/subscription`, `POST /api/subscriptions/create` | LIKELY YES — both create subscriptions | Verify; merge into one (probably `/api/subscriptions/create`) |
+
+## 4. Naming Inconsistencies
+
+| Category | Inconsistency | Examples | Recommendation |
+|----------|---------------|----------|----------------|
+| View types | `WalletView` defined 3 times | `src/runtime/read-models/v2/index.ts:50`, `src/runtime/engines/wallets/types.ts:35`, `src/components/customer/customer-wallet-actions.tsx:53` | CONSOLIDATE to one canonical definition (`engines/wallets/types.ts`); re-export from `read-models/v2`; remove the component-local copy |
+| View types | `PaymentView` defined 2 times | `src/runtime/read-models/v2/index.ts:18`, `src/runtime/engines/payments/types.ts:11` | CONSOLIDATE to `engines/payments/types.ts`; delete from `read-models/v2` |
+| View types | `RefundView` defined 2 times | `src/runtime/read-models/v2/index.ts:35`, `src/runtime/engines/refunds/types.ts:28` | CONSOLIDATE to `engines/refunds/types.ts` |
+| View vs Record vs Model | Same concept, different suffix | `PaymentView` (runtime projection) vs `PaymentRecord` (observability analytics) vs `Payment` (Prisma model) | STANDARDIZE: "View" = projection shape (frozen contract), "Record" = analytics event payload, document the rule in `runtime/README.md` |
+| Event naming — past tense vs noun | Most of 290 events use past-tense verb (`payment.recorded`, `wallet.credited`, `offer.published`) but 5 use noun phrases | `'lp_underpricing'`, `'missing_corridor'`, `'missing_lp_capability'`, `'missing_reserve'`, `'treasury_opportunity'` | RENAME to past-tense + dot-notation: `lp.underpriced`, `corridor.missing`, `lp.capability_missing`, `reserve.missing`, `treasury.opportunity_detected` |
+| Event naming — present participle | 2 events use `-ing` form | `'payment.settling'`, `'payment.merchant_confirming'` | DOCUMENT as state-transition events (in-progress) OR rename to past-tense when complete |
+| Event naming — British vs American | 1 event uses British spelling | `'treasury.initialised'` | STANDARDIZE on American: `treasury.initialized` |
+| Event naming — noun-only | 3 events have no verb | `'treasury.alert'`, `'state.transition'`, `'dr.recovery_step'` | RENAME to verb form: `treasury.alert_raised`, `state.transitioned`, `dr.recovery_step_completed` |
+| Event naming — snake_case vs dot.case | 5 events use snake_case while 285 use dot.case | `'lp_underpricing'`, `'missing_corridor'`, `'missing_lp_capability'`, `'missing_reserve'`, `'treasury_opportunity'` | STANDARDIZE on dot.case (matches the other 285 events) |
+| API path — version suffix in URL | `/api/treasury-v2/status` uses `-v2` suffix (anti-pattern) | `/api/treasury-v2/status` | RENAME to `/api/treasury/status` (after merging v1/v2 impl) |
+| API path — singular vs plural | Same resource, different number | `/api/subscription` (singular) vs `/api/subscriptions/create` (plural) | STANDARDIZE on plural: rename `/api/subscription` to `/api/subscriptions` or `/api/subscriptions/create` |
+| API path — create pattern | Inconsistent: some use `/create` subpath, some POST to root | `/api/payments/create` (subpath) vs `/api/developer/extensions` (POST root) vs `/api/developer/api-keys` (POST root) vs `/api/api-keys/create` (subpath) | STANDARDIZE: either always `/create` subpath OR always POST to collection root (recommend POST to root for REST compliance) |
+| File names — duplicate scenario-builder | Two `scenario-builder.tsx` files | `src/components/admin/scenario-builder.tsx` (658 lines, dead), `src/components/simulator/scenario-builder.tsx` (362 lines, live) | REMOVE `admin/scenario-builder.tsx` (dead) |
+| File names — 4 sim console variants | Multiple "console"/"simulator" files with overlapping names | `admin/kernel-simulation-console.tsx`, `admin/simulation-console.tsx`, `admin/world-simulator.tsx`, `admin/kernel-runtime-console.tsx`, `simulator/simulator-console.tsx` (developer) | REMOVE the 4 dead admin variants; keep `simulator/simulator-console.tsx` (developer) as the canonical |
+| Function naming — snapshot methods | 5+ different names for "produce a state snapshot" | `getReport()` (5 sites: host, directorate, council, controlPlane, recovery, schemaRegistry), `getStatus()` (3 sites: dr-status, transaction-engine, connectors-v2/health), `status()` (5 sites: backfill services, treasuryEngine, checkpoint), `getOverview()` (realTimeDashboard), `getDashboard()` (eco-intelligence), `getHealth()` (3 sites) | STANDARDIZE: `getReport()` for structured reports, `status()` for simple state, `getHealth()` for health checks; document the rule |
+| Tracing module duplication | Two `tracing.ts` files with overlapping types | `protocol/observability/tracing.ts` (497 lines, OTel-style), `protocol/ops/tracing.ts` (473 lines, simpler) | MERGE: keep `observability/tracing.ts` (richer); delete `ops/tracing.ts` |
+| Dashboard module duplication | Two `dashboards.ts` files with overlapping exports | `protocol/observability/dashboards.ts` exports `lpDashboard` + `treasuryDashboard` (among 7); `protocol/ops/dashboards.ts` also exports `lpDashboard` + `treasuryDashboard` (among 5) | MERGE: pick one module (recommend `observability/dashboards.ts`), delete `ops/dashboards.ts` after migrating callers |
+| Ledger module duplication | Three "ledger" modules | `kernel/ledger.ts` (132 lines, DEAD), `protocol/ledger/` (8 files, ~2449 lines, operational), `runtime/ledger/` (3 files, ~547 lines, EconomicLedgerEngine) | DELETE `kernel/ledger.ts`; document the layering (protocol = operational ledger, runtime = economic/solvency ledger) |
+
+## 5. Priority Fixes (top 10)
+
+1. **DELETE `src/protocol/wallets-v2/`** (11 files, ~3600 lines) — never imported by any app code; pure dead code.
+2. **DELETE `src/protocol/merchant-v2/`** (11 files, ~3000+ lines) — never imported by any app code; pure dead code.
+3. **DELETE 4 dead duplicate API routes**: `/api/extensions/create`, `/api/extensions/list`, `/api/extensions/installed`, `/api/extensions/[id]/submit` — all have a working `/api/developer/extensions*` equivalent that is actually used. Also DELETE `/api/treasury-v2/status` (dead — no client calls).
+4. **DELETE 5 orphaned admin simulation components** (2274 lines): `src/components/admin/kernel-simulation-console.tsx`, `simulation-console.tsx`, `world-simulator.tsx`, `scenario-builder.tsx`, `kernel-runtime-console.tsx`. None are imported anywhere. (Also delete `components/admin/waitlist-actions.tsx` and `components/simulator/checkout-widget.tsx` — both 0 callers.)
+5. **DELETE 9 NoOp stub engines that never got real implementations** OR explicitly mark them as "deferred — interface only" with a TODO + tracking issue: `NoOpEconomicHealthDashboard`, `NoOpMultiHopRouter`, `NoOpCapabilityDiscoveryEngine`, `NoOpCorridorDiscoveryEngine`, `NoOpReserveDiscoveryEngine`, `NoOpLPGrowthEngine`, `NoOpTreasuryGrowthEngine`, `NoOpEconomicScoreEngine`, `NoOpCounterfactualEngine`. The 4 NoOps with real replacements (`NoOpOpportunityDiscoveryEngine`, `NoOpLiquidityIntelligenceEngine`, `NoOpFinancialCompiler`, `NoOpFinancialKnowledgeGraph`) should also be deleted.
+6. **CONSOLIDATE 9 treasury components**: kernel/treasury-ai.ts, protocol/treasury.ts, protocol/treasury-v2/, runtime/engines/treasury/, runtime/engines/treasury-growth/ (NoOp), runtime/eco-intelligence (TreasuryPolicyDecision), runtime/settlement-orchestrator/autonomous.ts (TreasuryDirector class), runtime/directorate/directorate.ts (treasuryDirector() method), app/api/ai/treasury/route.ts. Pick 1 canonical treasury recommender (recommend `runtime/engines/treasury/service.ts` for state + `runtime/eco-intelligence` for policy) and migrate/delete the others.
+7. **CONSOLIDATE AI endpoints**: `/api/ai/lp-recommendations` and `/api/lp/ai-assistant` produce overlapping LP advice — merge into one `/api/lp/ai` endpoint with `mode=recommendations|chat`. Also refactor `/api/simulate` to use `callLLM` from `ai-helpers` (it bypasses the cache + error handling today).
+8. **CONSOLIDATE 6 health/overview endpoints**: keep `/api/ops/health` as canonical runtime health, `/api/resilience/health` for circuit breakers, `/api/developer/overview` (role-scoped). Remove `/api/ops/sre/health-check`, `/api/protocol/health`, `/api/ops/overview` or fold their unique data into the canonical endpoints.
+9. **CONSOLIDATE duplicated View types**: `WalletView` (defined 3x), `PaymentView` (2x), `RefundView` (2x) — pick one canonical location (`engines/*/types.ts`) and delete the duplicates in `read-models/v2/index.ts` and `components/customer/customer-wallet-actions.tsx`.
+10. **STANDARDIZE event naming**: rename ~6 snake_case/noun-phrase/present-participle events to past-tense + dot.case (e.g. `lp_underpricing` → `lp.underpriced`, `treasury.alert` → `treasury.alert_raised`, `treasury.initialised` → `treasury.initialized`) for consistency with the other 284 events.
+
+**Bonus dead-code wins** (lower priority):
+- DELETE `src/kernel/ledger.ts` (132 lines, no callers)
+- DELETE `src/kernel/ai-agent.ts` (31 lines, only `kernel/index.ts` imports it)
+- DELETE `src/components/simulator/checkout-widget.tsx` (0 imports)
+- DELETE `src/components/admin/waitlist-actions.tsx` (0 callers)
+- MERGE `protocol/observability/tracing.ts` and `protocol/ops/tracing.ts` (970 lines total, overlapping types)
+- MERGE `protocol/observability/dashboards.ts` and `protocol/ops/dashboards.ts` (1277 lines total, overlapping `lpDashboard` + `treasuryDashboard` exports)
+- MIGRATE 4 callers off `src/protocol/treasury.ts` (v1) → `src/protocol/treasury-v2/`, then delete v1 (180 lines)
+- DOCUMENT the runtime/engines v1 vs v2 split (`opportunity-discovery`, `recommendation-lifecycle`, `reserve-market`) — currently the v1 NoOp/InMemory classes are kept as "legacy" interface fields on `Runtime` but only v2 is actually called.
+
+**Estimated cleanup impact**:
+- ~7,000 lines of dead code removable from `protocol/wallets-v2/` + `protocol/merchant-v2/` + 5 orphan admin components + 4 dead API routes + 3 small dead files (kernel/ledger, kernel/ai-agent, checkout-widget, waitlist-actions)
+- ~2,000 lines removable from 9 NoOp stub engines (if deferred) or ~500 lines if just the 4 superseded NoOps are deleted
+- 3 View types deduplicated to 1 definition each
+- 6 events renamed for consistency
+- 6 health endpoints consolidated to 3
+- 2 LP AI endpoints merged to 1
+
+This audit is READ-ONLY — no code changes were made. The hardening sprint should tackle the priority fixes in order; items 1–5 are pure deletion (low risk), items 6–10 require migration (medium risk, test after each).

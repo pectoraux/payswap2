@@ -1,5 +1,10 @@
 'use client';
 
+// TODO(HARDEN): This component is dead — `WaitlistActions` is exported but
+// has zero callers (admin/waitlist/page.tsx uses `WaitlistManager` from
+// `waitlist-manager.tsx` instead). Safe to delete in a follow-up. Tracked by
+// HARDEN-1 audit (bonus dead-code win).
+
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';

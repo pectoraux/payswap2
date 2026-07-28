@@ -35,7 +35,7 @@
  * Events emitted on the kernel `eventEngine`:
  *  - `dr.recovery_planned`    — after `planRecovery` produces a plan.
  *  - `dr.recovery_started`    — when `executeRecovery` begins.
- *  - `dr.recovery_step`       — after each step completes.
+ *  - `dr.recovery_step_completed` — after each step completes.
  *  - `dr.recovery_completed`  — when `executeRecovery` finishes.
  *  - `dr.recovery_verified`   — after `verifyRecovery`.
  *
@@ -294,7 +294,7 @@ export class RestoreService {
       };
       steps.push(stepResult);
       if (!stepSuccess) success = false;
-      eventEngine.emit('dr.recovery_step', {
+      eventEngine.emit('dr.recovery_step_completed', {
         index: i,
         description,
         success: stepSuccess,

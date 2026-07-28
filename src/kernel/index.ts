@@ -53,7 +53,6 @@ export { FraudEngine, fraudEngine } from './fraud';
 export { TreasuryEngine, treasuryEngine } from './treasury';
 export { TreasuryAI, treasuryAI } from './treasury-ai';
 export { InsuranceEngine, insuranceEngine, statusLabel as insuranceStatusLabel } from './insurance';
-export { AIAgentEngine, aiAgentEngine } from './ai-agent';
 export { PolicyEngine, policyEngine } from './policy';
 export { PermissionEngine, permissionEngine } from './permission';
 export { AuditEngine, auditEngine } from './audit';

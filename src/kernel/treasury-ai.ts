@@ -4,6 +4,15 @@
  * Surfaces recommendations like "shift liquidity to country X", "replenish
  * reserve via stablecoin", "prefer LPs over reserves". Nothing is hidden —
  * every recommendation carries a rationale and estimated impact.
+ *
+ * TODO(HARDEN): This is one of 9 components that touch "treasury
+ * recommendations" (kernel/treasury-ai.ts, protocol/treasury.ts,
+ * protocol/treasury-v2/*, runtime/engines/treasury/*, runtime/eco-intelligence
+ * TreasuryPolicyDecision, runtime/settlement-orchestrator/autonomous.ts
+ * TreasuryDirector, runtime/directorate treasuryDirector(), app/api/ai/treasury).
+ * Consolidate around `runtime/engines/treasury/service.ts` (state) +
+ * `runtime/eco-intelligence` (policy) as canonical; delete the rest after
+ * migrating callers. Tracked by HARDEN-1 audit (priority fix #6).
  */
 import type { TreasuryRecommendation, SimulationScenario, Reserve } from './types';
 import { uid } from './support';

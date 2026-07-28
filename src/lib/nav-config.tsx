@@ -53,6 +53,8 @@ import {
   Puzzle,
   Box,
   Clock,
+  Plane,
+  Send,
 } from 'lucide-react';
 
 /**

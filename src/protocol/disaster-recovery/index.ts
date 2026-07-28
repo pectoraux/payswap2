@@ -35,7 +35,7 @@
  * Events emitted on the kernel `eventEngine` (all prefixed `dr.`):
  *  - `dr.event_replicated`, `dr.region_promoted`
  *  - `dr.backup_created`, `dr.backup_verified`, `dr.backup_restored`, `dr.backup_pruned`
- *  - `dr.recovery_planned`, `dr.recovery_started`, `dr.recovery_step`, `dr.recovery_completed`, `dr.recovery_verified`
+ *  - `dr.recovery_planned`, `dr.recovery_started`, `dr.recovery_step_completed`, `dr.recovery_completed`, `dr.recovery_verified`
  *  - `dr.rpo_rto_measured`, `dr.rpo_rto_violation`
  *  - `dr.chaos_test_started`, `dr.chaos_test_completed`, `dr.chaos_failure_injected`, `dr.chaos_failure_recovered`
  *  - `dr.disaster_simulated`, `dr.disaster_simulation_completed`

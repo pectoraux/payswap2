@@ -13,6 +13,12 @@
  *   - `TracerProvider`  : registry of named tracers + span processors.
  *   - `SpanProcessor`   : hook called on span start / end (batching, sampling).
  *   - `SpanExporter`    : sink for finished spans.
+ *
+ * TODO(HARDEN): A second, simpler tracing module exists at
+ * `src/protocol/ops/tracing.ts` (473 lines) with overlapping types
+ * (`Span`/`SpanContext` etc.). Keep this file (richer, OTel-style) as the
+ * canonical tracer; migrate `ops/*` callers then delete `ops/tracing.ts`.
+ * Tracked by HARDEN-1 audit (bonus dead-code win).
  *   - `InMemorySpanExporter` : keeps the last N spans, queryable by traceId,
  *                         name, or time range. Used by tests + dashboards.
  *

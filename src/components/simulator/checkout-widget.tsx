@@ -1,5 +1,8 @@
 'use client';
 
+// TODO(HARDEN): This component is dead — zero imports anywhere. Safe to
+// delete in a follow-up. Tracked by HARDEN-1 audit (bonus dead-code win).
+
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Card, CardContent } from '@/components/ui/card';

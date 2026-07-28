@@ -10,6 +10,12 @@
  *   - `complianceDashboard()`   : AML, sanctions, SARs, KYC status
  *   - `treasuryDashboard()`     : reserves, backing, limits, stress tests
  *   - `merchantDashboard(id?)`  : merchant-specific analytics (or all-merchants rollup)
+ *
+ * TODO(HARDEN): A second dashboard module exists at `src/protocol/ops/dashboards.ts`
+ * (447 lines) that ALSO exports `lpDashboard` + `treasuryDashboard` (different
+ * shape — partial overlap, not identical API). Keep this file (7 dashboard
+ * variants vs ops's 5) as canonical; migrate ops callers then delete
+ * `ops/dashboards.ts`. Tracked by HARDEN-1 audit (bonus dead-code win).
  *   - `lpDashboard()`           : LP performance, utilization, health
  *   - `developerDashboard()`    : API usage, error rates, latency, span throughput
  *
