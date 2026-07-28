@@ -1346,6 +1346,561 @@ HTTP/1.1 200 OK`,
   ],
 };
 
+// ────────────────────────────────────────────────────────────────────────────
+// DEVELOPER CONSOLE
+// ────────────────────────────────────────────────────────────────────────────
+const developer: EndpointGroup = {
+  id: 'developer',
+  label: 'Developer Console',
+  description:
+    'Sandbox + simulator endpoints used from the developer console. These mirror the production merchant API but run against an isolated sandbox so you can test integrations end-to-end without touching live data.',
+  endpoints: [
+    {
+      id: 'developer-simulator-scenarios',
+      method: 'GET',
+      path: '/api/developer/simulator/scenarios',
+      title: 'List simulator scenarios',
+      description:
+        'Returns the catalog of pre-built kernel scenarios you can run from the developer console (payment success, payment failed, refund, payout, settlement, marketplace auction, treasury rebalance, LP timeout, stablecoin depeg, bank outage).',
+      auth: 'session',
+      params: [],
+      curl: `curl ${BASE}/api/developer/simulator/scenarios \\
+  -u psk_live_xxx:`,
+      node: `const res = await fetch('/api/developer/simulator/scenarios', {
+  headers: { Authorization: 'Bearer ' + process.env.PAYSWAP_SECRET_KEY },
+});
+const { scenarios } = await res.json();`,
+      python: `import requests
+res = requests.get(
+    '${BASE}/api/developer/simulator/scenarios',
+    auth=(os.environ['PAYSWAP_SECRET_KEY'], ''),
+)
+scenarios = res.json()['scenarios']`,
+      responses: [
+        {
+          status: 200,
+          label: 'Scenario catalog',
+          body: `{
+  "ok": true,
+  "scenarios": [
+    {
+      "id": "payment_success",
+      "label": "Payment Success",
+      "description": "A standard cross-border mobile money payment that settles successfully end-to-end.",
+      "category": "payment"
+    },
+    {
+      "id": "stablecoin_depeg",
+      "label": "Stablecoin Depeg",
+      "description": "FX spike causes twin-token depeg; insurance claim filed.",
+      "category": "stablecoin"
+    }
+  ]
+}`,
+        },
+      ],
+    },
+    {
+      id: 'developer-simulator-run',
+      method: 'POST',
+      path: '/api/developer/simulator/run',
+      title: 'Run a simulator scenario',
+      description:
+        'Runs a pre-built scenario through the kernel pipeline and returns the full structured result: timeline, event stream, ledger impact (before/after), decision inspector (policy findings, constitution checks, council vote, alternatives), and metrics (cost %, settlement time, risk, confidence).',
+      auth: 'session',
+      params: [
+        { name: 'scenarioId', type: 'string', required: true, description: 'Scenario id from the catalog.', enum: ['payment_success', 'payment_failed', 'refund', 'payout', 'settlement', 'marketplace_auction', 'treasury_rebalance', 'lp_timeout', 'stablecoin_depeg', 'bank_outage'] },
+      ],
+      curl: `curl ${BASE}/api/developer/simulator/run \\
+  -u psk_live_xxx: \\
+  -H "Content-Type: application/json" \\
+  -d '{ "scenarioId": "payment_success" }'`,
+      node: `const res = await fetch('/api/developer/simulator/run', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer ' + process.env.PAYSWAP_SECRET_KEY,
+  },
+  body: JSON.stringify({ scenarioId: 'payment_success' }),
+});
+const { run } = await res.json();
+console.log(run.settled, run.metrics);`,
+      python: `import requests
+res = requests.post(
+    '${BASE}/api/developer/simulator/run',
+    auth=(os.environ['PAYSWAP_SECRET_KEY'], ''),
+    json={'scenarioId': 'payment_success'},
+)
+run = res.json()['run']`,
+      responses: [
+        {
+          status: 200,
+          label: 'Successful run',
+          body: `{
+  "ok": true,
+  "elapsedMs": 13,
+  "run": {
+    "runId": "run_cms01vuup00abc",
+    "kernelVersion": "2.1.0-coordination",
+    "settled": true,
+    "scenarioId": "payment_success",
+    "timeline": [{ "name": "Intent", "status": "success", "frame": 0 }],
+    "events": [{ "id": "evt_01", "type": "payment.created", "frame": 0 }],
+    "ledger": {
+      "before": [{ "account": "merchant.settlement", "balance": 0 }],
+      "after": [{ "account": "merchant.settlement", "balance": 990, "delta": 990 }],
+      "entries": [{ "id": "le_01", "debit": 1000, "credit": 0, "balanceAfter": 1000 }]
+    },
+    "metrics": {
+      "costPercent": 1.0,
+      "settlementTimeMs": 1500,
+      "settlementTimeLabel": "1.5s",
+      "riskScore": 0.18,
+      "riskLabel": "low",
+      "confidence": 92,
+      "totalFees": 10,
+      "fxRate": 1.0
+    },
+    "resultHash": "0xabc123..."
+  }
+}`,
+        },
+        {
+          status: 400,
+          label: 'Unknown scenario',
+          body: `{ "ok": false, "error": "Unknown scenario: foo" }`,
+        },
+      ],
+    },
+    {
+      id: 'developer-sandbox-reset',
+      method: 'POST',
+      path: '/api/developer/sandbox/reset',
+      title: 'Reset developer sandbox',
+      description:
+        'Clears all sandbox state for the authenticated developer (test payments, payouts, webhooks, API keys created in sandbox). Production data is never touched.',
+      auth: 'session',
+      params: [],
+      curl: `curl ${BASE}/api/developer/sandbox/reset \\
+  -u psk_live_xxx: \\
+  -X POST`,
+      node: `await fetch('/api/developer/sandbox/reset', {
+  method: 'POST',
+  headers: { Authorization: 'Bearer ' + process.env.PAYSWAP_SECRET_KEY },
+});`,
+      python: `import requests
+requests.post(
+    '${BASE}/api/developer/sandbox/reset',
+    auth=(os.environ['PAYSWAP_SECRET_KEY'], ''),
+)`,
+      responses: [
+        {
+          status: 200,
+          label: 'Sandbox cleared',
+          body: `{ "ok": true, "clearedAt": "2026-07-28T12:00:00.000Z" }`,
+        },
+      ],
+    },
+    {
+      id: 'developer-metrics',
+      method: 'GET',
+      path: '/api/developer/metrics',
+      title: 'Developer metrics',
+      description:
+        'Returns aggregated metrics for the authenticated developer: request count by endpoint, error rate, p50/p95 latency, top customers.',
+      auth: 'session',
+      params: [
+        { name: 'window', type: 'string', required: false, description: 'Time window for aggregation.', enum: ['1h', '24h', '7d', '30d'] },
+      ],
+      curl: `curl "${BASE}/api/developer/metrics?window=24h" \\
+  -u psk_live_xxx:`,
+      node: `const res = await fetch('/api/developer/metrics?window=24h', {
+  headers: { Authorization: 'Bearer ' + process.env.PAYSWAP_SECRET_KEY },
+});
+const { metrics } = await res.json();`,
+      python: `import requests
+res = requests.get(
+    '${BASE}/api/developer/metrics',
+    params={'window': '24h'},
+    auth=(os.environ['PAYSWAP_SECRET_KEY'], ''),
+)
+metrics = res.json()['metrics']`,
+      responses: [
+        {
+          status: 200,
+          label: '24h metrics',
+          body: `{
+  "ok": true,
+  "metrics": {
+    "window": "24h",
+    "totalRequests": 1247,
+    "errorRate": 0.012,
+    "p50LatencyMs": 142,
+    "p95LatencyMs": 890,
+    "byEndpoint": [
+      { "path": "/api/payments/create", "count": 412, "errorRate": 0.005 },
+      { "path": "/api/payouts/create", "count": 89, "errorRate": 0.022 }
+    ]
+  }
+}`,
+        },
+      ],
+    },
+    {
+      id: 'developer-logs',
+      method: 'GET',
+      path: '/api/developer/logs',
+      title: 'Request logs',
+      description:
+        'Returns the most recent API requests made by the authenticated developer. Useful for debugging — each entry includes the request method, path, status, latency, and a correlation id.',
+      auth: 'session',
+      params: [
+        { name: 'limit', type: 'integer', required: false, description: 'Max entries to return (default 50, max 200).' },
+        { name: 'status', type: 'string', required: false, description: 'Filter by status class.', enum: ['success', 'error', 'all'] },
+      ],
+      curl: `curl "${BASE}/api/developer/logs?limit=50&status=error" \\
+  -u psk_live_xxx:`,
+      node: `const res = await fetch('/api/developer/logs?limit=50', {
+  headers: { Authorization: 'Bearer ' + process.env.PAYSWAP_SECRET_KEY },
+});
+const { logs } = await res.json();`,
+      python: `import requests
+res = requests.get(
+    '${BASE}/api/developer/logs',
+    params={'limit': 50, 'status': 'error'},
+    auth=(os.environ['PAYSWAP_SECRET_KEY'], ''),
+)
+logs = res.json()['logs']`,
+      responses: [
+        {
+          status: 200,
+          label: 'Recent logs',
+          body: `{
+  "ok": true,
+  "logs": [
+    {
+      "id": "log_01",
+      "method": "POST",
+      "path": "/api/payments/create",
+      "status": 200,
+      "latencyMs": 142,
+      "correlationId": "corr_01HABCDE",
+      "ts": "2026-07-28T11:58:42.000Z"
+    }
+  ]
+}`,
+        },
+      ],
+    },
+  ],
+};
+
+// ────────────────────────────────────────────────────────────────────────────
+// CUSTOMER WALLET
+// ────────────────────────────────────────────────────────────────────────────
+const customerWallet: EndpointGroup = {
+  id: 'customer-wallet',
+  label: 'Customer Wallet',
+  description:
+    'Customer-facing wallet endpoints. Customers can deposit funds, withdraw to a bank or mobile money account, transfer to another PaySwap customer or merchant, and pay invoices directly from their wallet balance.',
+  endpoints: [
+    {
+      id: 'customer-wallet-deposit',
+      method: 'POST',
+      path: '/api/customer/wallet/deposit',
+      title: 'Deposit to wallet',
+      description:
+        'Credits the customer\'s wallet in the requested currency. If the customer doesn\'t yet have a wallet for that currency, one is created automatically. The source can be a bank card, mobile money, or bank transfer.',
+      auth: 'session',
+      params: [
+        { name: 'amount', type: 'number', required: true, description: 'Amount to deposit. Must be > 0.' },
+        { name: 'currency', type: 'string', required: true, description: 'Wallet currency.', enum: ['GHS', 'KES', 'NGN', 'USD', 'EUR', 'ZAR'] },
+        { name: 'source', type: 'string', required: true, description: 'Funding source.', enum: ['BANK_CARD', 'MOBILE_MONEY', 'BANK_TRANSFER'] },
+        { name: 'reference', type: 'string', required: false, description: 'Optional customer-facing reference.' },
+      ],
+      curl: `curl ${BASE}/api/customer/wallet/deposit \\
+  -u psk_live_xxx: \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "amount": 250,
+    "currency": "GHS",
+    "source": "MOBILE_MONEY",
+    "reference": "momo topup"
+  }'`,
+      node: `const res = await fetch('/api/customer/wallet/deposit', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer ' + process.env.PAYSWAP_SECRET_KEY,
+  },
+  body: JSON.stringify({
+    amount: 250,
+    currency: 'GHS',
+    source: 'MOBILE_MONEY',
+  }),
+});
+const { wallet, transaction } = await res.json();`,
+      python: `import requests
+res = requests.post(
+    '${BASE}/api/customer/wallet/deposit',
+    auth=(os.environ['PAYSWAP_SECRET_KEY'], ''),
+    json={'amount': 250, 'currency': 'GHS', 'source': 'MOBILE_MONEY'},
+)
+wallet, transaction = res.json()['wallet'], res.json()['transaction']`,
+      responses: [
+        {
+          status: 200,
+          label: 'Deposit credited',
+          body: `{
+  "ok": true,
+  "wallet": {
+    "id": "wlt_01",
+    "currency": "GHS",
+    "balance": 250,
+    "pendingBalance": 0,
+    "lockedBalance": 0
+  },
+  "transaction": {
+    "id": "wtx_01",
+    "type": "CREDIT",
+    "amount": 250,
+    "currency": "GHS",
+    "counterparty": "MOBILE_MONEY",
+    "txHash": "dep_1753689600000"
+  }
+}`,
+        },
+        {
+          status: 400,
+          label: 'Invalid amount',
+          body: `{ "error": "Amount must be greater than 0" }`,
+        },
+      ],
+    },
+    {
+      id: 'customer-wallet-withdraw',
+      method: 'POST',
+      path: '/api/customer/wallet/withdraw',
+      title: 'Withdraw from wallet',
+      description:
+        'Debits the customer\'s wallet and schedules a payout to the specified destination. The wallet must have sufficient available balance (excluding pending + locked).',
+      auth: 'session',
+      params: [
+        { name: 'amount', type: 'number', required: true, description: 'Amount to withdraw.' },
+        { name: 'currency', type: 'string', required: true, description: 'Wallet currency.', enum: ['GHS', 'KES', 'NGN', 'USD', 'EUR', 'ZAR'] },
+        { name: 'destination', type: 'string', required: true, description: 'Payout destination.', enum: ['BANK_ACCOUNT', 'MOBILE_MONEY'] },
+        { name: 'destinationLabel', type: 'string', required: false, description: 'Human-readable label for the destination (e.g. "Ecobank ****1234").' },
+      ],
+      curl: `curl ${BASE}/api/customer/wallet/withdraw \\
+  -u psk_live_xxx: \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "amount": 100,
+    "currency": "GHS",
+    "destination": "BANK_ACCOUNT",
+    "destinationLabel": "Ecobank ****1234"
+  }'`,
+      node: `const res = await fetch('/api/customer/wallet/withdraw', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer ' + process.env.PAYSWAP_SECRET_KEY,
+  },
+  body: JSON.stringify({
+    amount: 100,
+    currency: 'GHS',
+    destination: 'BANK_ACCOUNT',
+  }),
+});`,
+      python: `import requests
+res = requests.post(
+    '${BASE}/api/customer/wallet/withdraw',
+    auth=(os.environ['PAYSWAP_SECRET_KEY'], ''),
+    json={'amount': 100, 'currency': 'GHS', 'destination': 'BANK_ACCOUNT'},
+)`,
+      responses: [
+        {
+          status: 200,
+          label: 'Withdrawal scheduled',
+          body: `{
+  "ok": true,
+  "wallet": { "id": "wlt_01", "balance": 150 },
+  "transaction": { "id": "wtx_02", "type": "DEBIT", "amount": -100 }
+}`,
+        },
+        {
+          status: 422,
+          label: 'Insufficient funds',
+          body: `{ "error": "Insufficient wallet funds for this withdrawal" }`,
+        },
+      ],
+    },
+    {
+      id: 'customer-wallet-transfer',
+      method: 'POST',
+      path: '/api/customer/wallet/transfer',
+      title: 'Transfer to another wallet',
+      description:
+        'Atomically moves funds from the customer\'s wallet to another PaySwap customer or merchant. Both sides of the ledger move in a single transaction — if either fails, the whole transfer rolls back.',
+      auth: 'session',
+      params: [
+        { name: 'recipientType', type: 'string', required: true, description: 'Recipient type.', enum: ['CUSTOMER', 'MERCHANT'] },
+        { name: 'recipientId', type: 'string', required: true, description: 'Recipient customer or merchant id.' },
+        { name: 'amount', type: 'number', required: true, description: 'Amount to transfer.' },
+        { name: 'currency', type: 'string', required: true, description: 'Wallet currency.', enum: ['GHS', 'KES', 'NGN', 'USD', 'EUR', 'ZAR'] },
+        { name: 'note', type: 'string', required: false, description: 'Optional memo attached to the transfer.' },
+      ],
+      curl: `curl ${BASE}/api/customer/wallet/transfer \\
+  -u psk_live_xxx: \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "recipientType": "CUSTOMER",
+    "recipientId": "cus_01HABCDE",
+    "amount": 50,
+    "currency": "GHS",
+    "note": "Splitting dinner"
+  }'`,
+      node: `const res = await fetch('/api/customer/wallet/transfer', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer ' + process.env.PAYSWAP_SECRET_KEY,
+  },
+  body: JSON.stringify({
+    recipientType: 'CUSTOMER',
+    recipientId: 'cus_01HABCDE',
+    amount: 50,
+    currency: 'GHS',
+  }),
+});`,
+      python: `import requests
+res = requests.post(
+    '${BASE}/api/customer/wallet/transfer',
+    auth=(os.environ['PAYSWAP_SECRET_KEY'], ''),
+    json={'recipientType': 'CUSTOMER', 'recipientId': 'cus_01HABCDE', 'amount': 50, 'currency': 'GHS'},
+)`,
+      responses: [
+        {
+          status: 200,
+          label: 'Transfer completed',
+          body: `{
+  "ok": true,
+  "recipient": { "type": "CUSTOMER", "id": "cus_01HABCDE", "name": "Kofi Mensah" },
+  "senderTransaction": { "id": "wtx_03", "type": "DEBIT", "amount": -50, "txHash": "xfer_01" }
+}`,
+        },
+        {
+          status: 404,
+          label: 'Recipient not found',
+          body: `{ "error": "Recipient not found" }`,
+        },
+      ],
+    },
+    {
+      id: 'customer-invoice-pay',
+      method: 'POST',
+      path: '/api/customer/invoices/{id}/pay',
+      title: 'Pay an invoice from wallet',
+      description:
+        'Pays an invoice directly from the customer\'s wallet balance. The wallet must be in the same currency as the invoice and have sufficient available balance. The invoice is marked PAID and a Payment record is created atomically.',
+      auth: 'session',
+      params: [
+        { name: 'id', type: 'string', required: true, description: 'Invoice id (path parameter).' },
+      ],
+      curl: `curl ${BASE}/api/customer/invoices/inv_01HABCDE/pay \\
+  -u psk_live_xxx: \\
+  -X POST`,
+      node: `const res = await fetch('/api/customer/invoices/inv_01HABCDE/pay', {
+  method: 'POST',
+  headers: { Authorization: 'Bearer ' + process.env.PAYSWAP_SECRET_KEY },
+});
+const { invoice, payment } = await res.json();`,
+      python: `import requests
+res = requests.post(
+    '${BASE}/api/customer/invoices/inv_01HABCDE/pay',
+    auth=(os.environ['PAYSWAP_SECRET_KEY'], ''),
+)
+invoice, payment = res.json()['invoice'], res.json()['payment']`,
+      responses: [
+        {
+          status: 200,
+          label: 'Invoice paid',
+          body: `{
+  "ok": true,
+  "invoice": { "id": "inv_01HABCDE", "status": "PAID" },
+  "payment": { "id": "pay_01", "status": "COMPLETED", "method": "QR" },
+  "walletBalance": 175
+}`,
+        },
+        {
+          status: 422,
+          label: 'Already paid',
+          body: `{ "error": "Invoice already paid" }`,
+        },
+      ],
+    },
+  ],
+};
+
+// ────────────────────────────────────────────────────────────────────────────
+// NOTIFICATIONS
+// ────────────────────────────────────────────────────────────────────────────
+const notifications: EndpointGroup = {
+  id: 'notifications',
+  label: 'Notifications',
+  description:
+    'The notifications endpoint returns the most recent audit-log entries relevant to the current user. Relevance is computed server-side based on the user\'s roles — merchants see payment/payout/refund entries, compliance officers see AML/KYC/sanction entries, treasury sees reserve/corridor entries, and so on.',
+  endpoints: [
+    {
+      id: 'notifications-list',
+      method: 'GET',
+      path: '/api/notifications',
+      title: 'List notifications',
+      description:
+        'Returns the 10 most recent audit-log entries relevant to the authenticated user. The bell icon in the unified shell header polls this endpoint every 30 seconds.',
+      auth: 'session',
+      params: [],
+      curl: `curl ${BASE}/api/notifications \\
+  -u psk_live_xxx:`,
+      node: `const res = await fetch('/api/notifications', {
+  headers: { Authorization: 'Bearer ' + process.env.PAYSWAP_SECRET_KEY },
+});
+const { items } = await res.json();`,
+      python: `import requests
+res = requests.get(
+    '${BASE}/api/notifications',
+    auth=(os.environ['PAYSWAP_SECRET_KEY'], ''),
+)
+items = res.json()['items']`,
+      responses: [
+        {
+          status: 200,
+          label: 'Recent notifications',
+          body: `{
+  "items": [
+    {
+      "id": "al_01",
+      "action": "PAYMENT.CREATE",
+      "resourceType": "PAYMENT",
+      "resourceId": "pay_01",
+      "result": "SUCCESS",
+      "description": "Payment · PAYMENT",
+      "category": "payment",
+      "createdAt": "2026-07-28T11:58:42.000Z"
+    }
+  ]
+}`,
+        },
+        {
+          status: 401,
+          label: 'Unauthenticated',
+          body: `{ "error": "Unauthorized" }`,
+        },
+      ],
+    },
+  ],
+};
+
 export const API_DOC_GROUPS: EndpointGroup[] = [
   payments,
   refunds,
@@ -1357,6 +1912,9 @@ export const API_DOC_GROUPS: EndpointGroup[] = [
   activity,
   lp,
   treasury,
+  customerWallet,
+  notifications,
+  developer,
   webhookEvents,
 ];
 

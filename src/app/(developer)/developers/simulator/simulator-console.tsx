@@ -41,6 +41,7 @@ import {
   Clock,
   Activity,
   ChevronRight,
+  RotateCw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -149,6 +150,7 @@ export function SimulatorConsole({ scenarios }: Props) {
   const [running, setRunning] = React.useState(false);
   const [result, setResult] = React.useState<RunResult | null>(null);
   const [expandedDecision, setExpandedDecision] = React.useState<number | null>(0);
+  const [lastError, setLastError] = React.useState<string | null>(null);
 
   async function handleRun() {
     if (!scenarioId) {
@@ -157,22 +159,36 @@ export function SimulatorConsole({ scenarios }: Props) {
     }
     setRunning(true);
     setResult(null);
+    setLastError(null);
     try {
       const res = await fetch('/api/developer/simulator/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scenarioId }),
       });
-      const data = await res.json();
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch {
+        // Server returned non-JSON (e.g. dev server crashed mid-request).
+        data = {};
+      }
       if (!res.ok || !data.ok) {
-        throw new Error(data?.error || 'Simulation failed');
+        const msg =
+          data?.error ||
+          (res.status === 0
+            ? 'Network error — the dev server may have restarted. Please retry.'
+            : `Simulation failed (HTTP ${res.status})`);
+        throw new Error(msg);
       }
       setResult(data.run);
       toast.success(`Scenario "${data.run.scenarioLabel}" executed`, {
         description: data.run.settled ? 'Payment settled successfully' : 'Payment blocked by kernel',
       });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Simulation failed');
+      const msg = err instanceof Error ? err.message : 'Simulation failed';
+      setLastError(msg);
+      toast.error(msg);
     } finally {
       setRunning(false);
     }
@@ -239,6 +255,43 @@ export function SimulatorConsole({ scenarios }: Props) {
           </Button>
         </CardContent>
       </Card>
+
+      {lastError && !result && (
+        <Card className="border-rose-500/30 bg-rose-500/[0.03]">
+          <CardContent className="p-4">
+            <div className="flex items-start gap-3">
+              <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-rose-700 dark:text-rose-300">
+                  Simulation failed
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground break-words">
+                  {lastError}
+                </p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Tip: the dev server compiles routes on-demand and can run out
+                  of memory on first compile. Try again — the second attempt
+                  hits the cached build.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleRun}
+                disabled={running || !scenarioId}
+                className="shrink-0"
+              >
+                {running ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCw className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Retry
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {result && (
         <>

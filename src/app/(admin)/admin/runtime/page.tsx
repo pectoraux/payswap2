@@ -27,7 +27,7 @@ import { OptimizationPanel } from '@/components/simulator/optimization-panel';
 import { ProtocolScenariosPanel } from '@/components/simulator/protocol-scenarios';
 import { ReplayStepper } from '@/components/simulator/replay-stepper';
 import { ThemeToggle } from '@/components/simulator/theme-toggle';
-import { AiDirector } from '@/components/admin/ai-director';
+import { RuntimeAIDirector as AiDirector } from '@/components/admin/runtime-ai-director';
 import type { SimulationScenario, SimulationResult, CurrencyCode } from '@/kernel';
 
 /**
@@ -44,9 +44,9 @@ import type { SimulationScenario, SimulationResult, CurrencyCode } from '@/kerne
  * Plus the custom-scrollbar styling so the scrollbar matches the muted theme.
  */
 const TAB_SCROLL_CLASS =
-  'mt-2 max-h-[calc(100vh-22rem)] overflow-y-auto overflow-x-hidden pr-1 ' +
+  'mt-2 max-h-[calc(100vh-22rem)] overflow-y-auto overflow-x-auto pr-1 ' +
   '[&::-webkit-scrollbar]:w-1.5 ' +
-  '[&::-webkit-scrollbar-thumb]:rounded ' +
+  '[&::-webkit-scrollbar-thumb]:rounded-full ' +
   '[&::-webkit-scrollbar-thumb]:bg-muted ' +
   '[&::-webkit-scrollbar-track]:bg-transparent';
 

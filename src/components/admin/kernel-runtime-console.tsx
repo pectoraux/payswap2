@@ -37,6 +37,24 @@ import {
 import { AlertCircle, Database, Globe, Cpu, Clock, BookOpen, Network, Shield, Play } from 'lucide-react';
 import { HelpIcon } from '@/components/help-icon';
 
+/**
+ * Shared scroll wrapper for every result tab in the kernel runtime console.
+ * Bounds the tab content to a viewport-relative height so long lists (events,
+ * ledger entries, solver candidates) scroll within the tab instead of pushing
+ * the TabsList off-screen and overlapping the page header / footer.
+ *
+ * `overflow-x-auto` lets wide tables (ledger, candidates) scroll horizontally
+ * without breaking the grid. The custom-scrollbar classes give the track a
+ * transparent background and the thumb a rounded muted pill so it matches
+ * the rest of the console.
+ */
+const TAB_SCROLL_CLASS =
+  'mt-4 max-h-[calc(100vh-22rem)] overflow-y-auto overflow-x-auto pr-1 ' +
+  '[&::-webkit-scrollbar]:w-1.5 ' +
+  '[&::-webkit-scrollbar-thumb]:rounded-full ' +
+  '[&::-webkit-scrollbar-thumb]:bg-muted ' +
+  '[&::-webkit-scrollbar-track]:bg-transparent';
+
 interface SimMeta {
   scenario: SimulationScenario;
   countryOptions: { country: string; currency: CurrencyCode; methods: string[] }[];
@@ -234,6 +252,7 @@ export function KernelRuntimeConsole() {
 
               {/* 6-view Financial Control Center */}
               <Tabs value={activeTab} onValueChange={setActiveTab}>
+                <div className="sticky top-0 z-10 bg-background/95 backdrop-blur pb-1 pt-0 -mt-1">
                 <TabsList className="grid w-full grid-cols-3 lg:grid-cols-6 h-auto">
                   <TabsTrigger value="world" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Globe className="h-3 w-3" />World</TabsTrigger>
                   <TabsTrigger value="optimization" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Cpu className="h-3 w-3" />Solver</TabsTrigger>
@@ -243,9 +262,11 @@ export function KernelRuntimeConsole() {
                   <TabsTrigger value="infrastructure" className="flex flex-col gap-0.5 py-1.5 text-[10px]"><Network className="h-3 w-3" />Infra</TabsTrigger>
                   <div className="flex items-center justify-center px-1"><HelpIcon text="Six views into the kernel's execution: World shows entities and their relationships. Solver shows how the planner evaluated and ranked candidate plans. Execution shows the step-by-step timeline of state transitions. Protocol shows escrow, collateral, and fiat proofs. Accounting shows the double-entry ledger and treasury recommendations. Infrastructure shows runtime services and engine health." /></div>
                 </TabsList>
+                </div>
 
                 {/* 1. World State */}
-                <TabsContent value="world" className="space-y-4 mt-4">
+                <TabsContent value="world" className={TAB_SCROLL_CLASS}>
+                  <div className="space-y-4">
                   <div className="flex items-center gap-1.5"><span className="text-xs font-semibold text-muted-foreground">World State Overview</span><HelpIcon text="The World tab shows the complete state of all entities involved in this transaction: who the buyer and merchant are, which liquidity providers participated, what reserves were available, and how the financial graph connected them. This is the kernel's view of the world before, during, and after the transaction." /></div>
                   <EntityRegistry entities={result.entities} />
                   <FinancialGraphPanel graph={result.graph} />
@@ -253,10 +274,12 @@ export function KernelRuntimeConsole() {
                     <WorldStatePanel world={result.worldState} currency={result.scenario.transaction.currency} />
                     <WorldInspectorPanel inspector={result.worldInspector} currency={result.scenario.transaction.currency} />
                   </div>
+                  </div>
                 </TabsContent>
 
                 {/* 2. Optimization */}
-                <TabsContent value="optimization" className="space-y-4 mt-4">
+                <TabsContent value="optimization" className={TAB_SCROLL_CLASS}>
+                  <div className="space-y-4">
                   <div className="flex items-center gap-1.5"><span className="text-xs font-semibold text-muted-foreground">Solver & Optimization</span><HelpIcon text="The Solver tab reveals the kernel's planning process. The constraint solver evaluates all possible liquidity paths (which LPs can settle this corridor, at what cost, speed, and risk). It ranks candidates by your chosen priority (cheapest, fastest, safest, balanced). The AI Reasoning panel explains WHY the planner chose the winning plan — which trade-offs it considered and what it rejected. The Alternatives panel shows the next-best plans that were considered but not selected." /></div>
                   <SolverPanel candidates={result.solverCandidates} />
                   <TransitionsPanel transitions={result.transitions} />
@@ -264,42 +287,51 @@ export function KernelRuntimeConsole() {
                   <AIReasoningView reasoning={result.plan.reasoning} />
                   <AlternativesPanel alternatives={result.plan.alternatives} />
                   <ReasoningPanel results={result.reasoningResults} />
+                  </div>
                 </TabsContent>
 
                 {/* 3. Execution Timeline */}
-                <TabsContent value="execution" className="space-y-4 mt-4">
+                <TabsContent value="execution" className={TAB_SCROLL_CLASS}>
+                  <div className="space-y-4">
                   <div className="flex items-center gap-1.5"><span className="text-xs font-semibold text-muted-foreground">Execution Timeline</span><HelpIcon text="The Execution tab shows the step-by-step timeline of what happened when the kernel executed the plan. The State Machine panel shows every state transition (intent → planning → escrow → settling → settled). The Execution DAG visualizes the dependency graph of operations. The Time Machine (Replay Stepper) lets you scrub through each frame of the execution — pause, play, step forward/backward — to see exactly what happened at each moment: ledger entries, events emitted, twin tokens minted/burned, and any plan amendments the executor had to make." /></div>
                   <StateMachinePanel transitions={result.stateTransitions} />
                   <ExecutionGraphDAG graph={result.executionGraph} />
                   {result.amendments.length > 0 && <AmendmentsPanel amendments={result.amendments} />}
                   <ReplayStepper key={result.runId} replay={result.replay} currency={result.scenario.transaction.currency} />
+                  </div>
                 </TabsContent>
 
                 {/* 4. Protocol */}
-                <TabsContent value="protocol" className="space-y-4 mt-4">
+                <TabsContent value="protocol" className={TAB_SCROLL_CLASS}>
+                  <div className="space-y-4">
                   <div className="flex items-center gap-1.5"><span className="text-xs font-semibold text-muted-foreground">Protocol Layer</span><HelpIcon text="The Protocol tab shows the settlement infrastructure: escrow entries (Twin Tokens frozen during settlement), collateral vaults (LP collateral locked for this transaction), capacity stakes, and fiat proofs (evidence from real connectors that bank balances exist). This is the layer above the kernel that manages the financial instruments — the kernel itself is domain-neutral and doesn't know about escrow or collateral." /></div>
                   {result?.fiatProofs && result.fiatProofs.length > 0 && <FiatProofPanel proofs={result.fiatProofs} />}
                   <ProtocolPanel protocol={result.protocol} />
+                  </div>
                 </TabsContent>
 
                 {/* 5. Accounting */}
-                <TabsContent value="accounting" className="space-y-4 mt-4">
+                <TabsContent value="accounting" className={TAB_SCROLL_CLASS}>
+                  <div className="space-y-4">
                   <div className="flex items-center gap-1.5"><span className="text-xs font-semibold text-muted-foreground">Accounting & Constitution</span><HelpIcon text="The Accounting tab shows the financial impact: world state (reserve balances before/after), treasury AI recommendations (whether reserves need replenishing, corridors need rebalancing), and the constitution check (43 invariant rules that must all pass — if any rule fails, the transaction is blocked). The constitution is the kernel's safety net: it checks things like 'every Twin Token must be backed', 'no negative balances', 'escrow must reconcile', 'treasury must be solvent'." /></div>
                   <div className="grid gap-4 xl:grid-cols-2">
                     <WorldStatePanel world={result.worldState} currency={result.scenario.transaction.currency} />
                     <TreasuryAIPanel recommendations={result.treasuryRecommendations} />
                   </div>
                   <ConstitutionPanel constitution={result.constitution} />
+                  </div>
                 </TabsContent>
 
                 {/* 6. Infrastructure */}
-                <TabsContent value="infrastructure" className="space-y-4 mt-4">
+                <TabsContent value="infrastructure" className={TAB_SCROLL_CLASS}>
+                  <div className="space-y-4">
                   <div className="flex items-center gap-1.5"><span className="text-xs font-semibold text-muted-foreground">Infrastructure & Engines</span><HelpIcon text="The Infrastructure tab shows the runtime services that power the kernel: the 29 internal engines (planner, executor, ledger, treasury, risk, fraud, AI agent, etc.), their health status, the LP lifecycle events (how LPs were invited, activated, and used in this transaction), and the runtime services that were invoked. This is the 'machine room' view — useful for debugging why a transaction behaved the way it did." /></div>
                   <RuntimeServicesPanel services={result.runtimeServices} />
                   <EntityRegistry entities={result.entities} />
                   <FinancialGraphPanel graph={result.graph} />
                   <LPLifecyclePanel events={result.lpLifecycleEvents} />
                   {meta && <EnginesPanel engines={meta.engines} />}
+                  </div>
                 </TabsContent>
               </Tabs>
 

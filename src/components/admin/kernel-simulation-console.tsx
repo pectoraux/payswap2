@@ -8,7 +8,6 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { toast } from 'sonner';
 import {
   Play, Loader2, CheckCircle2, XCircle, AlertTriangle, Cpu, GitBranch,
@@ -330,9 +329,11 @@ export function KernelSimulationConsole() {
           {/* Ledger entries */}
           {result.ledger.length > 0 && (
             <Card>
-              <CardHeader><CardTitle className="text-sm">Ledger Entries ({result.ledger.length})</CardTitle></CardHeader>
+              <CardHeader className="pb-3"><CardTitle className="text-sm">Ledger Entries ({result.ledger.length})</CardTitle></CardHeader>
               <CardContent>
-                <ScrollArea className="max-h-64">
+                <div className="max-h-64 overflow-y-auto overflow-x-auto pr-1
+                  [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full
+                  [&::-webkit-scrollbar-thumb]:bg-muted [&::-webkit-scrollbar-track]:bg-transparent">
                   <div className="space-y-1">
                     {result.ledger.map((entry, i) => (
                       <div key={i} className="flex items-center gap-3 rounded border p-2 text-xs font-mono">
@@ -343,7 +344,7 @@ export function KernelSimulationConsole() {
                       </div>
                     ))}
                   </div>
-                </ScrollArea>
+                </div>
               </CardContent>
             </Card>
           )}
@@ -351,9 +352,11 @@ export function KernelSimulationConsole() {
           {/* Events */}
           {result.events.length > 0 && (
             <Card>
-              <CardHeader><CardTitle className="text-sm">Event Stream ({result.events.length} events)</CardTitle></CardHeader>
+              <CardHeader className="pb-3"><CardTitle className="text-sm">Event Stream ({result.events.length} events)</CardTitle></CardHeader>
               <CardContent>
-                <ScrollArea className="max-h-48">
+                <div className="max-h-96 overflow-y-auto overflow-x-auto pr-1
+                  [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full
+                  [&::-webkit-scrollbar-thumb]:bg-muted [&::-webkit-scrollbar-track]:bg-transparent">
                   <div className="space-y-1">
                     {result.events.slice(0, 30).map((evt) => (
                       <div key={evt.id} className="flex items-center gap-2 text-xs font-mono">
@@ -366,7 +369,7 @@ export function KernelSimulationConsole() {
                       <div className="text-xs text-muted-foreground text-center pt-2">...and {result.events.length - 30} more</div>
                     )}
                   </div>
-                </ScrollArea>
+                </div>
               </CardContent>
             </Card>
           )}

@@ -35,14 +35,15 @@ export async function requireSession() {
  *
  * Resolution order:
  *   1. A MERCHANT or MERCHANT_STAFF UserRole with a merchantId on it.
- *   2. A DEVELOPER UserRole — in this case we fall back to the developer's
- *      sandbox merchant (see `resolveDeveloperMerchantId`), so developers
- *      using the API explorer / dev console can exercise merchant-scoped
- *      endpoints (create payment, list payouts, install extensions, …)
- *      without first being granted a MERCHANT role.
+ *   2. Any of DEVELOPER, ADMIN, SUPER_ADMIN, or MERCHANT-without-merchantId
+ *      → fall back to the developer sandbox merchant
+ *      (`resolveDeveloperMerchantId`), so developers / admins using the API
+ *      explorer / dev console can exercise merchant-scoped endpoints
+ *      (create payment, list payouts, install extensions, …) without first
+ *      being granted an explicit MERCHANT role with a merchantId.
  *
  * Returns null if the user is unauthenticated, has no user id, or holds
- * none of the three roles above.
+ * none of the roles above AND the merchant table is empty.
  */
 export async function requireMerchantId(): Promise<string | null> {
   const session = await requireSession();
@@ -50,18 +51,24 @@ export async function requireMerchantId(): Promise<string | null> {
   const userId = (session.user as any)?.id;
   if (!userId) return null;
 
-  // 1. Explicit merchant / merchant-staff role.
+  // 1. Explicit merchant / merchant-staff role with a merchantId set.
   const userRole = await db.userRole.findFirst({
     where: { userId, role: { in: ['MERCHANT', 'MERCHANT_STAFF'] } },
   });
   if (userRole?.merchantId) return userRole.merchantId;
 
-  // 2. Developer role → resolve the sandbox merchant.
-  const devRole = await db.userRole.findFirst({
-    where: { userId, role: 'DEVELOPER' },
+  // 2. Developer / admin / super-admin / merchant-without-merchantId →
+  //    resolve via the developer sandbox merchant (which falls back to the
+  //    first merchant in the system). This is what unblocks the API explorer
+  //    for the demo `developer@payswap.demo` user.
+  const fallbackRole = await db.userRole.findFirst({
+    where: {
+      userId,
+      role: { in: ['DEVELOPER', 'ADMIN', 'SUPER_ADMIN', 'MERCHANT', 'MERCHANT_STAFF'] },
+    },
     select: { userId: true },
   });
-  if (devRole) {
+  if (fallbackRole) {
     return resolveDeveloperMerchantId(userId);
   }
 
