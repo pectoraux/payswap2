@@ -44,6 +44,15 @@ import {
   Cpu,
   ScrollText,
   Gauge,
+  Microscope,
+  Database,
+  Scale,
+  Repeat2,
+  Landmark,
+  Users2,
+  Puzzle,
+  Box,
+  Clock,
 } from 'lucide-react';
 
 /**
@@ -169,6 +178,7 @@ export const adminNav: NavGroup[] = [
       { label: 'Users', href: '/admin/users', icon: <Users className="h-4 w-4" /> },
       { label: 'Merchants', href: '/admin/merchants', icon: <Package className="h-4 w-4" /> },
       { label: 'Extensions', href: '/admin/extensions', icon: <Boxes className="h-4 w-4" /> },
+      { label: 'Capability SDK', href: '/admin/sdk', icon: <Puzzle className="h-4 w-4" /> },
     ],
   },
   {
@@ -177,6 +187,8 @@ export const adminNav: NavGroup[] = [
       { label: 'Runtime', href: '/admin/runtime', icon: <Globe className="h-4 w-4" /> },
       { label: 'Platform', href: '/admin/platform', icon: <Activity className="h-4 w-4" /> },
       { label: 'Network', href: '/admin/network', icon: <Globe className="h-4 w-4" /> },
+      { label: 'Digital Twin', href: '/admin/digital-twin', icon: <Box className="h-4 w-4" /> },
+      { label: 'Time Machine', href: '/admin/time-machine', icon: <Clock className="h-4 w-4" /> },
       { label: 'Simulations', href: '/admin/simulations', icon: <History className="h-4 w-4" /> },
       { label: 'Audit Trail', href: '/admin/audit', icon: <Shield className="h-4 w-4" /> },
     ],
@@ -322,6 +334,8 @@ export const developerNav: NavGroup[] = [
       { label: 'Webhooks', href: '/developers/webhooks', icon: <Webhook className="h-4 w-4" /> },
       { label: 'Simulator', href: '/developers/simulator', icon: <Cpu className="h-4 w-4" /> },
       { label: 'Extensions', href: '/developers/extensions', icon: <Boxes className="h-4 w-4" /> },
+      { label: 'Digital Twin', href: '/developers/digital-twin', icon: <Box className="h-4 w-4" /> },
+      { label: 'Time Machine', href: '/developers/time-machine', icon: <Clock className="h-4 w-4" /> },
     ],
   },
   {
@@ -329,6 +343,7 @@ export const developerNav: NavGroup[] = [
     items: [
       { label: 'Logs', href: '/developers/logs', icon: <ScrollText className="h-4 w-4" /> },
       { label: 'Metrics', href: '/developers/metrics', icon: <Gauge className="h-4 w-4" /> },
+      { label: 'Inspectors', href: '/developers/inspectors', icon: <Microscope className="h-4 w-4" /> },
     ],
   },
   {
