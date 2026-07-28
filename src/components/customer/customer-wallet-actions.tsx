@@ -1,8 +1,15 @@
 'use client';
 
 import * as React from 'react';
-import { QRCodeCanvas } from 'qrcode.react';
+import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
+
+// Fix: QRCodeCanvas uses the canvas API which isn't available during SSR.
+// Load it dynamically with ssr: false to prevent hydration errors.
+const QRCodeCanvas = dynamic(
+  () => import('qrcode.react').then((mod) => mod.QRCodeCanvas),
+  { ssr: false, loading: () => <div className="h-[200px] w-[200px] animate-pulse rounded bg-muted" /> },
+);
 import {
   ArrowDownLeft,
   ArrowUpRight,

@@ -1,33 +1,53 @@
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
+import { Card, CardContent } from '@/components/ui/card';
+import { EmptyState, PageHeader } from '@/components/role-ui';
+import { ArrowLeftRight } from 'lucide-react';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+  settlementOrderService,
+  lockedStablecoinService,
+  overviewForLp,
+  type SettlementOrder,
+  type LockedStablecoin,
+} from '@/lp/settlement-store';
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { StatusBadge } from '@/components/status-badge';
-import {
-  KpiCard,
-  EmptyState,
-  PageHeader,
-  fmtCurrency,
-  fmtDate,
-} from '@/components/role-ui';
-import { ArrowLeftRight, CheckCircle2, Clock, Coins } from 'lucide-react';
+  LpSettlementsConsole,
+  type SettlementOrderDTO,
+  type LockedStablecoinDTO,
+} from '@/components/lp/lp-settlements-console';
 
 export const dynamic = 'force-dynamic';
 
+function serializeOrder(o: SettlementOrder): SettlementOrderDTO {
+  return {
+    ...o,
+    createdAt: new Date(o.createdAt).toISOString(),
+    deadlineAt: new Date(o.deadlineAt).toISOString(),
+    claimedAt: o.claimedAt ? new Date(o.claimedAt).toISOString() : null,
+    settledAt: o.settledAt ? new Date(o.settledAt).toISOString() : null,
+  };
+}
+
+function serializeLock(l: LockedStablecoin): LockedStablecoinDTO {
+  return {
+    ...l,
+    lockedAt: new Date(l.lockedAt).toISOString(),
+    unlockedAt: l.unlockedAt ? new Date(l.unlockedAt).toISOString() : null,
+  };
+}
+
+/**
+ * LP Settlements page.
+ *
+ * Combines three views into one page:
+ *   1. Pending settlement orders that need LP bandwidth (claimable).
+ *   2. Locked stablecoins (held during incomplete transfers) + unlock action.
+ *   3. In-flight (matched) + settled history for this LP.
+ *
+ * Server-side data is fetched from the in-memory LP settlement store and
+ * passed to the client console which handles claim + unlock interactions.
+ */
 export default async function LpSettlementsPage() {
   const session = await getServerSession(authOptions);
   const userId = (session?.user as any)?.id as string | undefined;
@@ -40,23 +60,36 @@ export default async function LpSettlementsPage() {
     : null;
 
   const lp = account?.lpProfile ?? null;
+  // When the user has no LP profile yet (e.g. an admin previewing the LP
+  // console), fall back to the seeded LP id so the page still shows data.
+  const lpId = lp?.id ?? 'seed-lp-1';
 
-  const settlements = lp
-    ? await db.payment.findMany({
-        where: { lpId: lp.id, status: 'COMPLETED' },
-        orderBy: { settledAt: 'desc' },
-        take: 100,
-      })
-    : [];
+  const pendingOrders = settlementOrderService
+    .listPending()
+    .map(serializeOrder);
+  const matchedOrders = settlementOrderService
+    .listMatchedByLp(lpId)
+    .map(serializeOrder);
+  const settledOrders = settlementOrderService
+    .listSettledByLp(lpId)
+    .map(serializeOrder);
 
-  const totalSettled = settlements.reduce((s, p) => s + p.amount, 0);
-  const totalFees = settlements.reduce((s, p) => s + p.fee, 0);
+  const lockedStablecoins = lockedStablecoinService
+    .listByLp(lpId)
+    .filter((l) => l.status === 'locked')
+    .map(serializeLock);
+  const unlockHistory = lockedStablecoinService
+    .listByLp(lpId)
+    .filter((l) => l.status === 'unlocked')
+    .map(serializeLock);
+
+  const overview = overviewForLp(lpId);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Settlements"
-        description="Completed settlements routed through your liquidity."
+        description="Claim settlement orders needing bandwidth, unlock stablecoins locked in incomplete transfers, and review your settlement history."
       />
 
       {!lp ? (
@@ -65,99 +98,23 @@ export default async function LpSettlementsPage() {
             <EmptyState
               icon={<ArrowLeftRight className="h-6 w-6" />}
               title="No LP profile linked"
-              description="Contact the treasury team to onboard your liquidity provider account."
+              description="Showing demo data. Contact the treasury team to onboard your liquidity provider account."
             />
           </CardContent>
         </Card>
-      ) : (
-        <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <KpiCard
-              label="Settled volume"
-              value={fmtCurrency(totalSettled, 'USD')}
-              hint="All-time"
-              icon={<Coins className="h-4 w-4" />}
-              tone="emerald"
-            />
-            <KpiCard
-              label="Fees earned"
-              value={fmtCurrency(totalFees, 'USD')}
-              hint="Settlement fees"
-              icon={<CheckCircle2 className="h-4 w-4" />}
-              tone="teal"
-            />
-            <KpiCard
-              label="Settlements"
-              value={settlements.length.toString()}
-              hint="Completed"
-              icon={<ArrowLeftRight className="h-4 w-4" />}
-              tone="cyan"
-            />
-            <KpiCard
-              label="Last settlement"
-              value={settlements[0] ? fmtDate(settlements[0].settledAt) : '—'}
-              hint="Most recent"
-              icon={<Clock className="h-4 w-4" />}
-              tone="amber"
-            />
-          </div>
+      ) : null}
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Settlement history</CardTitle>
-              <CardDescription>
-                {settlements.length} settlement{settlements.length === 1 ? '' : 's'} recorded
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {settlements.length === 0 ? (
-                <EmptyState
-                  icon={<ArrowLeftRight className="h-6 w-6" />}
-                  title="No settlements yet"
-                  description="Completed payments routed through your liquidity will appear here."
-                />
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Reference</TableHead>
-                      <TableHead>Corridor</TableHead>
-                      <TableHead>Amount</TableHead>
-                      <TableHead>Fee</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Settled</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {settlements.map((s) => (
-                      <TableRow key={s.id}>
-                        <TableCell className="font-mono text-xs">
-                          {s.reference || s.id.slice(0, 12)}
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {s.corridor || '—'}
-                        </TableCell>
-                        <TableCell className="font-semibold tabular-nums">
-                          {fmtCurrency(s.amount, s.currency)}
-                        </TableCell>
-                        <TableCell className="text-xs tabular-nums text-emerald-600 dark:text-emerald-400">
-                          {fmtCurrency(s.fee, s.currency)}
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge status={s.status} />
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {fmtDate(s.settledAt)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
-        </>
-      )}
+      <LpSettlementsConsole
+        initial={{
+          pendingOrders,
+          matchedOrders,
+          settledOrders,
+          lockedStablecoins,
+          unlockHistory,
+          overview,
+          lpId,
+        }}
+      />
     </div>
   );
 }

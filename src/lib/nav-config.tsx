@@ -153,6 +153,7 @@ export const merchantNav: NavGroup[] = [
       { label: 'Subscriptions', href: '/dashboard/subscriptions', icon: <Repeat className="h-4 w-4" /> },
       { label: 'Refunds', href: '/dashboard/refunds', icon: <RefreshCcw className="h-4 w-4" /> },
       { label: 'Disputes', href: '/dashboard/disputes', icon: <ShieldAlert className="h-4 w-4" /> },
+      { label: 'Claims', href: '/dashboard/claims', icon: <Scale className="h-4 w-4" /> },
       { label: 'Payouts', href: '/dashboard/payouts', icon: <ArrowDownToLine className="h-4 w-4" /> },
     ],
   },
@@ -200,6 +201,7 @@ export const adminNav: NavGroup[] = [
       { label: 'Time Machine', href: '/admin/time-machine', icon: <Clock className="h-4 w-4" /> },
       { label: 'Simulations', href: '/admin/simulations', icon: <History className="h-4 w-4" /> },
       { label: 'Audit Trail', href: '/admin/audit', icon: <Shield className="h-4 w-4" /> },
+      { label: 'Claims', href: '/admin/claims', icon: <Scale className="h-4 w-4" /> },
     ],
   },
 ];

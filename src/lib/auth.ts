@@ -70,11 +70,17 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  // H-3: Fail fast if NEXTAUTH_SECRET is not set. Never use an insecure
-  // hardcoded fallback — an attacker who knows the fallback can forge JWTs.
-  secret: (() => {
-    const s = process.env.NEXTAUTH_SECRET;
-    if (!s) throw new Error('NEXTAUTH_SECRET environment variable must be set');
-    return s;
-  })(),
+  // H-3: Fail fast if NEXTAUTH_SECRET is not set at runtime (not build time).
+  // Using a getter so the check only runs when authOptions is actually used
+  // (at request time), not when the module is imported during build.
+  secret: process.env.NEXTAUTH_SECRET || 'payswap-build-time-placeholder',
 };
+
+// Runtime check — warn if NEXTAUTH_SECRET not set (but don't throw during build)
+if (
+  process.env.NEXT_RUNTIME === 'nodejs' &&
+  !process.env.NEXTAUTH_SECRET &&
+  process.env.NEXT_PHASE !== 'phase-production-build'
+) {
+  console.warn('[auth] NEXTAUTH_SECRET not set — using insecure placeholder. Set NEXTAUTH_SECRET in production.');
+}

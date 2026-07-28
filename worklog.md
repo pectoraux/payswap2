@@ -4335,3 +4335,71 @@ Stage Summary:
   developer@payswap.demo, customer@payswap.demo, lp@payswap.demo all
   return password valid: true
 - GitHub: pushed to https://github.com/pectoraux/payswap2 (commit 11acabc)
+
+---
+Task ID: FEATURES-1
+Agent: features-agent
+Task: LP settlement orders + unlock stablecoins, Treasury emergency freeze, Claims/evidence/voting
+
+Work Log:
+- Read worklog tail (last 200 lines) to align with project conventions: in-memory stores on `globalThis.__PAYSWAP_*__`, service singletons, auto-seed on first import, shadcn/ui + role-ui components, `requireSession`/`requireAdminSession`/`requireMerchant` auth patterns, AuditLog durable record pattern.
+- Inspected existing `/lp/settlements`, `/treasury/emergency`, `/treasury/freeze` (API), `/lp/capital` (API), `/dashboard/disputes` (merchant page pattern), `/admin/identities` (admin page pattern), `/admin/marketplace` (admin page pattern), `nav-config.tsx`, `api-auth.ts`, `auth-guards.ts`, `role-ui.tsx`, `status-badge.tsx`.
+- Confirmed constraints: don't modify `src/runtime/`, don't modify Prisma schema, use existing shadcn/ui components, use in-memory storage.
+
+Feature 1 — LP Settlement Orders + Unlock Locked Stablecoins:
+- Created `src/lp/settlement-store.ts` — in-memory store with `SettlementOrder` + `LockedStablecoin` record types, `settlementOrderService` + `lockedStablecoinService`, `overviewForLp()` KPI helper, auto-seeds 8 settlement orders (6 pending + 1 matched + 1 settled) and 4 locked stablecoins (3 locked + 1 unlocked) on first import.
+- `GET /api/lp/settlement-orders` — returns pending orders, matched-by-LP, settled-by-LP, locked stablecoins, unlock history, and overview KPIs. Resolves the LP profile via Account→LPProfile, falls back to `seed-lp-1` for admins/demo.
+- `POST /api/lp/settlement-orders/[id]/claim` — LP claims a pending order (transitions pending→matched). Validates deadline, audits `LP_SETTLEMENT_ORDER_CLAIMED`.
+- `POST /api/lp/stablecoins/unlock` — LP unlocks locked stablecoins. Body `{ lockId, reason? }`. Ownership check (admin bypass), audits `LP_STABLECOIN_UNLOCKED`.
+- Upgraded `/lp/settlements` page: 4 KPI cards (pending orders / in-flight / settled / locked stablecoins), pending settlement orders table (order ID, corridor, amount, fee, deadline, status, claim button), locked stablecoins table (amount, currency, reason, lockedAt, status, unlock button + dialog with reason), in-flight (matched) table, settlement history table, unlock history sub-section. Built `src/components/lp/lp-settlements-console.tsx` (~750 lines) as the client component.
+
+Feature 2 — Treasury Emergency Freeze:
+- Created `src/treasury/emergency-store.ts` — in-memory store for the 4 new target types (`country | corridor | reserve | wallet`). Does NOT replace the existing `EmergencyFreezeEngine` (which handles account/asset/corridor); runs parallel to it. Auto-seeds 3 active freezes (NG country, GHS→NGN corridor, reserve-kes-1). Includes country/corridor/reserve/wallet option lists for the form dropdowns.
+- `POST /api/treasury/emergency/freeze` — admin-only. Body `{ target, targetId, reason, duration? }`. Idempotency check (rejects if already frozen with 409). Audits `TREASURY.EMERGENCY_FREEZE_${TARGET}`.
+- `POST /api/treasury/emergency/unfreeze` — treasury/admin. Body `{ targetId }` (freeze record id). Accepts either the freeze record id OR the frozen target's identifier (falls back to lookup). Audits `TREASURY.EMERGENCY_UNFREEZE`.
+- `GET /api/treasury/emergency/status` — treasury/admin. Returns active / expired / lifted freezes + audit trail (last 100 events from AuditLog) + summary counts.
+- Upgraded `/treasury/emergency` page: KPI summary (active / lifted / audit events), freeze form with 4 target-type buttons + target-ID select + custom input + reason textarea + 6 duration presets, quick freeze actions (one-tap country/corridor/reserve/wallet), active freezes table (target, targetId, reason, frozenAt, duration, expires-in, status, unfreeze button), lifted history table, audit trail table. Built `src/components/treasury/treasury-emergency-console.tsx` (~660 lines) as the client component.
+
+Feature 3 — Claims / Evidence / Voting:
+- Created `src/claims/store.ts` + `src/claims/index.ts` — in-memory store for `Claim` (with embedded `Evidence[]` + `Vote[]` + optional `Resolution`). 9 claim types, 6 statuses (open / under_review / approved / rejected / vetoed / resolved), 6 evidence types, support/reject votes, 3 admin decisions (approved/rejected/vetoed). Auto-seeds 4 representative claims (open + under_review + approved + vetoed). Service handles one-vote-per-user (replaces prior vote), auto-promotes open→under_review on first evidence/vote.
+- `POST /api/claims` — create a claim. Body `{ transactionId, type, description }`. Resolves merchant scope for non-admins. Audits `CLAIM_CREATED`.
+- `GET /api/claims` — list claims with filters (`status`, `merchantId`, `transactionId`, `q`). Merchants auto-scoped to their merchantId; admins see all.
+- `GET /api/claims/[id]` — claim detail with evidence + votes + resolution + tally.
+- `POST /api/claims/[id]/evidence` — submit evidence. Body `{ type, description, reference? }`. Audits `CLAIM_EVIDENCE_SUBMITTED`.
+- `POST /api/claims/[id]/vote` — cast/update vote (one per user). Body `{ vote, comment? }`. Audits `CLAIM_VOTE_CAST`.
+- `POST /api/claims/[id]/resolve` — admin resolve/veto. Body `{ decision, notes? }`. Records community tally at resolution time. Audits `CLAIM_RESOLVED`.
+- Created `/admin/claims/page.tsx` + `claims-manager.tsx` (~600 lines) — KPI cards (open / under review / vetoed / resolved-all), filterable claims table with search, detail Sheet showing description + resolution banner + community tally + evidence list + votes list, resolve/veto Sheet with 3 decision buttons (approved/rejected/vetoed) + notes textarea. Admin can veto any claim.
+- Created `/dashboard/claims/page.tsx` + `claims-manager.tsx` (~640 lines) — KPI cards (open / under review / resolved), filterable claims table, "New claim" Dialog (transaction ID + type select + description), detail Sheet with add-evidence Dialog + cast-vote buttons (support/reject) + evidence list + votes list + resolution banner.
+- Added `Claims` to the admin `System` nav group (icon: `Scale`) and to the merchant `Manage Business` nav group (icon: `Scale`).
+
+Verification:
+- `bunx tsc --noEmit` → 0 errors in all targeted paths (src/app/(lp), src/app/(treasury), src/app/(admin)/admin/claims, src/app/(merchant)/dashboard/claims, src/app/api/claims, src/app/api/lp, src/app/api/treasury, src/lp/, src/treasury/, src/claims/, src/components/lp/lp-settlements-console, src/components/treasury/treasury-emergency-console). Total tsc errors: 280 (all pre-existing in certification/, scripts/, examples/, skills/, developer/cli/, src/protocol/disaster-recovery — unrelated to this task).
+- `bun run lint` → 0 errors, 310 warnings (all pre-existing patterns: `M-RT-21: db.auditLog.create()` warnings are mirrored from existing routes like `/api/treasury/freeze`, `/api/lp/capital`, etc. — they're the project's convention for audit logging).
+
+Stage Summary:
+- LP features:
+  • `src/lp/settlement-store.ts` (in-memory store + services + auto-seed)
+  • `GET /api/lp/settlement-orders` (list pending / matched / settled / locked / overview)
+  • `POST /api/lp/settlement-orders/[id]/claim` (LP claims a pending order)
+  • `POST /api/lp/stablecoins/unlock` (LP unlocks locked stablecoins)
+  • Upgraded `/lp/settlements` page: 4 KPI cards + pending orders table (with claim) + locked stablecoins table (with unlock dialog) + in-flight table + settlement history + unlock history
+  • `src/components/lp/lp-settlements-console.tsx` (~750 lines, client component)
+- Treasury features:
+  • `src/treasury/emergency-store.ts` (in-memory store for country/corridor/reserve/wallet freezes + auto-seed)
+  • `POST /api/treasury/emergency/freeze` (admin freezes a target)
+  • `POST /api/treasury/emergency/unfreeze` (treasury/admin lifts a freeze)
+  • `GET /api/treasury/emergency/status` (active + lifted + audit trail + summary)
+  • Upgraded `/treasury/emergency` page: 3 KPI cards + freeze form (4 target types + 6 duration presets) + quick freeze actions + active freezes table (with unfreeze) + lifted history + audit trail
+  • `src/components/treasury/treasury-emergency-console.tsx` (~660 lines, client component)
+- Claims features:
+  • `src/claims/store.ts` + `src/claims/index.ts` (in-memory store + service + auto-seed for Claim/Evidence/Vote/Resolution)
+  • `POST /api/claims` (create claim)
+  • `GET /api/claims` (list with status/merchantId/transactionId/q filters; auto-scoped for merchants)
+  • `GET /api/claims/[id]` (claim detail + tally)
+  • `POST /api/claims/[id]/evidence` (submit evidence)
+  • `POST /api/claims/[id]/vote` (cast/update vote, one per user)
+  • `POST /api/claims/[id]/resolve` (admin resolve/veto with community tally recorded)
+  • `/admin/claims` page + `claims-manager.tsx` (~600 lines) — list + filter + detail Sheet + resolve/veto Sheet
+  • `/dashboard/claims` page + `claims-manager.tsx` (~640 lines) — list + create Dialog + detail Sheet + add-evidence Dialog + cast-vote buttons
+  • Added `Claims` to admin `System` nav + merchant `Manage Business` nav (icon: Scale)
+- tsc: 0 | lint: 0
