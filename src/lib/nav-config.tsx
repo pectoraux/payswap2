@@ -63,6 +63,12 @@ import {
   FileOutput,
   FileSignature,
   Radio,
+  Activity as ActivityIcon,
+  LineChart,
+  GitBranch,
+  Clock3,
+  Coins,
+  TrendingUp as TrendingUpIcon,
 } from 'lucide-react';
 
 /**
@@ -209,6 +215,16 @@ export const adminNav: NavGroup[] = [
       { label: 'Settlement Contracts', href: '/admin/settlement-contracts', icon: <FileSignature className="h-4 w-4" /> },
       { label: 'Proof of Reserves', href: '/admin/proof-of-reserves', icon: <ShieldCheck className="h-4 w-4" /> },
       { label: 'Regulator Exports', href: '/admin/regulator-exports', icon: <FileOutput className="h-4 w-4" /> },
+      { label: 'Settlement Timeline', href: '/admin/settlement-timeline', icon: <Clock3 className="h-4 w-4" /> },
+      { label: 'Twin Tokens', href: '/admin/twin-tokens', icon: <Coins className="h-4 w-4" /> },
+      { label: 'Reserve Growth', href: '/admin/reserve-growth', icon: <TrendingUpIcon className="h-4 w-4" /> },
+    ],
+  },
+  {
+    label: 'Economic',
+    items: [
+      { label: 'Liquidity Market', href: '/admin/liquidity-market', icon: <LineChart className="h-4 w-4" /> },
+      { label: 'Compiler Explorer', href: '/admin/compiler-explorer', icon: <GitBranch className="h-4 w-4" /> },
     ],
   },
 ];
@@ -266,6 +282,7 @@ export const treasuryNav: NavGroup[] = [
     label: 'Overview',
     items: [
       { label: 'Overview', href: '/treasury', icon: <LayoutDashboard className="h-4 w-4" /> },
+      { label: 'Control Center', href: '/treasury/control-center', icon: <ActivityIcon className="h-4 w-4" /> },
     ],
   },
   {

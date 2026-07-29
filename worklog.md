@@ -4459,3 +4459,56 @@ Stage Summary:
   • Ops → Operations → Circuit Breakers
   • LP → Liquidity → Bandwidth
 - tsc: 0 (in src/app, src/components, src/lib) | lint: 0 errors, 310 pre-existing warnings
+
+---
+Task ID: DASHBOARDS-1
+Agent: dashboards-agent
+Task: Build 6 flagship visualization dashboards
+
+Work Log:
+- Read worklog tail (last 100 lines) to align with project conventions: server-component page + client `*-viewer.tsx` pattern, in-memory runtime engines, `requireAdmin()` / role layout guards, shadcn/ui component set, `PageHeader`, `max-h-[…] overflow-y-auto` for tables.
+- Explored runtime sources for data shapes: `src/runtime/control-plane/engine.ts` (`buildDigitalTwin()`, `getReport()` → capitalAllocations + inventoryRecommendations + reserveEvolution + networkOptimization), `src/runtime/ledger/engine.ts` (`getBalanceSheet()`, `getProofOfTwinTokens()`, `getSolvencyReport()`), `src/runtime/liquidity/policy-engine.ts` (verified `liquidityPolicyEngine` is a pure function with zero imports — safe to call from a client component), `src/runtime/liquidity/bandwidth-engine.ts` (`listAll()`), `src/runtime/liquidity/settlement-contract-engine.ts` (`list()` + 8-stage lifecycle), `src/runtime/economic/twin-token-types.ts` (TwinTokenPosition shape), `src/runtime/index.ts` (Runtime singleton — `runtime.controlPlane`, `runtime.ledger`, `runtime.twinTokens`, `runtime.settlementContracts`).
+- Created shared visuals module `src/components/dashboards/visuals.tsx` — reusable pure CSS/SVG primitives (no external chart library): `Bar`, `StackedBar`, `Gauge` (circular SVG with colored thresholds), `MaturityMeter` (5-stage vertical progress), `HealthBadge`, `StatTile`, `Timeline` (horizontal stage tracker with completed/current/pending states), plus format helpers (`fmtUsd`, `fmtNum`, `fmtPct`, `fmtX`, `fmtDate`).
+
+Dashboard 1 — Treasury Control Center (`/treasury/control-center`):
+- `page.tsx` (server): session-guarded (TREASURY/ADMIN/SUPER_ADMIN), reads `runtime.controlPlane.buildDigitalTwin()`, `runtime.ledger.getBalanceSheet()`, `runtime.ledger.getProofOfTwinTokens()`, `runtime.controlPlane.getReport()`. Serializes countries + recommendations + reserveEvolution to DTOs.
+- `control-center-viewer.tsx` (client): KPI strip (total reserves / stablecoin inventory / twin tokens outstanding / countries tracked) + twin-token backing gauge (circular SVG with 4 thresholds) + fiat/stablecoin backing bars + 6-month linear reserve forecast (vertical bar chart) + per-country reserve utilization (stacked bars + maturity meter + health badge + backing ratio) + rebalance recommendations from capital allocations + inventory actions (action / approval class / ROI / risk / confidence) + reserve evolution plan + stablecoin inventory table.
+
+Dashboard 2 — Liquidity Market (`/admin/liquidity-market`):
+- `page.tsx` (server, `requireAdmin()`): reads twin, balance sheet, contracts, bandwidth. Passes DTOs.
+- `liquidity-market-viewer.tsx` (client): Bloomberg-style. KPI strip (total LP bandwidth / stablecoin inventory / reserve coverage / settlement queue) + global LP map (filterable by asset type, country, free-text search — capacity / available / used / escrow / bond / participation mode / debit-authorized badge / health badge) + settlement queue card + marketplace depth per corridor (demand vs supply bars with fill %) + reserve coverage by country + stablecoin inventory tiles.
+
+Dashboard 3 — Economic Compiler Explorer (`/admin/compiler-explorer`):
+- `page.tsx` (server): passes twin countries + bandwidth DTOs.
+- `compiler-explorer.tsx` (client): Imports `liquidityPolicyEngine` directly from `@/runtime/liquidity` (verified pure). Interactive payment intent form (amount / from country / to country / FX rate), 8-stage animated pipeline (Intent → Strategy → Reserve Graph → Marketplace → LP Selection → Twin Tokens → Settlement → Confirmation), strategy badge with explanation, sender/receiver reserve summary cards, per-stage decision cards (treasury actions, marketplace escrow, LP bandwidth matches, twin-token ops, settlement actions, fallback graph, rollback plan), plan KPI strip. Auto-compiles on mount.
+
+Dashboard 4 — Settlement Timeline (`/admin/settlement-timeline`):
+- `page.tsx` (server): reads `settlementContractEngine.list()`.
+- `settlement-timeline-viewer.tsx` (client): KPI strip (total / in-flight / closed / expired-disputed) + searchable/filterable contract list. Each contract renders an 8-stage horizontal timeline (Created → Funded → Claimed → Accepted → Awaiting → Confirmed → Released → Closed) — completed = green checkmark, current = amber ring, pending = gray. Click any contract → detail Sheet with corridor / amount / escrow / LP / recipient + all stage timestamps.
+
+Dashboard 5 — Twin Token Dashboard (`/admin/twin-tokens`):
+- `page.tsx` (server): reads balance sheet, proof of twin tokens, solvency, digital twin, `runtime.twinTokens.list()`, `runtime.settlementContracts.list()` (for 24h mint/burn approximation).
+- `twin-tokens-viewer.tsx` (client): KPI strip (total supply / reserve backing / net minted today / outstanding liabilities) + backing gauge + 24h mint/burn activity (minted / burned / net) + circulation & coverage card (reserve ratio badge, fiat/stablecoin split) + supply by currency bars + per-country twin tokens vs backing + twin token positions table (account / type / currency / balance / bar).
+
+Dashboard 6 — Reserve Growth (`/admin/reserve-growth`):
+- `page.tsx` (server): reads twin, balance sheet, solvency.
+- `reserve-growth-viewer.tsx` (client): KPI strip (total reserves / fiat backing / solvency ratio / countries with fiat) + hero fiat-vs-stablecoin backing card with "100% Fiat" target + 12-month linear projection (fiat grows 10%/mo, stablecoin decays 3%/mo) + country coverage (fiat-backed / stablecoin-only / no reserve) + maturity distribution badges + reserve coverage gauge + utilization/velocity/sovereignty-ETA card + per-country maturity ladder (stacked bar + maturity meter + backing ratio).
+
+Nav-config updates (`src/lib/nav-config.tsx`):
+- Imported new icons: `Activity as ActivityIcon`, `LineChart`, `GitBranch`, `Clock3`, `Coins`, `TrendingUp as TrendingUpIcon`.
+- Treasury → Overview → added "Control Center" → `/treasury/control-center`.
+- Admin → System → added "Settlement Timeline" → `/admin/settlement-timeline`, "Twin Tokens" → `/admin/twin-tokens`, "Reserve Growth" → `/admin/reserve-growth`.
+- Admin → new "Economic" group: "Liquidity Market" → `/admin/liquidity-market`, "Compiler Explorer" → `/admin/compiler-explorer`.
+
+Stage Summary:
+- Dashboards built:
+  • `/treasury/control-center` (page.tsx + control-center-viewer.tsx) — Treasury Control Center
+  • `/admin/liquidity-market` (page.tsx + liquidity-market-viewer.tsx) — Liquidity Market
+  • `/admin/compiler-explorer` (page.tsx + compiler-explorer.tsx) — Economic Compiler Explorer (interactive, client-side compile)
+  • `/admin/settlement-timeline` (page.tsx + settlement-timeline-viewer.tsx) — Settlement Timeline
+  • `/admin/twin-tokens` (page.tsx + twin-tokens-viewer.tsx) — Twin Token Dashboard
+  • `/admin/reserve-growth` (page.tsx + reserve-growth-viewer.tsx) — Reserve Growth
+  • `src/components/dashboards/visuals.tsx` — shared pure CSS/SVG visualization primitives
+- Nav items added: Treasury → Control Center; Admin → Settlement Timeline, Twin Tokens, Reserve Growth, Liquidity Market, Compiler Explorer (new "Economic" group)
+- Constraints honored: `src/runtime/` frozen (read-only); Prisma schema untouched; no new chart libraries; existing shadcn/ui components used throughout
+- tsc: 0 | lint: 0
