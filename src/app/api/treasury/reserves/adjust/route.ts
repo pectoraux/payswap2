@@ -187,10 +187,41 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // --- Apply adjustment atomically ---------------------------------------
+  // --- Stage 1 FIX: Dispatch through the runtime kernel ------------------
+  // Previously: direct db.wallet.update + db.walletTransaction.create
+  // Now: dispatches wallet.credit or wallet.debit through the dispatcher,
+  // which produces events + ledger entries verified by the constitution.
+  const { runtime } = await import('@/runtime');
   const txType = action === 'add' ? 'CREDIT' : 'DEBIT';
   const delta = action === 'add' ? amount : -amount;
 
+  const dispatchResult = await runtime.dispatcher.dispatch({
+    type: action === 'add' ? 'wallet.credit' : 'wallet.debit',
+    payload: {
+      walletId: `reserve:${currency}`,
+      accountId: merchant.accountId,
+      currency,
+      amount,
+      description: `Treasury reserve ${action}: ${reason}`,
+      reference: `reserve-${action}-${Date.now()}`,
+    },
+    metadata: {
+      actor: { id: userId ?? 'treasury', role: 'TREASURY' },
+      environment: 'sandbox',
+      correlationId: `reserve-adjust-${Date.now()}`,
+      source: 'api',
+    },
+  });
+
+  if (!dispatchResult.success) {
+    return NextResponse.json(
+      { error: `Reserve adjustment failed: ${dispatchResult.error ?? dispatchResult.message}` },
+      { status: 500 },
+    );
+  }
+
+  // Update Prisma wallet as a PROJECTION of the event (same pattern as
+  // customer wallet operations — dispatch first, then update read model)
   const result = await db.$transaction(async (tx) => {
     const updated = await tx.wallet.update({
       where: { id: wallet.id },
