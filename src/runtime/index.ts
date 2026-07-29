@@ -15,7 +15,7 @@
  */
 
 import { LiveClock, VirtualClock, type RuntimeClock } from './clock';
-import { InMemoryEventStore, type EventStore } from './events';
+import { InMemoryEventStore, PostgresEventStore, type EventStore } from './events';
 import { IntentEngine } from './intent';
 import { Pipeline } from './pipeline';
 import { DefaultPolicyEngine, type PolicyEngine } from './policy';
@@ -425,7 +425,14 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const clock: RuntimeClock = opts.virtualClock
     ? new VirtualClock(opts.virtualClock)
     : new LiveClock();
-  const eventStore: EventStore = opts.eventStore ?? new InMemoryEventStore();
+  // R3 FIX: Use PostgresEventStore as the authoritative event store.
+  // The database is the source of truth — events are written to Postgres
+  // BEFORE the API returns. The in-memory cache is disposable.
+  // Falls back to InMemoryEventStore if DATABASE_URL is not set (for tests).
+  const eventStore: EventStore = opts.eventStore
+    ?? (process.env.DATABASE_URL
+      ? new PostgresEventStore()
+      : new InMemoryEventStore());
   const intentEngine = new IntentEngine(clock);
   const policyEngine = new DefaultPolicyEngine();
   const pipeline = new Pipeline(clock, intentEngine, eventStore, policyEngine);
@@ -650,7 +657,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   // ── M-ECO-31: Adaptive Liquidity Intelligence ───────────────────────────
   const intelligence = new EcoIntelligenceEngine({
     getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
-      id: a.id, kind: a.kind, ownerId: a.lpIdId, currency: a.toCurrency,
+      id: a.id, kind: a.kind, ownerId: a.ownerId, currency: a.currency,
       availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
     })),
     getBandwidthPositions: () => bandwidth.listAll().map((b) => ({
@@ -687,7 +694,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     },
     () => ({
       accounts: treasury.projection.list({ take: 10000 }).map((a) => ({
-        kind: a.kind, currency: a.toCurrency,
+        kind: a.kind, currency: a.currency,
         availableBalance: a.availableBalance, reference: a.reference,
       })),
     }),
@@ -699,7 +706,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   // ── M-ECO-34.5: Economic Control Plane ─────────────────────────────────
   const controlPlane = new EconomicControlPlane({
     getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
-      id: a.id, kind: a.kind, ownerId: a.lpIdId, currency: a.toCurrency,
+      id: a.id, kind: a.kind, ownerId: a.ownerId, currency: a.currency,
       availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
     })),
     getBandwidthPositions: () => bandwidth.listAll().map((b) => ({
@@ -710,7 +717,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
       lpId: lp.lpId, confidence: lp.confidence, riskScore: lp.riskScore, totalCapacity: lp.totalCapacity,
     })),
     getTwinTokenPositions: () => twinTokens.list().map((t) => ({
-      accountId: t.accountId, tokenType: t.tokenType, currency: t.toCurrency, balance: t.balance,
+      accountId: t.accountId, tokenType: t.tokenType, currency: t.currency, balance: t.balance,
     })),
     getIntelligenceDashboard: () => intelligence.getDashboard(),
   });
@@ -718,11 +725,11 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   // ── M-ECO-35: Canonical Economic Ledger & Solvency Engine ──────────────
   const ledger = new EconomicLedgerEngine({
     getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
-      id: a.id, kind: a.kind, currency: a.toCurrency,
+      id: a.id, kind: a.kind, currency: a.currency,
       availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
     })),
     getTwinTokenPositions: () => twinTokens.list().map((t) => ({
-      accountId: t.accountId, tokenType: t.tokenType, currency: t.toCurrency, balance: t.balance,
+      accountId: t.accountId, tokenType: t.tokenType, currency: t.currency, balance: t.balance,
     })),
     getBandwidthPositions: () => bandwidth.listAll().map((b) => ({
       owner: b.lpId, country: b.country, capacity: b.capacity,
@@ -730,7 +737,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     })),
     getSettlementContracts: () => settlementContracts.list().map((c) => ({
       contractId: c.id, amount: c.amount, currency: c.toCurrency,
-      status: c.status, escrowLocked: c.escrowAmount,
+      status: c.status, escrowLocked: Boolean(c.escrowAmount > 0),
     })),
     getEventCount: () => eventStore.size(),
   });
@@ -752,7 +759,7 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
         description: r.description,
         targetCountries: r.targetCountries,
         amount: r.amount,
-        currency: r.toCurrency,
+        currency: r.currency,
         expectedROI: r.expectedROI,
         expectedRisk: r.expectedRisk,
         confidence: r.confidence,

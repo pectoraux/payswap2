@@ -8,3 +8,4 @@ export type {
 } from './types';
 export type { EventStore } from './event-store';
 export { InMemoryEventStore, OptimisticConcurrencyError } from './event-store';
+export { PostgresEventStore, OCCError } from './postgres-event-store';
