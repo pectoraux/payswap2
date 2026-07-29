@@ -72,7 +72,7 @@ export async function POST(
         await tx.customerRecord.update({
           where: { id: customerRecordId },
           data: {
-            totalSpent: cr.totalSpent + settled.amount,
+            totalSpent: Number(cr.totalSpent) + Number(settled.amount),
             transactionCount: cr.transactionCount + 1,
           },
         });

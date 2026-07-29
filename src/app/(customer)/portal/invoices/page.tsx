@@ -54,7 +54,7 @@ export default async function CustomerInvoicesPage() {
 
   const outstanding = invoices
     .filter((i) => i.status === 'SENT' || i.status === 'OVERDUE')
-    .reduce((s, i) => s + i.total, 0);
+    .reduce((s, i) => s + Number(i.total), 0);
   const paid = invoices.filter((i) => i.status === 'PAID');
   const overdue = invoices.filter((i) => i.status === 'OVERDUE');
   const currency = invoices[0]?.currency || 'GHS';
@@ -143,8 +143,8 @@ export default async function CustomerInvoicesPage() {
                   <TableBody>
                     {invoices.map((inv) => {
                       const payable = PAYABLE_STATUSES.has(inv.status);
-                      const walletBalance = walletByCurrency.get(inv.currency) ?? 0;
-                      const canAfford = walletBalance >= inv.total;
+                      const walletBalance = Number(walletByCurrency.get(inv.currency) ?? 0);
+                      const canAfford = walletBalance >= Number(inv.total);
                       return (
                         <TableRow key={inv.id}>
                           <TableCell className="font-mono text-xs font-semibold">
@@ -154,7 +154,7 @@ export default async function CustomerInvoicesPage() {
                             {inv.merchant?.name ?? '—'}
                           </TableCell>
                           <TableCell className="font-semibold tabular-nums">
-                            {fmtCurrency(inv.total, inv.currency)}
+                            {fmtCurrency(Number(inv.total), inv.currency)}
                           </TableCell>
                           <TableCell>
                             <StatusBadge status={inv.status} />
@@ -169,13 +169,13 @@ export default async function CustomerInvoicesPage() {
                                   invoice={{
                                     id: inv.id,
                                     number: inv.number,
-                                    total: inv.total,
+                                    total: Number(inv.total),
                                     currency: inv.currency,
                                   }}
                                 />
                                 {!canAfford && (
                                   <span className="text-[10px] text-amber-600 dark:text-amber-400">
-                                    Wallet short: {fmtCurrency(inv.total - walletBalance, inv.currency)}
+                                    Wallet short: {fmtCurrency(Number(inv.total) - walletBalance, inv.currency)}
                                   </span>
                                 )}
                               </div>

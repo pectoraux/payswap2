@@ -142,7 +142,7 @@ export default async function CustomerDetailPage({ params }: PageProps) {
         select: { accountId: true },
       });
       if (linkedCustomer?.accountId) {
-        wallets = await db.wallet.findMany({
+        wallets = (await db.wallet.findMany({
           where: { accountId: linkedCustomer.accountId },
           select: {
             id: true,
@@ -152,7 +152,14 @@ export default async function CustomerDetailPage({ params }: PageProps) {
             pendingBalance: true,
             lockedBalance: true,
           },
-        });
+        })).map((w) => ({
+          id: w.id,
+          name: w.name,
+          currency: w.currency,
+          balance: Number(w.balance),
+          pendingBalance: Number(w.pendingBalance),
+          lockedBalance: Number(w.lockedBalance),
+        }));
       }
     } catch {
       // ignore — wallet section is optional.
@@ -189,16 +196,16 @@ export default async function CustomerDetailPage({ params }: PageProps) {
       p.status.toUpperCase(),
     ),
   );
-  const lifetimeValue = completedPayments.reduce((s, p) => s + p.amount, 0);
+  const lifetimeValue = completedPayments.reduce((s, p) => s + Number(p.amount), 0);
   const totalRefunded = refunds
     .filter((r) => ['COMPLETED', 'APPROVED'].includes(r.status.toUpperCase()))
-    .reduce((s, r) => s + r.amount, 0);
+    .reduce((s, r) => s + Number(r.amount), 0);
   const hasPendingRefund = refunds.some(
     (r) => r.status.toUpperCase() === 'PENDING',
   );
 
   // ── Customer tags ─────────────────────────────────────────────────
-  const isVip = customer.totalSpent > 500;
+  const isVip = Number(customer.totalSpent) > 500;
   const isFrequent = customer.transactionCount > 5;
   const isAtRisk = hasPendingRefund;
   const tags: { label: string; icon: typeof Crown; tone: string }[] = [];
@@ -243,7 +250,7 @@ export default async function CustomerDetailPage({ params }: PageProps) {
   for (const p of completedPayments) {
     const key = `${p.createdAt.getFullYear()}-${String(p.createdAt.getMonth() + 1).padStart(2, '0')}`;
     const m = monthMap.get(key);
-    if (m) m.total += p.amount;
+    if (m) m.total += Number(p.amount);
   }
   const maxMonthly = Math.max(...months.map((m) => m.total), 1);
 
@@ -347,7 +354,7 @@ export default async function CustomerDetailPage({ params }: PageProps) {
                     Total spent
                   </div>
                   <div className="mt-0.5 text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-                    {fmt(customer.totalSpent)}
+                    {fmt(Number(customer.totalSpent))}
                   </div>
                 </div>
                 <div>
@@ -543,7 +550,7 @@ export default async function CustomerDetailPage({ params }: PageProps) {
                         </Link>
                       </TableCell>
                       <TableCell className="font-semibold tabular-nums">
-                        {fmt(p.amount, p.currency)}
+                        {fmt(Number(p.amount), p.currency)}
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {p.method || '—'}
@@ -667,7 +674,7 @@ export default async function CustomerDetailPage({ params }: PageProps) {
                         </div>
                       </div>
                       <div className="text-sm font-semibold tabular-nums shrink-0">
-                        {fmt(r.amount, r.payment?.currency)}
+                        {fmt(Number(r.amount), r.payment?.currency)}
                       </div>
                     </div>
                   ))}

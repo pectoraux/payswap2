@@ -42,9 +42,9 @@ export default async function CustomerWalletPage() {
     id: w.id,
     name: w.name,
     currency: w.currency,
-    balance: w.balance,
-    pendingBalance: w.pendingBalance,
-    lockedBalance: w.lockedBalance,
+    balance: Number(w.balance),
+    pendingBalance: Number(w.pendingBalance),
+    lockedBalance: Number(w.lockedBalance),
     isDefault: w.isDefault,
   }));
 
@@ -58,7 +58,7 @@ export default async function CustomerWalletPage() {
       w.transactions.map((t) => ({
         id: t.id,
         type: t.type,
-        amount: t.amount,
+        amount: Number(t.amount),
         currency: t.currency,
         counterparty: t.counterparty,
         reference: t.reference,

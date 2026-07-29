@@ -137,7 +137,7 @@ export async function GET(req: NextRequest) {
     }),
   ]);
 
-  const totalRevenue = completedAgg._sum.amount ?? 0;
+  const totalRevenue = Number(completedAgg._sum.amount ?? 0);
   const successRate = paymentTotal > 0 ? paymentCompleted / paymentTotal : 1;
   const refundRate = paymentTotal > 0 ? refundTotal / paymentTotal : 0;
   const disputeRate = paymentTotal > 0 ? refundPending / paymentTotal : 0;
@@ -151,9 +151,9 @@ export async function GET(req: NextRequest) {
     successScore * 0.3 + refundScore * 0.25 + disputeScore * 0.25 + 70 * 0.1 + 60 * 0.1,
   );
 
-  const recentRevenue = recentPaymentsAgg._sum.amount ?? 0;
+  const recentRevenue = Number(recentPaymentsAgg._sum.amount ?? 0);
   const recentCount = recentPaymentsAgg._count._all ?? 0;
-  const prevRevenue = prevPaymentsAgg._sum.amount ?? 0;
+  const prevRevenue = Number(prevPaymentsAgg._sum.amount ?? 0);
   const prevCount = prevPaymentsAgg._count._all ?? 0;
   const revenueDelta =
     prevRevenue > 0
@@ -196,12 +196,12 @@ export async function GET(req: NextRequest) {
     topCustomers: topCustomersRaw.map((c) => ({
       name: c.name,
       email: c.email,
-      totalSpent: c.totalSpent,
+      totalSpent: Number(c.totalSpent),
       transactions: c.transactionCount,
     })),
     topProducts: topProductsRaw.map((p) => ({
       name: p.name,
-      price: p.price,
+      price: Number(p.price),
       currency: p.currency,
       status: p.status,
     })),

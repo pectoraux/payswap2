@@ -54,7 +54,7 @@ export async function POST(
   // Planner → dispatcher → invariants → event store → ledger).
   const payment = await paymentService.create({
     merchantId: link.merchantId,
-    amount: link.amount,
+    amount: Number(link.amount),
     currency: link.currency,
     method: 'PAYMENT_LINK',
     description: link.description ?? 'Payment via payment link',

@@ -54,7 +54,7 @@ export async function POST(
     return NextResponse.json({ ok: false, error: `Invoice cannot be paid in ${invoice.status} state` }, { status: 422 });
   }
 
-  const amount = invoice.total;
+  const amount = Number(invoice.total);
   const currency = invoice.currency;
 
   const result = await db.$transaction(async (tx) => {

@@ -73,7 +73,7 @@ export default async function AnalyticsPage() {
   }
   for (const p of recentCompleted) {
     const k = new Date(p.createdAt).toISOString().slice(0, 10);
-    if (dayMap.has(k)) dayMap.set(k, (dayMap.get(k) ?? 0) + p.amount);
+    if (dayMap.has(k)) dayMap.set(k, (dayMap.get(k) ?? 0) + Number(p.amount));
   }
   const revenueSeries: RevenuePoint[] = Array.from(dayMap.entries()).map(([date, total]) => ({
     date: date.slice(5), // MM-DD for compactness
@@ -82,17 +82,17 @@ export default async function AnalyticsPage() {
 
   const methods: MethodSlice[] = methodBreakdown
     .filter((m) => !!m.method)
-    .map((m) => ({ method: m.method as string, total: m._sum.amount ?? 0 }))
+    .map((m) => ({ method: m.method as string, total: Number(m._sum.amount ?? 0) }))
     .sort((a, b) => b.total - a.total);
 
   const topCustomers: TopCustomer[] = topCustomerRows.map((c) => ({
     name: c.name,
-    totalSpent: c.totalSpent,
+    totalSpent: Number(c.totalSpent),
   }));
 
-  const totalRevenue = completedAgg._sum.amount ?? 0;
-  const totalFees = completedAgg._sum.fee ?? 0;
-  const avgTicket = avgAgg._avg.amount ?? 0;
+  const totalRevenue = Number(completedAgg._sum.amount ?? 0);
+  const totalFees = Number(completedAgg._sum.fee ?? 0);
+  const avgTicket = Number(avgAgg._avg.amount ?? 0);
   const completedCount = completedAgg._count._all;
 
   return (

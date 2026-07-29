@@ -42,7 +42,7 @@ export default async function CustomerOverviewPage() {
   const customer = account?.customer ?? null;
   const wallets = account?.wallets ?? [];
   const defaultWallet = wallets.find((w) => w.isDefault) ?? wallets[0] ?? null;
-  const walletBalance = wallets.reduce((s, w) => s + w.balance, 0);
+  const walletBalance = wallets.reduce((s, w) => s + Number(w.balance), 0);
 
   const payments = customer
     ? await db.payment.findMany({
@@ -54,7 +54,7 @@ export default async function CustomerOverviewPage() {
 
   const totalSpent = payments
     .filter((p) => p.status === 'COMPLETED')
-    .reduce((s, p) => s + p.amount, 0);
+    .reduce((s, p) => s + Number(p.amount), 0);
 
   return (
     <div className="space-y-6">
@@ -130,7 +130,7 @@ export default async function CustomerOverviewPage() {
                             {p.reference || p.id.slice(0, 12)}
                           </TableCell>
                           <TableCell className="font-semibold tabular-nums">
-                            {fmtCurrency(p.amount, p.currency)}
+                            {fmtCurrency(Number(p.amount), p.currency)}
                           </TableCell>
                           <TableCell className="text-xs text-muted-foreground">
                             {p.method || '—'}
@@ -165,7 +165,7 @@ export default async function CustomerOverviewPage() {
                         <Wallet className="h-4 w-4 text-white/80" />
                       </div>
                       <div className="mt-3 text-3xl font-bold tabular-nums">
-                        {fmtCurrency(defaultWallet.balance, defaultWallet.currency)}
+                        {fmtCurrency(Number(defaultWallet.balance), defaultWallet.currency)}
                       </div>
                       <div className="mt-1 text-[10px] text-white/70">
                         {defaultWallet.currency} · {defaultWallet.isDefault ? 'Default' : 'Secondary'}
@@ -175,13 +175,13 @@ export default async function CustomerOverviewPage() {
                       <div className="flex items-center justify-between">
                         <span className="text-muted-foreground">Pending</span>
                         <span className="font-semibold tabular-nums">
-                          {fmtCurrency(defaultWallet.pendingBalance, defaultWallet.currency)}
+                          {fmtCurrency(Number(defaultWallet.pendingBalance), defaultWallet.currency)}
                         </span>
                       </div>
                       <div className="mt-1 flex items-center justify-between">
                         <span className="text-muted-foreground">Locked</span>
                         <span className="font-semibold tabular-nums">
-                          {fmtCurrency(defaultWallet.lockedBalance, defaultWallet.currency)}
+                          {fmtCurrency(Number(defaultWallet.lockedBalance), defaultWallet.currency)}
                         </span>
                       </div>
                     </div>

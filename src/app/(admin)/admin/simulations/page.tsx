@@ -132,7 +132,7 @@ export default async function AdminSimulationsPage({
               <Activity className="h-4 w-4 text-emerald-500" />
             </div>
             <div className="mt-2 text-2xl font-bold tabular-nums">
-              {fmtCurrency(totalVolumeAgg._sum.amount || 0)}
+              {fmtCurrency(Number(totalVolumeAgg._sum.amount || 0))}
               <span className="text-xs text-muted-foreground ml-1">GHS</span>
             </div>
             <div className="text-[10px] text-muted-foreground mt-1">Across all runs</div>
@@ -221,12 +221,12 @@ export default async function AdminSimulationsPage({
               scenarioName: r.scenarioName,
               scenario: r.scenario,
               result: r.result,
-              amount: r.amount,
+              amount: Number(r.amount),
               currency: r.currency,
-              costPercent: r.costPercent,
-              settlementMs: r.settlementMs,
-              riskScore: r.riskScore,
-              confidence: r.confidence,
+              costPercent: Number(r.costPercent),
+              settlementMs: Number(r.settlementMs),
+              riskScore: Number(r.riskScore),
+              confidence: Number(r.confidence),
               settled: r.settled,
               amendments: r.amendments,
               failures: r.failures,

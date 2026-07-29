@@ -62,7 +62,7 @@ export default async function CustomersPage() {
                   <TableCell className="text-muted-foreground">{c.country ?? '—'}</TableCell>
                   <TableCell className="text-right">{formatNumber(c.transactionCount)}</TableCell>
                   <TableCell className="text-right font-medium">
-                    {formatCurrency(c.totalSpent, currency)}
+                    {formatCurrency(Number(c.totalSpent), currency)}
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground">
                     {formatDate(c.createdAt)}

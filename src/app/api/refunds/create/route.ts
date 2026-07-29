@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
   // Resolve the refund amount based on the type.
   let amount: number;
   if (type === 'FULL') {
-    amount = payment.amount;
+    amount = Number(payment.amount);
   } else {
     const parsed = Number(body.amount);
     if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -82,10 +82,10 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    if (parsed > payment.amount) {
+    if (parsed > Number(payment.amount)) {
       return NextResponse.json(
         {
-          error: `Refund amount exceeds payment amount of ${payment.amount}`,
+          error: `Refund amount exceeds payment amount of ${Number(payment.amount)}`,
         },
         { status: 400 },
       );

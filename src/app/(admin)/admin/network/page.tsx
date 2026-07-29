@@ -132,9 +132,9 @@ export default async function AdminNetworkPage() {
     });
 
   const successRate = paymentCount > 0 ? (completedPaymentCount / paymentCount) * 100 : 0;
-  const totalVolume = volumeAgg._sum.amount || 0;
-  const totalLpRevenue = lpRevenueAgg._sum.fee || 0;
-  const totalReserves = walletBalanceAgg._sum.balance || 0;
+  const totalVolume = Number(volumeAgg._sum.amount || 0);
+  const totalLpRevenue = Number(lpRevenueAgg._sum.fee || 0);
+  const totalReserves = Number(walletBalanceAgg._sum.balance || 0);
 
   return (
     <div className="space-y-6">
@@ -225,7 +225,7 @@ export default async function AdminNetworkPage() {
             </div>
             <div className="mt-2 text-2xl font-bold tabular-nums">{activeLps.length}</div>
             <div className="text-[10px] text-muted-foreground mt-1">
-              {fmtCurrency(activeLps.reduce((s, lp) => s + lp.stake, 0))} GHS total stake
+              {fmtCurrency(activeLps.reduce((s, lp) => s + Number(lp.stake), 0))} GHS total stake
             </div>
           </CardContent>
         </Card>
@@ -351,9 +351,10 @@ export default async function AdminNetworkPage() {
               <TableBody>
                 {activeLps.map((lp) => {
                   const routed = lpVolumeMap.get(lp.id);
-                  const routedVolume = routed?._sum.amount ?? 0;
+                  const routedVolume = Number(routed?._sum.amount ?? 0);
                   const routedCount = routed?._count ?? 0;
-                  const utilization = lp.stake > 0 ? (routedVolume / lp.stake) * 100 : 0;
+                  const lpStakeNum = Number(lp.stake);
+                  const utilization = lpStakeNum > 0 ? (routedVolume / lpStakeNum) * 100 : 0;
                   const utilColor =
                     utilization > 80 ? 'text-rose-600 dark:text-rose-400'
                       : utilization > 50 ? 'text-amber-600 dark:text-amber-400'
@@ -366,7 +367,7 @@ export default async function AdminNetworkPage() {
                         <Badge variant="outline" className="text-[10px] capitalize">{lp.tier}</Badge>
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-xs">
-                        {fmtCurrency(lp.stake)} GHS
+                        {fmtCurrency(lpStakeNum)} GHS
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-xs">
                         {fmtCurrency(routedVolume)} GHS
@@ -378,7 +379,7 @@ export default async function AdminNetworkPage() {
                         {utilization.toFixed(1)}%
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-xs">
-                        {(lp.reputation * 100).toFixed(0)}%
+                        {(Number(lp.reputation) * 100).toFixed(0)}%
                       </TableCell>
                     </TableRow>
                   );
@@ -407,8 +408,8 @@ export default async function AdminNetworkPage() {
             ) : (
               <div className="space-y-2">
                 {corridorAgg.map((c, idx) => {
-                  const maxVolume = corridorAgg[0]?._sum?.amount ?? 1;
-                  const pct = maxVolume > 0 ? ((c._sum?.amount ?? 0) / maxVolume) * 100 : 0;
+                  const maxVolume = Number(corridorAgg[0]?._sum?.amount ?? 1);
+                  const pct = maxVolume > 0 ? ((Number(c._sum?.amount ?? 0)) / maxVolume) * 100 : 0;
                   return (
                     <div key={`${c.corridor}-${idx}`} className="space-y-1">
                       <div className="flex items-center justify-between text-xs">
@@ -417,7 +418,7 @@ export default async function AdminNetworkPage() {
                           <span className="font-medium">{c.corridor || '—'}</span>
                           <Badge variant="outline" className="text-[9px]">{c._count} txns</Badge>
                         </div>
-                        <span className="font-mono tabular-nums">{fmtCurrency(c._sum?.amount ?? 0)} GHS</span>
+                        <span className="font-mono tabular-nums">{fmtCurrency(Number(c._sum?.amount ?? 0))} GHS</span>
                       </div>
                       <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                         <div
@@ -470,7 +471,7 @@ export default async function AdminNetworkPage() {
                         </TableCell>
                         <TableCell className="text-right tabular-nums text-xs">{m._count.toLocaleString()}</TableCell>
                         <TableCell className="text-right tabular-nums text-xs font-semibold">
-                          {fmtCurrency(m._sum?.amount ?? 0)} GHS
+                          {fmtCurrency(Number(m._sum?.amount ?? 0))} GHS
                         </TableCell>
                       </TableRow>
                     );

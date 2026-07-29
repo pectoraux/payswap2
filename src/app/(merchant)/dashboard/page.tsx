@@ -73,7 +73,7 @@ export default async function MerchantDashboardPage() {
   }
   for (const p of last14DaysPayments) {
     const k = new Date(p.createdAt).toISOString().slice(0, 10);
-    if (dayMap.has(k)) dayMap.set(k, (dayMap.get(k) ?? 0) + p.amount);
+    if (dayMap.has(k)) dayMap.set(k, (dayMap.get(k) ?? 0) + Number(p.amount));
   }
   const revenueSeries = Array.from(dayMap.entries()).map(([day, value]) => ({ day, value }));
   const maxRevenue = Math.max(1, ...revenueSeries.map((r) => r.value));
@@ -81,7 +81,7 @@ export default async function MerchantDashboardPage() {
   // Method breakdown for the small donut / bar chart
   const methods = methodBreakdown
     .filter((m) => !!m.method)
-    .map((m) => ({ method: m.method as string, count: m._count._all, total: m._sum.amount ?? 0 }))
+    .map((m) => ({ method: m.method as string, count: m._count._all, total: Number(m._sum.amount ?? 0) }))
     .sort((a, b) => b.total - a.total);
   const methodTotal = methods.reduce((s, m) => s + m.total, 0) || 1;
 

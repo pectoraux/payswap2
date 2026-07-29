@@ -150,9 +150,9 @@ export async function GET(req: NextRequest) {
         description:
           r.description?.trim() ||
           `Payment via ${r.method || 'unknown method'}`,
-        amount: r.amount,
+        amount: Number(r.amount),
         currency: r.currency,
-        amountFormatted: fmtMoney(r.amount, r.currency),
+        amountFormatted: fmtMoney(Number(r.amount), r.currency),
         status: r.status,
         createdAt: r.createdAt.toISOString(),
         merchantName: r.merchant?.name ?? null,
@@ -188,9 +188,9 @@ export async function GET(req: NextRequest) {
         description:
           r.reason?.trim() ||
           `Payout via ${r.method || 'unknown method'} → ${r.destinationCurrency}`,
-        amount: r.sourceAmount,
+        amount: Number(r.sourceAmount),
         currency: r.sourceCurrency,
-        amountFormatted: fmtMoney(r.sourceAmount, r.sourceCurrency),
+        amountFormatted: fmtMoney(Number(r.sourceAmount), r.sourceCurrency),
         status: r.status,
         createdAt: r.createdAt.toISOString(),
         merchantName: r.merchant?.name ?? null,
@@ -224,7 +224,7 @@ export async function GET(req: NextRequest) {
         id: `refund:${r.id}`,
         type: 'refund',
         description: r.reason?.trim() || `${typeLabel} refund`.trim(),
-        amount: r.amount,
+        amount: Number(r.amount),
         currency: null,
         amountFormatted: null,
         status: r.status,

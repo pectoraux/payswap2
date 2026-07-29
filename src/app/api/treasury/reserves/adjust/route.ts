@@ -178,10 +178,10 @@ export async function POST(req: NextRequest) {
   const { merchant, wallet } = await findOrCreateReserveWallet(currency);
 
   // For 'remove', ensure the wallet has enough balance.
-  if (action === 'remove' && amount > wallet.balance) {
+  if (action === 'remove' && amount > Number(wallet.balance)) {
     return NextResponse.json(
       {
-        error: `Insufficient reserve balance. Current: ${wallet.balance.toFixed(2)} ${currency}, requested: ${amount.toFixed(2)} ${currency}`,
+        error: `Insufficient reserve balance. Current: ${Number(wallet.balance).toFixed(2)} ${currency}, requested: ${amount.toFixed(2)} ${currency}`,
       },
       { status: 409 },
     );

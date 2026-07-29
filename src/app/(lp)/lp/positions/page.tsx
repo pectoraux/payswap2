@@ -83,24 +83,24 @@ export default async function LpPositionsPage() {
     id: s.id,
     reference: s.reference,
     corridor: s.corridor,
-    amount: s.amount,
+    amount: Number(s.amount),
     currency: s.currency,
-    fee: s.fee,
+    fee: Number(s.fee),
     status: s.status,
     settledAt: s.settledAt,
     createdAt: s.createdAt,
     merchantName: s.merchant?.name ?? 'Unknown merchant',
   }));
 
-  const openVolume = openPositions.reduce((s, p) => s + p.amount, 0);
+  const openVolume = openPositions.reduce((s, p) => s + Number(p.amount), 0);
   const settledVolume = settlements.reduce((s, p) => s + p.amount, 0);
   const settledFees = settlements.reduce((s, p) => s + p.fee, 0);
 
   const capitalSnapshot: LpCapitalSnapshot | null = lp
     ? {
-        stake: lp.stake,
-        collateral: lp.collateral,
-        available: Math.max(0, lp.stake - lp.collateral),
+        stake: Number(lp.stake),
+        collateral: Number(lp.collateral),
+        available: Math.max(0, Number(lp.stake) - Number(lp.collateral)),
       }
     : null;
 
@@ -126,13 +126,13 @@ export default async function LpPositionsPage() {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <KpiCard
               label="Total stake"
-              value={fmtCurrency(lp.stake, 'USD')}
+              value={fmtCurrency(Number(lp.stake), 'USD')}
               icon={<Coins className="h-4 w-4" />}
               tone="emerald"
             />
             <KpiCard
               label="Collateral posted"
-              value={fmtCurrency(lp.collateral, 'USD')}
+              value={fmtCurrency(Number(lp.collateral), 'USD')}
               icon={<ShieldCheck className="h-4 w-4" />}
               tone="teal"
             />
@@ -145,7 +145,7 @@ export default async function LpPositionsPage() {
             />
             <KpiCard
               label="Reputation"
-              value={fmtNumber(lp.reputation, 2)}
+              value={fmtNumber(Number(lp.reputation), 2)}
               hint="Out of 1.00"
               icon={<Star className="h-4 w-4" />}
               tone="amber"
@@ -194,7 +194,7 @@ export default async function LpPositionsPage() {
                               {p.corridor || '—'}
                             </TableCell>
                             <TableCell className="font-semibold tabular-nums">
-                              {fmtCurrency(p.amount, p.currency)}
+                              {fmtCurrency(Number(p.amount), p.currency)}
                             </TableCell>
                             <TableCell>
                               <StatusBadge status={p.status} />

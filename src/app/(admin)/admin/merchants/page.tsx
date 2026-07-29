@@ -80,7 +80,7 @@ export default async function AdminMerchantsPage() {
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right font-medium">
-                    {formatCurrency(m.bond, m.currency)}
+                    {formatCurrency(Number(m.bond), m.currency)}
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground">
                     {formatDate(m.createdAt)}

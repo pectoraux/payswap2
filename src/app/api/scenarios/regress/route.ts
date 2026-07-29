@@ -16,7 +16,7 @@ export async function POST() {
     const scenario = JSON.parse(r.scenario) as SimulationScenario;
     return ScenarioLibrary.save(scenario, {
       resultHash: r.baselineHash,
-      plan: { metrics: { costPercent: r.baselineCost, settlementTimeMs: r.baselineTime, riskScore: r.baselineRisk, confidence: r.baselineConf } },
+      plan: { metrics: { costPercent: Number(r.baselineCost), settlementTimeMs: r.baselineTime, riskScore: Number(r.baselineRisk), confidence: Number(r.baselineConf) } },
     } as SimulationResult, r.category ?? undefined);
   });
 

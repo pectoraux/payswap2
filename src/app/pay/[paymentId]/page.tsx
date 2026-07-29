@@ -68,7 +68,7 @@ export default async function HostedCheckoutPage({
         <PaymentLinkCheckoutForm
           link={{
             id: link.id,
-            amount: link.amount,
+            amount: Number(link.amount),
             currency: link.currency,
             description: link.description,
             reference: link.reference,
@@ -138,7 +138,7 @@ export default async function HostedCheckoutPage({
                 Amount Paid
               </div>
               <div className="mt-1 text-3xl font-bold text-foreground">
-                {fmt(payment.amount, payment.currency)}
+                {fmt(Number(payment.amount), payment.currency)}
               </div>
             </div>
             <div className="space-y-2 rounded-lg border bg-muted/20 p-4 text-xs">
@@ -185,7 +185,7 @@ export default async function HostedCheckoutPage({
     <CheckoutForm
       payment={{
         id: payment.id,
-        amount: payment.amount,
+        amount: Number(payment.amount),
         currency: payment.currency,
         description: payment.description,
         reference: payment.reference,

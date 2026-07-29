@@ -79,14 +79,14 @@ export default async function DeveloperExtensionsPage() {
     status: e.status,
     permissions: safeJson<string[]>(e.permissions) ?? [],
     pricing: e.pricing,
-    price: e.price,
+    price: Number(e.price),
     config: safeJson<Record<string, unknown>>(e.config),
     changelog:
       safeJson<Array<{ version: string; date: string; changes: string }>>(e.changelog) ??
       [],
-    installCount: e.installCount,
-    rating: e.rating,
-    reviewCount: e.reviewCount,
+    installCount: Number(e.installCount),
+    rating: Number(e.rating),
+    reviewCount: Number(e.reviewCount),
     submittedAt: e.submittedAt ? e.submittedAt.toISOString() : null,
     reviewedAt: e.reviewedAt ? e.reviewedAt.toISOString() : null,
     reviewNotes: e.reviewNotes,

@@ -192,6 +192,8 @@ export default async function DeveloperConsoleHome() {
         },
       })).map((e) => ({
         ...e,
+        installCount: Number(e.installCount),
+        rating: Number(e.rating),
         updatedAt: e.updatedAt.toISOString(),
       }));
     } catch (err) {

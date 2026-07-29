@@ -53,7 +53,7 @@ export default async function ComplianceCasesPage() {
 
   const sarsDraft = sars.filter((s) => s.status === 'DRAFT').length;
   const sarsFiled = sars.filter((s) => s.status === 'FILED').length;
-  const sarsTotal = sars.reduce((sum, s) => sum + s.amount, 0);
+  const sarsTotal = sars.reduce((sum, s) => sum + Number(s.amount), 0);
 
   return (
     <div className="space-y-6">
@@ -192,7 +192,7 @@ export default async function ComplianceCasesPage() {
                       {s.narrative}
                     </TableCell>
                     <TableCell className="text-right font-semibold tabular-nums">
-                      {fmtCurrency(s.amount, 'USD')}
+                      {fmtCurrency(Number(s.amount), 'USD')}
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={s.status} />

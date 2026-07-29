@@ -49,7 +49,7 @@ export default async function CustomerPaymentsPage() {
     : [];
 
   const completed = payments.filter((p) => p.status === 'COMPLETED');
-  const totalSpent = completed.reduce((s, p) => s + p.amount, 0);
+  const totalSpent = completed.reduce((s, p) => s + Number(p.amount), 0);
   const currency = payments[0]?.currency || 'GHS';
 
   return (
@@ -133,7 +133,7 @@ export default async function CustomerPaymentsPage() {
                           {p.description || '—'}
                         </TableCell>
                         <TableCell className="font-semibold tabular-nums">
-                          {fmtCurrency(p.amount, p.currency)}
+                          {fmtCurrency(Number(p.amount), p.currency)}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
                           {p.method || '—'}

@@ -87,7 +87,7 @@ export default async function LpCorridorsPage() {
     for (const a of aggregated) {
       const key = a.corridor ?? '';
       aggMap.set(key, {
-        used: a._sum.amount ?? 0,
+        used: Number(a._sum.amount ?? 0),
         active: a._count._all ?? 0,
       });
     }

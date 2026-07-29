@@ -284,7 +284,7 @@ export async function POST(req: NextRequest) {
 
   // For withdrawals, ensure the LP has enough *available* (uncommitted) capital.
   if (body.action === 'withdraw') {
-    const available = lp.stake - lp.collateral;
+    const available = Number(lp.stake) - Number(lp.collateral);
     if (body.amount > available) {
       return NextResponse.json(
         {
@@ -293,7 +293,7 @@ export async function POST(req: NextRequest) {
         { status: 409 },
       );
     }
-    const remainingStake = lp.stake - body.amount;
+    const remainingStake = Number(lp.stake) - body.amount;
     if (remainingStake < 0) {
       return NextResponse.json(
         { error: 'Withdrawal would result in negative stake' },
@@ -387,9 +387,9 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     lp: {
       id: updated.id,
-      stake: updated.stake,
-      collateral: updated.collateral,
-      available: Math.max(0, updated.stake - updated.collateral),
+      stake: Number(updated.stake),
+      collateral: Number(updated.collateral),
+      available: Math.max(0, Number(updated.stake) - Number(updated.collateral)),
     },
     action: body.action,
     amount: body.amount,

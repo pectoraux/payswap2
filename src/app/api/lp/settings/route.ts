@@ -66,13 +66,13 @@ export async function GET() {
       country: lp.country,
       currencies: parseList(lp.currencies),
       tier: lp.tier,
-      stake: lp.stake,
-      collateral: lp.collateral,
-      available: Math.max(0, lp.stake - lp.collateral),
+      stake: Number(lp.stake),
+      collateral: Number(lp.collateral),
+      available: Math.max(0, Number(lp.stake) - Number(lp.collateral)),
       capacity: parseStringMap(lp.capacity),
       feeBps: parseStringMap(lp.feeBps),
-      settlementSpeedMs: lp.settlementSpeedMs,
-      reputation: lp.reputation, // read-only
+      settlementSpeedMs: Number(lp.settlementSpeedMs),
+      reputation: Number(lp.reputation), // read-only
       status: lp.status,
     },
   });

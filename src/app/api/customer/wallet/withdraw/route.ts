@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'NO_WALLET' }, { status: 404 });
   }
 
-  if (wallet.balance < amount) {
+  if (Number(wallet.balance) < amount) {
     return NextResponse.json(
       { ok: false, error: 'INSUFFICIENT_FUNDS' },
       { status: 400 },

@@ -140,7 +140,7 @@ model Merchant {
   taxId               String?
   address             String?  // JSON string
   tier                String   @default("UNVERIFIED") // UNVERIFIED, VERIFIED, TRUSTED, PREMIUM
-  bond                Float    @default(0)
+  bond                Float @default(0)
   status              String   @default("PENDING") // PENDING, VERIFIED, ACTIVE, SUSPENDED, CLOSED
   kycLevel            Int      @default(0)
   settings            String?  // JSON string
@@ -177,7 +177,7 @@ model Customer {
   phone           String?
   country         String?
   metadata        String?  // JSON
-  totalSpent      Float    @default(0)
+  totalSpent      Float @default(0)
   transactionCount Int     @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -200,7 +200,7 @@ model CustomerRecord {
   phone           String?
   country         String?
   metadata        String?  // JSON
-  totalSpent      Float    @default(0)
+  totalSpent      Float @default(0)
   transactionCount Int     @default(0)
   environment     String   @default("sandbox")
   createdAt       DateTime @default(now())
@@ -222,12 +222,12 @@ model LPProfile {
   country            String
   currencies         String   // JSON array
   tier               String   @default("verified")
-  stake              Float    @default(0)
-  collateral         Float    @default(0)
+  stake              Float @default(0)
+  collateral         Float @default(0)
   capacity           String?  // JSON
   feeBps             String?  // JSON map of corridor → bps (e.g. {"GHS→KES": 50})
   settlementSpeedMs  Int      @default(30000)
-  reputation         Float    @default(0.5)
+  reputation         Float @default(0.5)
   status             String   @default("pending")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -246,9 +246,9 @@ model Wallet {
   accountId       String
   name            String
   currency        String
-  balance         Float    @default(0)
-  pendingBalance  Float    @default(0)
-  lockedBalance   Float    @default(0)
+  balance         Float @default(0)
+  pendingBalance  Float @default(0)
+  lockedBalance   Float @default(0)
   isDefault       Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -293,9 +293,9 @@ model Payment {
   method              String?  // CARD, MOBILE_MONEY, BANK, QR, PAYMENT_LINK, CHECKOUT
   corridor            String?
   lpId                String?
-  fee                 Float    @default(0)
-  netAmount           Float    @default(0)
-  fxRate              Float    @default(1)
+  fee                 Float @default(0)
+  netAmount           Float @default(0)
+  fxRate              Float @default(1)
   txHash              String?
   evidence            String?  // JSON
   reference           String?
@@ -327,10 +327,10 @@ model Payout {
   sourceCurrency      String
   destinationCurrency String
   destination         String?  // JSON
-  fxRate              Float    @default(1)
+  fxRate              Float @default(1)
   feeBps              Int      @default(50)
-  fee                 Float    @default(0)
-  netAmount           Float    @default(0)
+  fee                 Float @default(0)
+  netAmount           Float @default(0)
   status              String   @default("REQUESTED") // REQUESTED, REVIEWING, PROCESSING, COMPLETED, FAILED, CANCELLED
   txHash              String?
   evidence            String?  // JSON
@@ -405,7 +405,7 @@ model Invoice {
   number      String
   items       String   // JSON array
   subtotal    Float
-  tax         Float    @default(0)
+  tax         Float @default(0)
   total       Float
   currency    String
   status      String   @default("DRAFT") // DRAFT, SENT, PAID, OVERDUE, VOID
@@ -461,7 +461,7 @@ model PaymentLink {
   url             String   @unique
   expiresAt       DateTime?
   paymentCount    Int      @default(0)
-  totalCollected  Float    @default(0)
+  totalCollected  Float @default(0)
   environment     String   @default("sandbox")
   createdAt       DateTime @default(now())
 
@@ -705,11 +705,11 @@ model Extension {
   status        String    @default("draft") // draft | submitted | review | approved | published | rejected | suspended
   permissions   String    // JSON array: read_payments | write_payments | read_customers | write_customers | send_webhooks
   pricing       String    @default("free") // free | paid | freemium
-  price         Float     @default(0)
+  price         Float @default(0)
   config        String?   // JSON schema object for merchant config
   changelog     String?   // JSON array of { version, date, changes }
   installCount  Int       @default(0)
-  rating        Float     @default(0)
+  rating        Float @default(0)
   reviewCount   Int       @default(0)
   submittedAt   DateTime?
   reviewedAt    DateTime?
@@ -775,10 +775,10 @@ model SavedScenarioRecord {
   category       String?
   scenario       String   // JSON-serialized SimulationScenario
   baselineHash   String?
-  baselineCost   Float    @default(0)
+  baselineCost   Float @default(0)
   baselineTime   Int      @default(0)
-  baselineRisk   Float    @default(0)
-  baselineConf   Float    @default(0)
+  baselineRisk   Float @default(0)
+  baselineConf   Float @default(0)
   lastRunAt      DateTime?
   lastRunPassed  Boolean?
   createdAt      DateTime @default(now())
@@ -795,9 +795,9 @@ model LedgerEntryRecord {
   accountLabel  String?
   accountType   String?
   currency      String?
-  debit         Float    @default(0)
-  credit        Float    @default(0)
-  balanceAfter  Float    @default(0)
+  debit         Float @default(0)
+  credit        Float @default(0)
+  balanceAfter  Float @default(0)
   memo          String?
   frame         Int      @default(0)
   createdAt     DateTime @default(now())
@@ -810,7 +810,7 @@ model TwinTokenRecord {
   id             String   @id @default(cuid())
   runId          String
   symbol         String?
-  amount         Float    @default(0)
+  amount         Float @default(0)
   currency       String?
   fromCountry    String?
   toCountry      String?

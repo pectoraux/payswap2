@@ -113,15 +113,15 @@ export default async function LpOverviewPage() {
           [],
         ];
 
-  const openVolume = openPositionsAgg._sum.amount ?? 0;
-  const settledVolume = settlementsAgg._sum.amount ?? 0;
-  const earnedFees = settlementsAgg._sum.fee ?? 0;
+  const openVolume = Number(openPositionsAgg._sum.amount ?? 0);
+  const settledVolume = Number(settlementsAgg._sum.amount ?? 0);
+  const earnedFees = Number(settlementsAgg._sum.fee ?? 0);
   const settledCount = settlementsAgg._count._all ?? 0;
 
-  const availableCapacity = lp ? Math.max(0, lp.stake - lp.collateral) : 0;
+  const availableCapacity = lp ? Math.max(0, Number(lp.stake) - Number(lp.collateral)) : 0;
   const utilization =
-    lp && lp.stake > 0
-      ? Math.min(100, Math.round((lp.collateral / lp.stake) * 100))
+    lp && Number(lp.stake) > 0
+      ? Math.min(100, Math.round((Number(lp.collateral) / Number(lp.stake)) * 100))
       : 0;
 
   return (
@@ -166,21 +166,21 @@ export default async function LpOverviewPage() {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <KpiCard
               label="Stake"
-              value={fmtCurrency(lp.stake, 'USD')}
+              value={fmtCurrency(Number(lp.stake), 'USD')}
               hint="Total committed"
               icon={<Coins className="h-4 w-4" />}
               tone="emerald"
             />
             <KpiCard
               label="Collateral"
-              value={fmtCurrency(lp.collateral, 'USD')}
+              value={fmtCurrency(Number(lp.collateral), 'USD')}
               hint={`${fmtCurrency(availableCapacity, 'USD')} available`}
               icon={<ShieldCheck className="h-4 w-4" />}
               tone="teal"
             />
             <KpiCard
               label="Reputation"
-              value={fmtNumber(lp.reputation, 2)}
+              value={fmtNumber(Number(lp.reputation), 2)}
               hint="Out of 1.00"
               icon={<Star className="h-4 w-4" />}
               tone="amber"

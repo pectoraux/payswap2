@@ -131,26 +131,26 @@ export async function GET(req: NextRequest) {
   const capacity = parseJsonMap(lp.capacity);
   const currencies = parseList(lp.currencies);
   const totalCapacity = Object.values(capacity).reduce((s, n) => s + n, 0);
-  const availableCapacity = Math.max(0, lp.stake - lp.collateral);
+  const availableCapacity = Math.max(0, Number(lp.stake) - Number(lp.collateral));
   const utilization =
-    lp.stake > 0 ? Math.min(100, Math.round((lp.collateral / lp.stake) * 100)) : 0;
-  const openVolume = openAgg._sum.amount ?? 0;
-  const settledVolume = settledAgg._sum.amount ?? 0;
-  const earnedFees = settledAgg._sum.fee ?? 0;
+    Number(lp.stake) > 0 ? Math.min(100, Math.round((Number(lp.collateral) / Number(lp.stake)) * 100)) : 0;
+  const openVolume = Number(openAgg._sum.amount ?? 0);
+  const settledVolume = Number(settledAgg._sum.amount ?? 0);
+  const earnedFees = Number(settledAgg._sum.fee ?? 0);
   const settledCount = settledAgg._count._all ?? 0;
 
   const summary: LpRecoSummary = {
     lp: { name: lp.name, country: lp.country, tier: lp.tier, status: lp.status },
     capital: {
-      stake: lp.stake,
-      collateral: lp.collateral,
+      stake: Number(lp.stake),
+      collateral: Number(lp.collateral),
       available: availableCapacity,
       utilizationPct: utilization,
       totalCapacity,
       capacityByCorridor: capacity,
     },
-    reputation: lp.reputation,
-    settlementSpeedMs: lp.settlementSpeedMs,
+    reputation: Number(lp.reputation),
+    settlementSpeedMs: Number(lp.settlementSpeedMs),
     currencies,
     activity: {
       openPositions,
@@ -159,7 +159,12 @@ export async function GET(req: NextRequest) {
       settledVolume,
       earnedFees,
     },
-    recentSettlements,
+    recentSettlements: recentSettlements.map((s) => ({
+      amount: Number(s.amount),
+      currency: s.currency,
+      corridor: s.corridor,
+      fee: Number(s.fee),
+    })),
   };
 
   // ── Best-effort LLM call ───────────────────────────────────────────
@@ -420,12 +425,12 @@ export async function POST(req: NextRequest) {
   const feeBps = parseJsonMap(lp.feeBps);
   const currencies = parseList(lp.currencies);
   const totalCapacity = Object.values(capacity).reduce((s, n) => s + n, 0);
-  const available = Math.max(0, lp.stake - lp.collateral);
+  const available = Math.max(0, Number(lp.stake) - Number(lp.collateral));
   const utilization =
-    lp.stake > 0 ? Math.min(100, Math.round((lp.collateral / lp.stake) * 100)) : 0;
-  const openVolume = openAgg._sum.amount ?? 0;
-  const settledVolume = settledAgg._sum.amount ?? 0;
-  const earnedFees = settledAgg._sum.fee ?? 0;
+    Number(lp.stake) > 0 ? Math.min(100, Math.round((Number(lp.collateral) / Number(lp.stake)) * 100)) : 0;
+  const openVolume = Number(openAgg._sum.amount ?? 0);
+  const settledVolume = Number(settledAgg._sum.amount ?? 0);
+  const earnedFees = Number(settledAgg._sum.fee ?? 0);
   const settledCount = settledAgg._count._all ?? 0;
 
   // Per-corridor detail (used to answer "how much fee should I charge for GHS→NGN?").
@@ -441,12 +446,12 @@ export async function POST(req: NextRequest) {
       country: lp.country,
       tier: lp.tier,
       status: lp.status,
-      reputation: lp.reputation,
-      settlementSpeedMs: lp.settlementSpeedMs,
+      reputation: Number(lp.reputation),
+      settlementSpeedMs: Number(lp.settlementSpeedMs),
     },
     capital: {
-      stake: lp.stake,
-      collateral: lp.collateral,
+      stake: Number(lp.stake),
+      collateral: Number(lp.collateral),
       available,
       utilizationPct: utilization,
       totalCapacity,
@@ -463,9 +468,9 @@ export async function POST(req: NextRequest) {
     },
     recentSettlements: recentSettlements.map((s) => ({
       corridor: s.corridor,
-      amount: s.amount,
+      amount: Number(s.amount),
       currency: s.currency,
-      fee: s.fee,
+      fee: Number(s.fee),
       settledAt: s.settledAt,
     })),
   };

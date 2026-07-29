@@ -81,11 +81,11 @@ export default async function LpProfitabilityPage() {
   const failed = allPayments.filter((p) =>
     ['FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'DECLINED'].includes(p.status),
   );
-  const totalVolume = completed.reduce((s, p) => s + p.amount, 0);
-  const totalFees = completed.reduce((s, p) => s + p.fee, 0);
-  const netRevenue = completed.reduce((s, p) => s + p.netAmount, 0);
+  const totalVolume = completed.reduce((s, p) => s + Number(p.amount), 0);
+  const totalFees = completed.reduce((s, p) => s + Number(p.fee), 0);
+  const netRevenue = completed.reduce((s, p) => s + Number(p.netAmount), 0);
   const margin = totalVolume > 0 ? (totalFees / totalVolume) * 100 : 0;
-  const apy = lp && lp.stake > 0 ? (totalFees / lp.stake) * 100 : 0;
+  const apy = lp && Number(lp.stake) > 0 ? (totalFees / Number(lp.stake)) * 100 : 0;
 
   // Success rate = completed / (completed + failed).
   const terminal = completed.length + failed.length;
@@ -114,8 +114,8 @@ export default async function LpProfitabilityPage() {
     months.push({
       label,
       key,
-      fees: inMonth.reduce((s, p) => s + p.fee, 0),
-      volume: inMonth.reduce((s, p) => s + p.amount, 0),
+      fees: inMonth.reduce((s, p) => s + Number(p.fee), 0),
+      volume: inMonth.reduce((s, p) => s + Number(p.amount), 0),
     });
   }
   const maxFees = Math.max(...months.map((m) => m.fees), 1);
@@ -127,8 +127,8 @@ export default async function LpProfitabilityPage() {
     const id = p.merchant?.id ?? 'unknown';
     const name = p.merchant?.name ?? 'Unknown merchant';
     const cur = merchantMap.get(id) ?? { merchantId: id, merchantName: name, volume: 0, fees: 0, count: 0 };
-    cur.volume += p.amount;
-    cur.fees += p.fee;
+    cur.volume += Number(p.amount);
+    cur.fees += Number(p.fee);
     cur.count += 1;
     merchantMap.set(id, cur);
   }
@@ -141,8 +141,8 @@ export default async function LpProfitabilityPage() {
   for (const p of completed) {
     const key = p.corridor ?? 'Unknown';
     const cur = corridorMap.get(key) ?? { corridor: key, volume: 0, fees: 0, count: 0 };
-    cur.volume += p.amount;
-    cur.fees += p.fee;
+    cur.volume += Number(p.amount);
+    cur.fees += Number(p.fee);
     cur.count += 1;
     corridorMap.set(key, cur);
   }
@@ -439,7 +439,7 @@ export default async function LpProfitabilityPage() {
                     Active stake
                   </div>
                   <div className="mt-1 text-lg font-bold tabular-nums">
-                    {fmtCurrency(lp.stake, 'USD')}
+                    {fmtCurrency(Number(lp.stake), 'USD')}
                   </div>
                 </div>
                 <div className="rounded-lg border bg-card/50 p-3">

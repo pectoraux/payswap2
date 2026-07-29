@@ -94,25 +94,25 @@ export async function GET(req: NextRequest) {
   ]);
 
   const totalReserves = walletAgg.reduce(
-    (s, w) => s + (w._sum.balance ?? 0),
+    (s, w) => s + Number(w._sum.balance ?? 0),
     0,
   );
   const totalLocked = walletAgg.reduce(
-    (s, w) => s + (w._sum.lockedBalance ?? 0),
+    (s, w) => s + Number(w._sum.lockedBalance ?? 0),
     0,
   );
   const totalPending = walletAgg.reduce(
-    (s, w) => s + (w._sum.pendingBalance ?? 0),
+    (s, w) => s + Number(w._sum.pendingBalance ?? 0),
     0,
   );
-  const totalPaymentsVolume = paymentsAgg._sum.amount ?? 0;
+  const totalPaymentsVolume = Number(paymentsAgg._sum.amount ?? 0);
   const totalPaymentsCount = paymentsAgg._count._all ?? 0;
   const backingRatio =
     totalPaymentsVolume > 0 ? totalReserves / totalPaymentsVolume : 0;
   const lockedRatio = totalReserves > 0 ? totalLocked / totalReserves : 0;
 
   const pendingPayoutsCount = pendingPayoutsAgg._count._all ?? 0;
-  const pendingPayoutsVolume = pendingPayoutsAgg._sum.sourceAmount ?? 0;
+  const pendingPayoutsVolume = Number(pendingPayoutsAgg._sum.sourceAmount ?? 0);
 
   const severityBreakdown = openAlertsBySeverity.reduce<Record<string, number>>(
     (acc, b) => {
@@ -152,9 +152,9 @@ export async function GET(req: NextRequest) {
     },
     perCurrency: walletAgg.map((w) => ({
       currency: w.currency,
-      balance: w._sum.balance ?? 0,
-      locked: w._sum.lockedBalance ?? 0,
-      pending: w._sum.pendingBalance ?? 0,
+      balance: Number(w._sum.balance ?? 0),
+      locked: Number(w._sum.lockedBalance ?? 0),
+      pending: Number(w._sum.pendingBalance ?? 0),
     })),
   };
 
