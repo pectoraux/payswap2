@@ -57,7 +57,7 @@ export default async function TreasuryReportsPage() {
     _sum: { balance: true },
   });
   const totalReserves = walletAgg.reduce(
-    (s, w) => s + (w._sum.balance ?? 0),
+    (s, w) => s + Number(w._sum.balance ?? 0),
     0,
   );
 
@@ -79,8 +79,8 @@ export default async function TreasuryReportsPage() {
       _sum: { amount: true, fee: true },
       _count: { _all: true },
     });
-    const volume = agg._sum.amount ?? 0;
-    const fees = agg._sum.fee ?? 0;
+    const volume = Number(agg._sum.amount ?? 0);
+    const fees = Number(agg._sum.fee ?? 0);
     dailyRows.push({
       date: start.toISOString().slice(0, 10),
       // Reserves are reported as the current snapshot — we don't have
@@ -133,7 +133,7 @@ export default async function TreasuryReportsPage() {
     where: { status: 'COMPLETED', NOT: { lpId: null } },
     _sum: { fee: true },
   });
-  const lpRevenue = lpRevenueAgg._sum.fee ?? 0;
+  const lpRevenue = Number(lpRevenueAgg._sum.fee ?? 0);
 
   // Top LPs by volume (last 30 days).
   const since30d = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
@@ -161,8 +161,8 @@ export default async function TreasuryReportsPage() {
     .map((l) => ({
       lpId: l.lpId as string,
       name: lpNameMap.get(l.lpId as string) ?? 'Unknown LP',
-      volume: l._sum.amount ?? 0,
-      revenue: l._sum.fee ?? 0,
+      volume: Number(l._sum.amount ?? 0),
+      revenue: Number(l._sum.fee ?? 0),
     }));
 
   // --- Risk summary ------------------------------------------------------
@@ -388,7 +388,7 @@ export default async function TreasuryReportsPage() {
                   Total LP revenue
                 </div>
                 <div className="text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-                  {fmtCurrency(lpRevenue, 'USD')}
+                  {fmtCurrency(Number(lpRevenue), 'USD')}
                 </div>
               </div>
               <div className="rounded-lg border bg-card/50 p-3">
@@ -425,10 +425,10 @@ export default async function TreasuryReportsPage() {
                         </div>
                       </TableCell>
                       <TableCell className="text-right font-semibold tabular-nums">
-                        {fmtCurrency(lp.volume, 'USD')}
+                        {fmtCurrency(Number(lp.volume), 'USD')}
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-emerald-600 dark:text-emerald-400">
-                        {fmtCurrency(lp.revenue, 'USD')}
+                        {fmtCurrency(Number(lp.revenue), 'USD')}
                       </TableCell>
                     </TableRow>
                   ))}

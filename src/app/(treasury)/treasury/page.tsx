@@ -77,9 +77,9 @@ export default async function TreasuryOverviewPage() {
   });
 
   const reserveRows: ReserveRow[] = walletAgg.map((w) => {
-    const balance = w._sum.balance ?? 0;
-    const locked = w._sum.lockedBalance ?? 0;
-    const pending = w._sum.pendingBalance ?? 0;
+    const balance = Number(w._sum.balance ?? 0);
+    const locked = Number(w._sum.lockedBalance ?? 0);
+    const pending = Number(w._sum.pendingBalance ?? 0);
     const available = Math.max(0, balance - locked);
     const utilization = balance > 0 ? (locked / balance) * 100 : 0;
     return {
@@ -101,7 +101,7 @@ export default async function TreasuryOverviewPage() {
     _sum: { amount: true },
     _count: { _all: true },
   });
-  const totalPaymentsVolume = paymentsAgg._sum.amount ?? 0;
+  const totalPaymentsVolume = Number(paymentsAgg._sum.amount ?? 0);
   const totalPaymentsCount = paymentsAgg._count._all ?? 0;
 
   // Backing ratio = total reserves / total payment volume.
@@ -159,7 +159,7 @@ export default async function TreasuryOverviewPage() {
       id: p.id,
       kind: 'PAYMENT' as const,
       direction: 'IN' as const,
-      amount: p.amount,
+      amount: Number(p.amount),
       currency: p.currency,
       reference: p.reference,
       status: p.status,
@@ -169,7 +169,7 @@ export default async function TreasuryOverviewPage() {
       id: p.id,
       kind: 'PAYOUT' as const,
       direction: 'OUT' as const,
-      amount: p.sourceAmount,
+      amount: Number(p.sourceAmount),
       currency: p.sourceCurrency,
       reference: p.reason,
       status: p.status,
@@ -275,7 +275,7 @@ export default async function TreasuryOverviewPage() {
               Settled volume
             </div>
             <div className="mt-1 text-2xl font-bold tabular-nums">
-              {fmtCurrency(totalPaymentsVolume, 'USD')}
+              {fmtCurrency(Number(totalPaymentsVolume), 'USD')}
             </div>
             <div className="mt-0.5 text-[11px] text-muted-foreground">
               {fmtNumber(totalPaymentsCount, 0)} completed payments
@@ -324,7 +324,7 @@ export default async function TreasuryOverviewPage() {
         />
         <KpiCard
           label="Settled volume"
-          value={fmtCurrency(totalPaymentsVolume, 'USD')}
+          value={fmtCurrency(Number(totalPaymentsVolume), 'USD')}
           hint={`${fmtNumber(totalPaymentsCount, 0)} payments`}
           icon={<Gauge className="h-4 w-4" />}
           tone="teal"

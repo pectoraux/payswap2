@@ -61,7 +61,7 @@ export default async function ProductsPage() {
                 </p>
                 <div className="flex items-center justify-between border-t pt-3">
                   <div className="text-lg font-semibold">
-                    {formatCurrency(p.price, p.currency)}
+                    {formatCurrency(Number(p.price), p.currency)}
                   </div>
                   <Button size="sm" variant="outline">Share</Button>
                 </div>

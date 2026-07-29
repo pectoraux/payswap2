@@ -15,7 +15,7 @@
 | F5 | Failed payments produce zero ledger entries | ✅ | P4a/P8a tests verify |
 | F6 | No wallet has negative balance | ✅ | S7-6 test verifies; atomic conditional updateMany prevents |
 | F7 | Every twin.minted has corresponding twin.backed | ✅ | P5a/S7-4 tests verify |
-| F8 | Decimal-only monetary values | ⬜ | 41 Float columns remain; Money type exists but schema not migrated |
+| F8 | Decimal-only monetary values | ✅ | All 41 columns migrated to Decimal(18,2); $extends auto-converts + 76 edge cases fixed; 25/25 payment tests + 14/14 replay tests pass |
 | F9 | Bank reconciliation exact (ledger = DB = wallets) | ⬜ | Needs shadow ledger comparison |
 | F10 | Complete audit trail (API → event → ledger → settlement → payment) | ✅ | CorrelationId propagated; audit log on every operation |
 
@@ -64,17 +64,16 @@
 
 | Category | Proven | Total | Percentage |
 |----------|--------|-------|------------|
-| Financial | 8 | 10 | 80% |
+| Financial | 9 | 10 | 90% |
 | Runtime | 8 | 8 | 100% |
 | Security | 7 | 8 | 87.5% |
 | Operational | 6 | 10 | 60% |
-| **Overall** | **29** | **36** | **80.6%** |
+| **Overall** | **30** | **36** | **83.3%** |
 
 ## Critical Blockers (must fix before production)
 
-1. **F8: Decimal-only monetary values** — 41 Float columns remain
-2. **F9: Bank reconciliation** — needs shadow ledger
-3. **S8: Penetration test** — needs external firm
-4. **O7: Disaster recovery** — needs backup/restore drill
-5. **O8: Multi-region failover** — design documented, not implemented
-6. **O10: Runbook drills** — runbooks exist but not exercised
+1. **F9: Bank reconciliation** — needs shadow ledger
+2. **S8: Penetration test** — needs external firm
+3. **O7: Disaster recovery** — needs backup/restore drill
+4. **O8: Multi-region failover** — design documented, not implemented
+5. **O10: Runbook drills** — runbooks exist but not exercised

@@ -49,7 +49,7 @@ export default async function SettingsPage() {
           <div>
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Bond</div>
             <div className="mt-1 text-sm font-medium">
-              {formatCurrency(merchant.bond, merchant.currency)}
+              {formatCurrency(Number(merchant.bond), merchant.currency)}
             </div>
           </div>
           <div>

@@ -42,25 +42,25 @@ export default async function TreasuryReservesPage() {
   });
 
   const bondAgg = await db.merchant.aggregate({ _sum: { bond: true } });
-  const totalBonds = bondAgg._sum.bond ?? 0;
+  const totalBonds = Number(bondAgg._sum.bond ?? 0);
 
   const lpAgg = await db.lPProfile.aggregate({
     _sum: { stake: true, collateral: true },
   });
 
-  const totalReserves = walletAgg.reduce((s, w) => s + (w._sum.balance ?? 0), 0);
+  const totalReserves = walletAgg.reduce((s, w) => s + Number(w._sum.balance ?? 0), 0);
   const totalPending = walletAgg.reduce(
-    (s, w) => s + (w._sum.pendingBalance ?? 0),
+    (s, w) => s + Number(w._sum.pendingBalance ?? 0),
     0,
   );
   const totalLocked = walletAgg.reduce(
-    (s, w) => s + (w._sum.lockedBalance ?? 0),
+    (s, w) => s + Number(w._sum.lockedBalance ?? 0),
     0,
   );
 
   const balancesByCurrency: Record<string, number> = {};
   for (const w of walletAgg) {
-    balancesByCurrency[w.currency] = w._sum.balance ?? 0;
+    balancesByCurrency[w.currency] = Number(w._sum.balance ?? 0);
   }
   const currencyOptions = walletAgg.map((w) => w.currency);
 
@@ -102,7 +102,7 @@ export default async function TreasuryReservesPage() {
       reserveHistory = txs.map((t) => ({
         id: t.id,
         type: t.type,
-        amount: t.amount,
+        amount: Number(t.amount),
         currency: t.currency,
         reference: t.reference,
         counterparty: t.counterparty,
@@ -179,9 +179,9 @@ export default async function TreasuryReservesPage() {
             ) : (
               <div className="space-y-3">
                 {walletAgg.map((w) => {
-                  const available = w._sum.balance ?? 0;
-                  const locked = w._sum.lockedBalance ?? 0;
-                  const pending = w._sum.pendingBalance ?? 0;
+                  const available = Number(w._sum.balance ?? 0);
+                  const locked = Number(w._sum.lockedBalance ?? 0);
+                  const pending = Number(w._sum.pendingBalance ?? 0);
                   const pct =
                     available > 0
                       ? Math.min(100, (locked / available) * 100)
@@ -381,7 +381,7 @@ export default async function TreasuryReservesPage() {
               Total LP stake
             </div>
             <div className="mt-1 text-2xl font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-              {fmtCurrency(lpAgg._sum.stake ?? 0, 'USD')}
+              {fmtCurrency(Number(lpAgg._sum.stake ?? 0), 'USD')}
             </div>
           </div>
           <div className="rounded-lg border bg-card/50 p-4">
@@ -389,7 +389,7 @@ export default async function TreasuryReservesPage() {
               Total LP collateral
             </div>
             <div className="mt-1 text-2xl font-bold tabular-nums text-teal-600 dark:text-teal-400">
-              {fmtCurrency(lpAgg._sum.collateral ?? 0, 'USD')}
+              {fmtCurrency(Number(lpAgg._sum.collateral ?? 0), 'USD')}
             </div>
           </div>
         </CardContent>

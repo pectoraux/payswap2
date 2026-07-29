@@ -56,13 +56,13 @@ export default async function ExtensionsPage() {
       version: e.version,
       permissions: safeJson<string[]>(e.permissions) ?? [],
       pricing: e.pricing,
-      price: e.price,
+      price: Number(e.price),
       config: safeJson<Record<string, unknown>>(e.config),
       changelog:
         safeJson<Array<{ version: string; date: string; changes: string }>>(e.changelog) ??
         [],
       installCount: e.installCount,
-      rating: e.rating,
+      rating: Number(e.rating),
       reviewCount: e.reviewCount,
       developerId: e.developerId,
       publishedAt: e.publishedAt ? e.publishedAt.toISOString() : null,

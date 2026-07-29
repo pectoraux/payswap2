@@ -255,7 +255,7 @@ export default async function SupportOverviewPage() {
                           {r.merchant?.name || '—'}
                         </span>
                         <span className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-                          {fmtCurrency(r.amount, 'USD')}
+                          {fmtCurrency(Number(r.amount), 'USD')}
                         </span>
                       </div>
                       <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">

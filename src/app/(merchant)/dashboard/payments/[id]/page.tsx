@@ -224,7 +224,7 @@ export default async function PaymentDetailPage({ params }: PageProps) {
   const receiptPayload = {
     reference: payment.reference || payment.id.slice(0, 12),
     paymentId: payment.id,
-    amount: payment.amount,
+    amount: Number(payment.amount),
     currency: payment.currency,
     status: payment.status,
     method: payment.method,
@@ -285,7 +285,7 @@ export default async function PaymentDetailPage({ params }: PageProps) {
                     Amount
                   </div>
                   <div className="mt-0.5 text-lg font-bold tabular-nums">
-                    {fmt(payment.amount)}
+                    {fmt(Number(payment.amount))}
                   </div>
                 </div>
                 <div>
@@ -293,7 +293,7 @@ export default async function PaymentDetailPage({ params }: PageProps) {
                     Fee
                   </div>
                   <div className="mt-0.5 text-lg font-semibold tabular-nums text-muted-foreground">
-                    {fmt(payment.fee)}
+                    {fmt(Number(payment.fee))}
                   </div>
                 </div>
                 <div>
@@ -301,7 +301,7 @@ export default async function PaymentDetailPage({ params }: PageProps) {
                     Net
                   </div>
                   <div className="mt-0.5 text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-                    {fmt(payment.netAmount)}
+                    {fmt(Number(payment.netAmount))}
                   </div>
                 </div>
                 <div>
@@ -619,7 +619,7 @@ export default async function PaymentDetailPage({ params }: PageProps) {
                       </div>
                     </div>
                     <div className="text-sm font-semibold tabular-nums shrink-0">
-                      {fmt(r.amount)}
+                      {fmt(Number(r.amount))}
                     </div>
                   </div>
                 ))}

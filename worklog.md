@@ -4512,3 +4512,46 @@ Stage Summary:
 - Nav items added: Treasury → Control Center; Admin → Settlement Timeline, Twin Tokens, Reserve Growth, Liquidity Market, Compiler Explorer (new "Economic" group)
 - Constraints honored: `src/runtime/` frozen (read-only); Prisma schema untouched; no new chart libraries; existing shadcn/ui components used throughout
 - tsc: 0 | lint: 0
+
+---
+Task ID: DECIMAL-FIX-2
+Agent: decimal-fix-agent-v2
+Task: Fix 76 remaining Decimal type errors
+
+Work Log:
+- Read worklog tail (last 30 lines) to confirm prior state.
+- Captured all 76 TS errors across the 19 listed files via `bunx tsc --noEmit | grep "error TS" | grep "^src/app"`.
+- Applied minimal fixes file-by-file. Strategy per error class:
+  • TS2345 (Decimal not assignable to number parameter): wrapped Decimal args in `Number(...)` — e.g. `fmtCurrency(Number(r.amount), 'USD')`, `formatCurrency(Number(p.price), p.currency)`, `fmtNumber(Number(r.costPercent), 2)`.
+  • TS2365 / TS2362 / TS2363 (arithmetic operators on Decimal): wrapped Decimal operands — e.g. `s + Number(r.amount)`, `Number(sub.amount) * 4.33`, `Number(w._sum.balance ?? 0) - Number(w._sum.lockedBalance ?? 0)`.
+  • TS2322 (Decimal in row/array shape): converted Decimal fields at map/assignment site — e.g. `amount: Number(p.amount)` in row mappers; `rating: Number(e.rating)`, `price: Number(e.price)` in extensions mapper; `Number(c._sum.amount ?? 0)` for corridor aggregates.
+  • For aggregation results (`_sum.amount` / `_sum.fee` / `_sum.balance` etc.) and include-relation Decimal fields, wrapped each access in `Number(...)` immediately at read site (no changes to db.ts extension or schema).
+  • TS2322 in `api/developer/publish/[id]/route.ts` (number → Decimal assignment on `row.price`): used `as any` cast for the minimal pragmatic fix.
+- Per-file changes (count of errors resolved):
+  1. disputes/page.tsx — 2 (reduce + fmt on r.amount)
+  2. extensions/page.tsx — 1 (price + rating in MerchantExtension mapper)
+  3. invoices/page.tsx — 3 (subtotal/tax/total in formatCurrency)
+  4. payment-links/page.tsx — 3 (totalCollected reduce + amount/totalCollected fmt)
+  5. payments/[id]/page.tsx — 5 (amount/fee/netAmount fmt + receiptPayload.amount + refund r.amount fmt)
+  6. payments/page.tsx — 1 (PaymentRow mapper amount)
+  7. payouts/[id]/page.tsx — 3 (sourceAmount/fee/netAmount fmt)
+  8. payouts/page.tsx — 4 (sourceAmount/fee/netAmount formatCurrency x4)
+  9. products/page.tsx — 1 (price formatCurrency)
+  10. reports/page.tsx — 4 (3 reduces + PaymentRow mapper amount/fee/netAmount)
+  11. settings/page.tsx — 1 (bond formatCurrency)
+  12. subscriptions/page.tsx — 5 (MRR reduce w/ Number(sub.amount) + amount fmt)
+  13. ops/page.tsx — 3 (costPercent/riskScore/confidence fmtNumber)
+  14. support/page.tsx — 1 (amount fmtCurrency)
+  15. treasury/corridors/page.tsx — 1 (volume + fees from _sum)
+  16. treasury/page.tsx — 11 (reserveRows walletAgg Number wraps + totalPaymentsVolume Number + flows amount Number + fmtCurrency totalPaymentsVolume x2)
+  17. treasury/reports/page.tsx — 10 (totalReserves reduce + daily volume/fees + lpRevenue Number + topLps volume/revenue + fmtCurrency x3)
+  18. treasury/reserves/page.tsx — 16 (totalBonds/totalReserves/totalPending/totalLocked reduces + balancesByCurrency + reserveHistory.amount + per-currency available/locked/pending + fmtCurrency x2 for lpAgg)
+  19. api/developer/publish/[id]/route.ts — 1 (row.price `as any` cast)
+- Verified: `bunx tsc --noEmit 2>&1 | grep "error TS" | grep "^src/app" | wc -l` → 0.
+- Verified: `bun run lint` → 0 errors (310 pre-existing warnings, none introduced).
+- Constraints honored: prisma/schema.prisma untouched; src/lib/db.ts untouched; src/runtime/ untouched; only the 19 listed files modified; minimal fixes only (no refactors).
+
+Stage Summary:
+- Files fixed: 19
+- Errors fixed: 76
+- tsc: 0 | lint: 0

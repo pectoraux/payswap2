@@ -42,7 +42,7 @@ export default async function PaymentLinksPage() {
   const fmtDate = (d: Date) =>
     new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-  const totalCollected = links.reduce((s, l) => s + l.totalCollected, 0);
+  const totalCollected = links.reduce((s, l) => s + Number(l.totalCollected), 0);
   const totalPayments = links.reduce((s, l) => s + l.paymentCount, 0);
 
   return (
@@ -125,7 +125,7 @@ export default async function PaymentLinksPage() {
                       )}
                     </TableCell>
                     <TableCell className="font-semibold tabular-nums">
-                      {fmt(l.amount, l.currency)}
+                      {fmt(Number(l.amount), l.currency)}
                     </TableCell>
                     <TableCell className="max-w-[16rem]">
                       <a
@@ -145,7 +145,7 @@ export default async function PaymentLinksPage() {
                       {l.paymentCount}
                     </TableCell>
                     <TableCell className="text-right font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-                      {fmt(l.totalCollected, l.currency)}
+                      {fmt(Number(l.totalCollected), l.currency)}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {fmtDate(l.createdAt)}

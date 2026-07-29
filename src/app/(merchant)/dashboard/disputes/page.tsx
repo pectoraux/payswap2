@@ -137,7 +137,7 @@ export default async function DisputesPage({ searchParams }: PageProps) {
     (r) => r.status.toUpperCase() === 'REJECTED',
   );
 
-  const openAmount = openDisputes.reduce((s, r) => s + r.amount, 0);
+  const openAmount = openDisputes.reduce((s, r) => s + Number(r.amount), 0);
 
   const winRate =
     resolvedDisputes.length > 0
@@ -395,7 +395,7 @@ export default async function DisputesPage({ searchParams }: PageProps) {
                           )}
                         </TableCell>
                         <TableCell className="font-semibold tabular-nums">
-                          {fmt(r.amount, r.payment?.currency)}
+                          {fmt(Number(r.amount), r.payment?.currency)}
                         </TableCell>
                         <TableCell className="max-w-[14rem]">
                           <span className="line-clamp-2 text-xs text-muted-foreground">

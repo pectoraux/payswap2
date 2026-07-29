@@ -92,9 +92,9 @@ export default async function ReportsPage() {
     select: { amount: true },
   });
 
-  const totalRevenue = completedPayments.reduce((s, p) => s + p.amount, 0);
-  const totalFees = completedPayments.reduce((s, p) => s + (p.fee || 0), 0);
-  const totalRefunds = refunds.reduce((s, r) => s + r.amount, 0);
+  const totalRevenue = completedPayments.reduce((s, p) => s + Number(p.amount), 0);
+  const totalFees = completedPayments.reduce((s, p) => s + Number(p.fee || 0), 0);
+  const totalRefunds = refunds.reduce((s, r) => s + Number(r.amount), 0);
   const netRevenue = totalRevenue - totalFees - totalRefunds;
   const paymentCount = completedPayments.length;
   const averageOrderValue = paymentCount > 0 ? totalRevenue / paymentCount : 0;
@@ -111,10 +111,10 @@ export default async function ReportsPage() {
   const paymentRows: PaymentRow[] = completedPayments.map((p) => ({
     id: p.id,
     reference: p.reference,
-    amount: p.amount,
+    amount: Number(p.amount),
     currency: p.currency,
-    fee: p.fee || 0,
-    netAmount: p.netAmount || 0,
+    fee: Number(p.fee || 0),
+    netAmount: Number(p.netAmount || 0),
     status: p.status,
     method: p.method,
     description: p.description,

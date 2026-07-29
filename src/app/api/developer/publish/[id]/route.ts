@@ -194,7 +194,7 @@ export async function PATCH(
       }
       meta.pricing = pricing;
       row.pricing = pricing.model === 'free' ? 'free' : 'paid';
-      row.price = pricing.price ?? 0;
+      row.price = (pricing.price ?? 0) as any;
     }
     if (Array.isArray(body.screenshots)) {
       meta.screenshots = body.screenshots.filter(

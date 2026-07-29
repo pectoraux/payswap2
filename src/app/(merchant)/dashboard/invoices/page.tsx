@@ -61,13 +61,13 @@ export default async function InvoicesPage() {
                     {inv.customerId ?? '—'}
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground">
-                    {formatCurrency(inv.subtotal, inv.currency)}
+                    {formatCurrency(Number(inv.subtotal), inv.currency)}
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground">
-                    {formatCurrency(inv.tax, inv.currency)}
+                    {formatCurrency(Number(inv.tax), inv.currency)}
                   </TableCell>
                   <TableCell className="text-right font-medium">
-                    {formatCurrency(inv.total, inv.currency)}
+                    {formatCurrency(Number(inv.total), inv.currency)}
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={statusBadgeClass(inv.status)}>

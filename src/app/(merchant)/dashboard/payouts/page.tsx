@@ -63,19 +63,19 @@ export default async function PayoutsPage() {
                     {p.method.replace(/_/g, ' ')}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    {formatCurrency(p.sourceAmount, p.sourceCurrency)}
+                    {formatCurrency(Number(p.sourceAmount), p.sourceCurrency)}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {p.destinationCurrency}
                   </TableCell>
                   <TableCell className="text-right font-medium">
-                    {formatCurrency(p.sourceAmount, p.sourceCurrency)}
+                    {formatCurrency(Number(p.sourceAmount), p.sourceCurrency)}
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground">
-                    {formatCurrency(p.fee, p.sourceCurrency)}
+                    {formatCurrency(Number(p.fee), p.sourceCurrency)}
                   </TableCell>
                   <TableCell className="text-right font-medium">
-                    {formatCurrency(p.netAmount, p.destinationCurrency)}
+                    {formatCurrency(Number(p.netAmount), p.destinationCurrency)}
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={statusBadgeClass(p.status)}>

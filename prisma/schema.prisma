@@ -140,7 +140,7 @@ model Merchant {
   taxId               String?
   address             String?  // JSON string
   tier                String   @default("UNVERIFIED") // UNVERIFIED, VERIFIED, TRUSTED, PREMIUM
-  bond                Float @default(0)
+  bond                Decimal @db.Decimal(18,2) @default(0)
   status              String   @default("PENDING") // PENDING, VERIFIED, ACTIVE, SUSPENDED, CLOSED
   kycLevel            Int      @default(0)
   settings            String?  // JSON string
@@ -177,7 +177,7 @@ model Customer {
   phone           String?
   country         String?
   metadata        String?  // JSON
-  totalSpent      Float @default(0)
+  totalSpent      Decimal @db.Decimal(18,2) @default(0)
   transactionCount Int     @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -200,7 +200,7 @@ model CustomerRecord {
   phone           String?
   country         String?
   metadata        String?  // JSON
-  totalSpent      Float @default(0)
+  totalSpent      Decimal @db.Decimal(18,2) @default(0)
   transactionCount Int     @default(0)
   environment     String   @default("sandbox")
   createdAt       DateTime @default(now())
@@ -222,12 +222,12 @@ model LPProfile {
   country            String
   currencies         String   // JSON array
   tier               String   @default("verified")
-  stake              Float @default(0)
-  collateral         Float @default(0)
+  stake              Decimal @db.Decimal(18,2) @default(0)
+  collateral         Decimal @db.Decimal(18,2) @default(0)
   capacity           String?  // JSON
   feeBps             String?  // JSON map of corridor → bps (e.g. {"GHS→KES": 50})
   settlementSpeedMs  Int      @default(30000)
-  reputation         Float @default(0.5)
+  reputation         Decimal @db.Decimal(18,2) @default(0.5)
   status             String   @default("pending")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -246,9 +246,9 @@ model Wallet {
   accountId       String
   name            String
   currency        String
-  balance         Float @default(0)
-  pendingBalance  Float @default(0)
-  lockedBalance   Float @default(0)
+  balance         Decimal @db.Decimal(18,2) @default(0)
+  pendingBalance  Decimal @db.Decimal(18,2) @default(0)
+  lockedBalance   Decimal @db.Decimal(18,2) @default(0)
   isDefault       Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -264,7 +264,7 @@ model WalletTransaction {
   id           String   @id @default(cuid())
   walletId     String
   type         String   // CREDIT, DEBIT, LOCK, UNLOCK
-  amount       Float
+  amount       Decimal @db.Decimal(18,2)
   currency     String
   counterparty String?
   reference    String?
@@ -285,7 +285,7 @@ model Payment {
   id                  String   @id @default(cuid())
   merchantId          String
   customerId          String?
-  amount              Float
+  amount              Decimal @db.Decimal(18,2)
   currency            String
   sourceCurrency      String?
   destinationCurrency String?
@@ -293,9 +293,9 @@ model Payment {
   method              String?  // CARD, MOBILE_MONEY, BANK, QR, PAYMENT_LINK, CHECKOUT
   corridor            String?
   lpId                String?
-  fee                 Float @default(0)
-  netAmount           Float @default(0)
-  fxRate              Float @default(1)
+  fee                 Decimal @db.Decimal(18,2) @default(0)
+  netAmount           Decimal @db.Decimal(18,2) @default(0)
+  fxRate              Decimal @db.Decimal(18,2) @default(1)
   txHash              String?
   evidence            String?  // JSON
   reference           String?
@@ -322,15 +322,15 @@ model Payout {
   id                  String   @id @default(cuid())
   merchantId          String
   method              String   // BANK, MOBILE_MONEY, ONCHAIN
-  sourceAmount        Float
+  sourceAmount        Decimal @db.Decimal(18,2)
   sourceAsset         String
   sourceCurrency      String
   destinationCurrency String
   destination         String?  // JSON
-  fxRate              Float @default(1)
+  fxRate              Decimal @db.Decimal(18,2) @default(1)
   feeBps              Int      @default(50)
-  fee                 Float @default(0)
-  netAmount           Float @default(0)
+  fee                 Decimal @db.Decimal(18,2) @default(0)
+  netAmount           Decimal @db.Decimal(18,2) @default(0)
   status              String   @default("REQUESTED") // REQUESTED, REVIEWING, PROCESSING, COMPLETED, FAILED, CANCELLED
   txHash              String?
   evidence            String?  // JSON
@@ -354,7 +354,7 @@ model Refund {
   id          String   @id @default(cuid())
   merchantId  String
   paymentId   String
-  amount      Float
+  amount      Decimal @db.Decimal(18,2)
   type        String   // FULL, PARTIAL
   reason      String?
   status      String   @default("PENDING") // PENDING, APPROVED, PROCESSED, REJECTED
@@ -381,7 +381,7 @@ model Product {
   merchantId  String
   name        String
   description String?
-  price       Float
+  price       Decimal @db.Decimal(18,2)
   currency    String
   type        String   @default("PHYSICAL")
   imageUrl    String?
@@ -404,9 +404,9 @@ model Invoice {
   customerId  String?
   number      String
   items       String   // JSON array
-  subtotal    Float
-  tax         Float @default(0)
-  total       Float
+  subtotal    Decimal @db.Decimal(18,2)
+  tax         Decimal @db.Decimal(18,2) @default(0)
+  total       Decimal @db.Decimal(18,2)
   currency    String
   status      String   @default("DRAFT") // DRAFT, SENT, PAID, OVERDUE, VOID
   dueDate     DateTime?
@@ -430,7 +430,7 @@ model Subscription {
   merchantId          String
   customerId          String?
   planName            String
-  amount              Float
+  amount              Decimal @db.Decimal(18,2)
   currency            String
   interval            String   // DAILY, WEEKLY, MONTHLY, YEARLY
   status              String   @default("ACTIVE")
@@ -453,7 +453,7 @@ model Subscription {
 model PaymentLink {
   id              String   @id @default(cuid())
   merchantId      String
-  amount          Float
+  amount          Decimal @db.Decimal(18,2)
   currency        String
   description     String?
   reference       String?
@@ -461,7 +461,7 @@ model PaymentLink {
   url             String   @unique
   expiresAt       DateTime?
   paymentCount    Int      @default(0)
-  totalCollected  Float @default(0)
+  totalCollected  Decimal @db.Decimal(18,2) @default(0)
   environment     String   @default("sandbox")
   createdAt       DateTime @default(now())
 
@@ -575,7 +575,7 @@ model AMLAlert {
   entityId    String
   alertType   String   // STRUCTURING, VELOCITY, HIGH_RISK_CORRIDOR, PEP, SANCTIONS_HIT
   severity    String   // LOW, MEDIUM, HIGH, CRITICAL
-  score       Float
+  score       Decimal @db.Decimal(18,2)
   details     String?  // JSON
   status      String   @default("OPEN")
   assignedTo  String?
@@ -593,7 +593,7 @@ model SAR {
   caseId        String?
   filedBy       String
   narrative     String
-  amount        Float
+  amount        Decimal @db.Decimal(18,2)
   entities      String   // JSON array
   regulatoryRef String?
   status        String   @default("DRAFT")
@@ -639,15 +639,15 @@ model SimulationRun {
   scenario        String
   result          String
   resultHash      String
-  amount          Float
+  amount          Decimal @db.Decimal(18,2)
   currency        String
   priority        String
   buyerCountry    String
   merchantCountry String
-  costPercent     Float
+  costPercent     Decimal @db.Decimal(18,2)
   settlementMs    Int
-  riskScore       Float
-  confidence      Float
+  riskScore       Decimal @db.Decimal(18,2)
+  confidence      Decimal @db.Decimal(18,2)
   settled         Boolean  @default(false)
   amendments      Int      @default(0)
   failures        Int      @default(0)
@@ -705,11 +705,11 @@ model Extension {
   status        String    @default("draft") // draft | submitted | review | approved | published | rejected | suspended
   permissions   String    // JSON array: read_payments | write_payments | read_customers | write_customers | send_webhooks
   pricing       String    @default("free") // free | paid | freemium
-  price         Float @default(0)
+  price         Decimal @db.Decimal(18,2) @default(0)
   config        String?   // JSON schema object for merchant config
   changelog     String?   // JSON array of { version, date, changes }
   installCount  Int       @default(0)
-  rating        Float @default(0)
+  rating        Decimal @db.Decimal(18,2) @default(0)
   reviewCount   Int       @default(0)
   submittedAt   DateTime?
   reviewedAt    DateTime?
@@ -775,10 +775,10 @@ model SavedScenarioRecord {
   category       String?
   scenario       String   // JSON-serialized SimulationScenario
   baselineHash   String?
-  baselineCost   Float @default(0)
+  baselineCost   Decimal @db.Decimal(18,2) @default(0)
   baselineTime   Int      @default(0)
-  baselineRisk   Float @default(0)
-  baselineConf   Float @default(0)
+  baselineRisk   Decimal @db.Decimal(18,2) @default(0)
+  baselineConf   Decimal @db.Decimal(18,2) @default(0)
   lastRunAt      DateTime?
   lastRunPassed  Boolean?
   createdAt      DateTime @default(now())
@@ -795,9 +795,9 @@ model LedgerEntryRecord {
   accountLabel  String?
   accountType   String?
   currency      String?
-  debit         Float @default(0)
-  credit        Float @default(0)
-  balanceAfter  Float @default(0)
+  debit         Decimal @db.Decimal(18,2) @default(0)
+  credit        Decimal @db.Decimal(18,2) @default(0)
+  balanceAfter  Decimal @db.Decimal(18,2) @default(0)
   memo          String?
   frame         Int      @default(0)
   createdAt     DateTime @default(now())
@@ -810,7 +810,7 @@ model TwinTokenRecord {
   id             String   @id @default(cuid())
   runId          String
   symbol         String?
-  amount         Float @default(0)
+  amount         Decimal @db.Decimal(18,2) @default(0)
   currency       String?
   fromCountry    String?
   toCountry      String?

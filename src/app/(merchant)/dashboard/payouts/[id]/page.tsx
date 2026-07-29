@@ -196,7 +196,7 @@ export default async function PayoutDetailPage({ params }: PageProps) {
                     Source amount
                   </div>
                   <div className="mt-0.5 text-lg font-bold tabular-nums">
-                    {fmt(payout.sourceAmount, payout.sourceCurrency)}
+                    {fmt(Number(payout.sourceAmount), payout.sourceCurrency)}
                   </div>
                 </div>
                 <div>
@@ -204,7 +204,7 @@ export default async function PayoutDetailPage({ params }: PageProps) {
                     Fee ({payout.feeBps} bps)
                   </div>
                   <div className="mt-0.5 text-lg font-semibold tabular-nums text-muted-foreground">
-                    {fmt(payout.fee, payout.sourceCurrency)}
+                    {fmt(Number(payout.fee), payout.sourceCurrency)}
                   </div>
                 </div>
                 <div>
@@ -212,7 +212,7 @@ export default async function PayoutDetailPage({ params }: PageProps) {
                     Net amount
                   </div>
                   <div className="mt-0.5 text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-                    {fmt(payout.netAmount, payout.destinationCurrency)}
+                    {fmt(Number(payout.netAmount), payout.destinationCurrency)}
                   </div>
                 </div>
                 <div>

@@ -45,14 +45,15 @@ export default async function SubscriptionsPage() {
     .filter((s) => s.status === 'ACTIVE')
     .reduce((s, sub) => {
       // Normalize all intervals to monthly.
+      const amt = Number(sub.amount);
       const monthly =
         sub.interval === 'YEARLY'
-          ? sub.amount / 12
+          ? amt / 12
           : sub.interval === 'WEEKLY'
-            ? sub.amount * 4.33
+            ? amt * 4.33
             : sub.interval === 'DAILY'
-              ? sub.amount * 30
-              : sub.amount;
+              ? amt * 30
+              : amt;
       return s + monthly;
     }, 0);
 
@@ -139,7 +140,7 @@ export default async function SubscriptionsPage() {
                       {s.customerId ? s.customerId.slice(0, 12) : '—'}
                     </TableCell>
                     <TableCell className="font-semibold tabular-nums">
-                      {fmt(s.amount, s.currency)}
+                      {fmt(Number(s.amount), s.currency)}
                     </TableCell>
                     <TableCell>
                       <Badge

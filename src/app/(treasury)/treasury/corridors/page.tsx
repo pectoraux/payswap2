@@ -188,8 +188,8 @@ export default async function TreasuryCorridorsPage() {
       const avgSettleMs = bucket && bucket.count > 0 ? bucket.sumMs / bucket.count : null;
       return {
         corridor,
-        volume: c._sum.amount ?? 0,
-        fees: c._sum.fee ?? 0,
+        volume: Number(c._sum.amount ?? 0),
+        fees: Number(c._sum.fee ?? 0),
         payments: c._count._all,
         completed,
         failed,

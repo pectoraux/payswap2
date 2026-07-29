@@ -411,13 +411,13 @@ export default async function OpsOverviewPage() {
                           <StatusBadge status={r.settled ? 'SETTLED' : r.result.toUpperCase()} />
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {fmtNumber(r.costPercent, 2)}%
+                          {fmtNumber(Number(r.costPercent), 2)}%
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {fmtNumber(r.riskScore, 2)}
+                          {fmtNumber(Number(r.riskScore), 2)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {fmtNumber(r.confidence, 2)}
+                          {fmtNumber(Number(r.confidence), 2)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {fmtNumber(r.settlementMs, 0)} ms

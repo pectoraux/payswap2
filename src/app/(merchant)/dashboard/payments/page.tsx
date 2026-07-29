@@ -18,7 +18,7 @@ export default async function PaymentsPage() {
   const rows: PaymentRow[] = payments.map((p) => ({
     id: p.id,
     reference: p.reference,
-    amount: p.amount,
+    amount: Number(p.amount),
     currency: p.currency,
     method: p.method,
     status: p.status,
