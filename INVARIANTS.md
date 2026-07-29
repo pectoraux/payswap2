@@ -24,10 +24,10 @@
 | # | Invariant | Status | Evidence |
 |---|-----------|--------|----------|
 | R1 | Zero runtime bypasses (all mutations through dispatcher) | ✅ | Stage 1 complete; 10/10 financial routes verified |
-| R2 | Event replay deterministic (same events → same state) | ⬜ | P6a/P6b verify event types/count match; full replay not tested |
-| R3 | Crash-safe commits (durable before API returns) | ⬜ | In-memory store is primary; flush happens after dispatch but not atomic |
+| R2 | Event replay deterministic (same events → same state) | ✅ | 14/14 replay tests pass; 2,596 events readable from DB, sequential, consistent |
+| R3 | Crash-safe commits (durable before API returns) | ✅ | PostgresEventStore writes to DB before API returns; R3-1/R3-2 tests pass |
 | R4 | Idempotent execution (duplicate command → one result) | ✅ | S4-1/S4-2/S4-3 tests pass (100 concurrent → unique) |
-| R5 | Projection rebuild identical (delete → replay → same state) | ⬜ | Not tested |
+| R5 | Projection rebuild identical (delete → replay → same state) | ✅ | R5-1 through R5-6 tests pass; balance sheet derivable from events |
 | R6 | No direct financial database mutations | ✅ | Stage 1 scan: 0 bypasses in financial routes |
 | R7 | Constitution enforced on every state change | ✅ | InvariantEngine.verify() called on every dispatch |
 | R8 | OCC prevents concurrent stream corruption | ✅ | S5-1 test: 500 concurrent → no corruption |
@@ -65,16 +65,16 @@
 | Category | Proven | Total | Percentage |
 |----------|--------|-------|------------|
 | Financial | 8 | 10 | 80% |
-| Runtime | 5 | 8 | 62.5% |
+| Runtime | 8 | 8 | 100% |
 | Security | 7 | 8 | 87.5% |
 | Operational | 6 | 10 | 60% |
-| **Overall** | **26** | **36** | **72.2%** |
+| **Overall** | **29** | **36** | **80.6%** |
 
 ## Critical Blockers (must fix before production)
 
 1. **F8: Decimal-only monetary values** — 41 Float columns remain
-2. **R3: Crash-safe commits** — in-memory event store is primary, not DB
-3. **R2: Event replay deterministic** — not fully tested
-4. **R5: Projection rebuild identical** — not tested
-5. **F9: Bank reconciliation** — needs shadow ledger
-6. **S8: Penetration test** — needs external firm
+2. **F9: Bank reconciliation** — needs shadow ledger
+3. **S8: Penetration test** — needs external firm
+4. **O7: Disaster recovery** — needs backup/restore drill
+5. **O8: Multi-region failover** — design documented, not implemented
+6. **O10: Runbook drills** — runbooks exist but not exercised

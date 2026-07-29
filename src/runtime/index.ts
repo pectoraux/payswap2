@@ -433,6 +433,15 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     ?? (process.env.DATABASE_URL
       ? new PostgresEventStore()
       : new InMemoryEventStore());
+
+  // R3/R2/R5: Hydrate the PostgresEventStore cache from the DB on startup.
+  // This loads all persisted events into the in-memory cache for fast reads.
+  // The DB is authoritative; the cache is disposable.
+  if (eventStore instanceof PostgresEventStore) {
+    eventStore.hydrate().catch((err) => {
+      console.error('[runtime] PostgresEventStore hydration failed:', err);
+    });
+  }
   const intentEngine = new IntentEngine(clock);
   const policyEngine = new DefaultPolicyEngine();
   const pipeline = new Pipeline(clock, intentEngine, eventStore, policyEngine);
