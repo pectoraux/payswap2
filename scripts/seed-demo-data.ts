@@ -1,17 +1,6 @@
 /**
- * Production Demo Data Seed
- *
- * Clears all demo transactional data and creates:
- *   - 100 merchants (across Ghana, Nigeria, Kenya, Togo)
- *   - 10,000 customers (100 per merchant)
- *   - 1,000 LPs (250 per country: Kenya, Togo, Ghana, Nigeria)
- *   - Reserves: Togo + Ghana have fiat reserves; all 4 countries have LPs
- *   - Realistic wallet balances for each account
- *
- * All accounts share password: Payswap123456
- * Demo accounts do NOT show as quick logins (they're for runtime testing)
- *
- * Usage: export DATABASE_URL="..." NEXTAUTH_SECRET="..."; bun run scripts/seed-demo-data.ts
+ * Production Demo Data Seed — Optimized version
+ * Uses createMany for bulk operations (no nested relation creation)
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -44,208 +33,162 @@ const LP_NAMES = [
 
 async function main() {
   console.log('═══════════════════════════════════════════════════════════════════════');
-  console.log('  Production Demo Data Seed');
+  console.log('  Production Demo Data Seed (Optimized)');
   console.log('═══════════════════════════════════════════════════════════════════════\n');
 
-  // ── Step 1: Clear all transactional data ──────────────────────────────
-  console.log('━━━ Step 1: Clearing existing data ━━━');
-  await db.walletTransaction.deleteMany();
-  await db.refund.deleteMany();
-  await db.payment.deleteMany();
-  await db.payout.deleteMany();
-  await db.invoice.deleteMany();
-  await db.paymentLink.deleteMany();
-  await db.product.deleteMany();
-  await db.subscription.deleteMany();
-  await db.wallet.deleteMany();
-  await db.eventRecord.deleteMany();
-  await db.auditLog.deleteMany();
-  await db.ledgerEntryRecord.deleteMany();
-  await db.twinTokenRecord.deleteMany();
-  await db.simulationRun.deleteMany();
-  await db.ledgerSnapshotRecord.deleteMany();
-  await db.checkpointRecord.deleteMany();
-  await db.planAmendmentRecord.deleteMany();
-  await db.sAR.deleteMany();
-  await db.aMLAlert.deleteMany();
-  await db.complianceReview.deleteMany();
-  // Delete demo accounts (keep original 9 demo users)
-  await db.lPProfile.deleteMany({ where: { id: { startsWith: 'lp_' } } });
-  await db.customer.deleteMany({ where: { id: { startsWith: 'cus_' } } });
-  await db.merchant.deleteMany({ where: { id: { startsWith: 'mer_' } } });
-  await db.merchant.deleteMany({ where: { name: 'PaySwap Reserve' } });
-  await db.account.deleteMany({ where: { id: { startsWith: 'acc_merchant_' } } });
-  await db.account.deleteMany({ where: { id: { startsWith: 'acc_customer_' } } });
-  await db.account.deleteMany({ where: { id: { startsWith: 'acc_lp_' } } });
-  await db.account.deleteMany({ where: { id: 'acc_reserve' } });
-  await db.userRole.deleteMany({ where: { userId: { startsWith: 'usr_merchant_' } } });
-  await db.userRole.deleteMany({ where: { userId: { startsWith: 'usr_customer_' } } });
-  await db.userRole.deleteMany({ where: { userId: { startsWith: 'usr_lp_' } } });
-  await db.user.deleteMany({ where: { id: { startsWith: 'usr_merchant_' } } });
-  await db.user.deleteMany({ where: { id: { startsWith: 'usr_customer_' } } });
-  await db.user.deleteMany({ where: { id: { startsWith: 'usr_lp_' } } });
-  console.log('  Cleared all data');
+  // ── Step 1: Clear ─────────────────────────────────────────────────────
+  console.log('━━━ Step 1: Clearing data ━━━');
+  // Delete sequentially (not in a transaction — too many tables for one tx)
+  await db.walletTransaction.deleteMany(); console.log('  walletTransaction');
+  await db.refund.deleteMany(); console.log('  refund');
+  await db.payment.deleteMany(); console.log('  payment');
+  await db.payout.deleteMany(); console.log('  payout');
+  await db.invoice.deleteMany(); console.log('  invoice');
+  await db.paymentLink.deleteMany(); console.log('  paymentLink');
+  await db.product.deleteMany(); console.log('  product');
+  await db.subscription.deleteMany(); console.log('  subscription');
+  await db.wallet.deleteMany(); console.log('  wallet');
+  await db.eventRecord.deleteMany(); console.log('  eventRecord');
+  await db.auditLog.deleteMany(); console.log('  auditLog');
+  await db.ledgerEntryRecord.deleteMany(); console.log('  ledgerEntryRecord');
+  await db.twinTokenRecord.deleteMany(); console.log('  twinTokenRecord');
+  await db.simulationRun.deleteMany(); console.log('  simulationRun');
+  await db.ledgerSnapshotRecord.deleteMany(); console.log('  ledgerSnapshotRecord');
+  await db.checkpointRecord.deleteMany(); console.log('  checkpointRecord');
+  await db.planAmendmentRecord.deleteMany(); console.log('  planAmendmentRecord');
+  await db.sAR.deleteMany(); console.log('  sAR');
+  await db.aMLAlert.deleteMany(); console.log('  aMLAlert');
+  await db.complianceReview.deleteMany(); console.log('  complianceReview');
+  await db.lPProfile.deleteMany({ where: { id: { startsWith: 'lp_' } } }); console.log('  lpProfile');
+  await db.customer.deleteMany({ where: { id: { startsWith: 'cus_' } } }); console.log('  customer');
+  await db.merchant.deleteMany({ where: { OR: [{ id: { startsWith: 'mer_' } }, { name: 'PaySwap Reserve' }] } }); console.log('  merchant');
+  await db.account.deleteMany({ where: { OR: [{ id: { startsWith: 'acc_' } }, { id: 'acc_reserve' }] } }); console.log('  account');
+  await db.userRole.deleteMany({ where: { OR: [{ userId: { startsWith: 'usr_' } }, { userId: 'usr_reserve' }] } }); console.log('  userRole');
+  await db.user.deleteMany({ where: { OR: [{ id: { startsWith: 'usr_' } }, { id: 'usr_reserve' }] } }); console.log('  user');
+  console.log('  Cleared all');
 
-  // ── Step 2: Create 100 merchants ──────────────────────────────────────
-  console.log('\n━━━ Step 2: Creating 100 merchants ━━━');
-  const merchantIds: string[] = [];
-
+  // ── Step 2: 100 Merchants (bulk) ─────────────────────────────────────
+  console.log('\n━━━ Step 2: 100 merchants ━━━');
+  const merchUsers: any[] = [], merchAccounts: any[] = [], merchRecords: any[] = [], merchRoles: any[] = [];
   for (let i = 0; i < 100; i++) {
-    const country = COUNTRIES[i % COUNTRIES.length];
-    const name = `${MERCHANT_NAMES[i % MERCHANT_NAMES.length]} ${Math.floor(i / MERCHANT_NAMES.length) + 1}`;
+    const c = COUNTRIES[i % 4];
+    const name = `${MERCHANT_NAMES[i % 20]} ${Math.floor(i / 20) + 1}`;
     const email = `merchant${i + 1}@demo.payswap`;
-    const userId = `usr_merchant_${i + 1}`;
-    const accountId = `acc_merchant_${i + 1}`;
-    const merchantId = `mer_${i + 1}`;
-
-    await db.user.create({
-      data: { id: userId, email, passwordHash: PASSWORD_HASH, name, status: 'ACTIVE', roles: { create: [{ role: 'MERCHANT' }] } },
-    });
-    await db.account.create({ data: { id: accountId, userId, type: 'MERCHANT', status: 'ACTIVE' } });
-    await db.merchant.create({
-      data: { id: merchantId, accountId, name, email, currency: country.currency, country: country.code, status: 'ACTIVE' },
-    });
-    merchantIds.push(merchantId);
+    const uid = `usr_merchant_${i + 1}`, aid = `acc_merchant_${i + 1}`, mid = `mer_${i + 1}`;
+    merchUsers.push({ id: uid, email, passwordHash: PASSWORD_HASH, name, status: 'ACTIVE' });
+    merchRoles.push({ id: `role_m_${i}`, userId: uid, role: 'MERCHANT' });
+    merchAccounts.push({ id: aid, userId: uid, type: 'MERCHANT', status: 'ACTIVE' });
+    merchRecords.push({ id: mid, accountId: aid, name, email, currency: c.currency, country: c.code, status: 'ACTIVE' });
   }
-  console.log('  Created 100 merchants');
+  await db.user.createMany({ data: merchUsers });
+  await db.userRole.createMany({ data: merchRoles });
+  await db.account.createMany({ data: merchAccounts });
+  await db.merchant.createMany({ data: merchRecords });
+  console.log('  Done');
 
-  // ── Step 3: Create 10,000 customers ───────────────────────────────────
-  console.log('\n━━━ Step 3: Creating 10,000 customers ━━━');
-  let customerCount = 0;
-  const customerAccountIds: string[] = [];
-
-  for (let m = 0; m < 100; m++) {
-    const country = COUNTRIES[m % COUNTRIES.length];
-    for (let c = 0; c < 100; c++) {
-      const idx = m * 100 + c;
+  // ── Step 3: 10,000 Customers (bulk) ──────────────────────────────────
+  console.log('\n━━━ Step 3: 10,000 customers ━━━');
+  const BATCH = 1000;
+  for (let batch = 0; batch < 10; batch++) {
+    const custUsers: any[] = [], custRoles: any[] = [], custAccounts: any[] = [], custRecords: any[] = [];
+    for (let j = 0; j < BATCH; j++) {
+      const idx = batch * BATCH + j;
+      const c = COUNTRIES[Math.floor(idx / 100) % 4];
       const name = `Customer ${idx + 1}`;
       const email = `customer${idx + 1}@demo.payswap`;
-      const userId = `usr_customer_${idx + 1}`;
-      const accountId = `acc_customer_${idx + 1}`;
-
-      await db.user.create({
-        data: { id: userId, email, passwordHash: PASSWORD_HASH, name, status: 'ACTIVE', roles: { create: [{ role: 'CUSTOMER' }] } },
-      });
-      await db.account.create({ data: { id: accountId, userId, type: 'CUSTOMER', status: 'ACTIVE' } });
-      await db.customer.create({
-        data: { id: `cus_${idx + 1}`, accountId, name, email, phone: `+233${Math.floor(1000000000 + Math.random() * 8999999999)}`, country: country.name },
-      });
-      customerAccountIds.push(accountId);
-      customerCount++;
+      const uid = `usr_customer_${idx + 1}`, aid = `acc_customer_${idx + 1}`;
+      custUsers.push({ id: uid, email, passwordHash: PASSWORD_HASH, name, status: 'ACTIVE' });
+      custRoles.push({ id: `role_c_${idx}`, userId: uid, role: 'CUSTOMER' });
+      custAccounts.push({ id: aid, userId: uid, type: 'CUSTOMER', status: 'ACTIVE' });
+      custRecords.push({ id: `cus_${idx + 1}`, accountId: aid, name, email, phone: `+233${Math.floor(1e9 + Math.random() * 8e9)}`, country: c.name });
     }
-    if ((m + 1) % 10 === 0) console.log(`  ... ${customerCount} customers created`);
+    await db.user.createMany({ data: custUsers });
+    await db.userRole.createMany({ data: custRoles });
+    await db.account.createMany({ data: custAccounts });
+    await db.customer.createMany({ data: custRecords });
+    console.log(`  Batch ${batch + 1}/10 done (${(batch + 1) * BATCH} customers)`);
   }
-  console.log(`  Created ${customerCount} customers`);
 
-  // ── Step 4: Create 1,000 LPs ──────────────────────────────────────────
-  console.log('\n━━━ Step 4: Creating 1,000 LPs ━━━');
-  let lpCount = 0;
-
-  for (let countryIdx = 0; countryIdx < COUNTRIES.length; countryIdx++) {
-    const country = COUNTRIES[countryIdx];
+  // ── Step 4: 1,000 LPs (bulk) ─────────────────────────────────────────
+  console.log('\n━━━ Step 4: 1,000 LPs ━━━');
+  for (let ci = 0; ci < 4; ci++) {
+    const country = COUNTRIES[ci];
+    const lpUsers: any[] = [], lpRoles: any[] = [], lpAccounts: any[] = [], lpRecords: any[] = [];
     for (let i = 0; i < 250; i++) {
-      const idx = countryIdx * 250 + i;
-      const name = `${LP_NAMES[i % LP_NAMES.length]} ${country.code} ${Math.floor(i / LP_NAMES.length) + 1}`;
+      const idx = ci * 250 + i;
+      const name = `${LP_NAMES[i % 16]} ${country.code} ${Math.floor(i / 16) + 1}`;
       const email = `lp${idx + 1}@demo.payswap`;
-      const userId = `usr_lp_${idx + 1}`;
-      const accountId = `acc_lp_${idx + 1}`;
-
-      // Tier: 10% premium, 30% verified, 60% basic
+      const uid = `usr_lp_${idx + 1}`, aid = `acc_lp_${idx + 1}`;
       const tier = i < 25 ? 'premium' : i < 100 ? 'verified' : 'basic';
-      const stakeAmount = i < 25 ? 200_000 + Math.random() * 300_000
-        : i < 100 ? 50_000 + Math.random() * 100_000
-        : 5_000 + Math.random() * 20_000;
-      const capacityAmount = stakeAmount * (1.5 + Math.random());
-      const feeBpsVal = 30 + Math.floor(Math.random() * 120);
-
-      await db.user.create({
-        data: { id: userId, email, passwordHash: PASSWORD_HASH, name, status: 'ACTIVE', roles: { create: [{ role: 'LP' }] } },
+      const stake = i < 25 ? 200000 + Math.random() * 300000 : i < 100 ? 50000 + Math.random() * 100000 : 5000 + Math.random() * 20000;
+      const cap = stake * (1.5 + Math.random());
+      const fee = 30 + Math.floor(Math.random() * 120);
+      lpUsers.push({ id: uid, email, passwordHash: PASSWORD_HASH, name, status: 'ACTIVE' });
+      lpRoles.push({ id: `role_l_${idx}`, userId: uid, role: 'LP' });
+      lpAccounts.push({ id: aid, userId: uid, type: 'LP', status: 'ACTIVE' });
+      lpRecords.push({
+        id: `lp_${idx + 1}`, accountId: aid, name, country: country.code,
+        currencies: JSON.stringify([country.currency, 'USDC']), tier,
+        stake: Math.round(stake * 100) / 100, collateral: Math.round(stake * 0.5 * 100) / 100,
+        capacity: JSON.stringify({ [country.currency]: Math.round(cap * 100) / 100, USDC: Math.round(cap * 0.5 * 100) / 100 }),
+        feeBps: JSON.stringify({ [`${country.currency}->USDC`]: fee, [`USDC->${country.currency}`]: fee }),
+        settlementSpeedMs: 1000 + Math.floor(Math.random() * 10000),
+        reputation: Math.round((60 + Math.random() * 40) * 10) / 10, status: 'ACTIVE',
       });
-      await db.account.create({ data: { id: accountId, userId, type: 'LP', status: 'ACTIVE' } });
-      await db.lPProfile.create({
-        data: {
-          id: `lp_${idx + 1}`,
-          accountId,
-          name,
-          country: country.code,
-          currencies: JSON.stringify([country.currency, 'USDC']),
-          tier,
-          stake: Math.round(stakeAmount * 100) / 100,
-          collateral: Math.round(stakeAmount * 0.5 * 100) / 100,
-          capacity: JSON.stringify({ [country.currency]: Math.round(capacityAmount * 100) / 100, USDC: Math.round(capacityAmount * 0.5 * 100) / 100 }),
-          feeBps: JSON.stringify({ [`${country.currency}->USDC`]: feeBpsVal, [`USDC->${country.currency}`]: feeBpsVal }),
-          settlementSpeedMs: 1000 + Math.floor(Math.random() * 10000),
-          reputation: Math.round((60 + Math.random() * 40) * 10) / 10,
-          status: 'ACTIVE',
-        },
-      });
-      lpCount++;
     }
-    console.log(`  ... ${lpCount} LPs created (${country.name})`);
+    await db.user.createMany({ data: lpUsers });
+    await db.userRole.createMany({ data: lpRoles });
+    await db.account.createMany({ data: lpAccounts });
+    await db.lPProfile.createMany({ data: lpRecords });
+    console.log(`  ${country.name}: 250 LPs done`);
   }
-  console.log(`  Created ${lpCount} LPs`);
 
-  // ── Step 5: Create wallets ────────────────────────────────────────────
-  console.log('\n━━━ Step 5: Creating wallets ━━━');
-
+  // ── Step 5: Wallets ───────────────────────────────────────────────────
+  console.log('\n━━━ Step 5: Wallets ━━━');
   // Merchant wallets
-  const merchantWalletData: any[] = [];
+  const mWallets: any[] = [];
   for (let i = 0; i < 100; i++) {
-    const country = COUNTRIES[i % COUNTRIES.length];
-    const accountId = `acc_merchant_${i + 1}`;
-    merchantWalletData.push({ accountId, name: `Settlement Wallet`, currency: country.currency, balance: Math.round((10_000 + Math.random() * 90_000) * 100) / 100, isDefault: true });
-    merchantWalletData.push({ accountId, name: `USDC Wallet`, currency: 'USDC', balance: Math.round((1_000 + Math.random() * 9_000) * 100) / 100, isDefault: false });
+    const c = COUNTRIES[i % 4];
+    const aid = `acc_merchant_${i + 1}`;
+    mWallets.push({ accountId: aid, name: 'Settlement Wallet', currency: c.currency, balance: Math.round((10000 + Math.random() * 90000) * 100) / 100, isDefault: true });
+    mWallets.push({ accountId: aid, name: 'USDC Wallet', currency: 'USDC', balance: Math.round((1000 + Math.random() * 9000) * 100) / 100, isDefault: false });
   }
-  await db.wallet.createMany({ data: merchantWalletData });
-
-  // Customer wallets (batch in chunks of 1000)
-  for (let i = 0; i < 10000; i += 1000) {
-    const chunk: any[] = [];
-    for (let j = i; j < Math.min(i + 1000, 10000); j++) {
-      const country = COUNTRIES[Math.floor(j / 100) % COUNTRIES.length];
-      chunk.push({ accountId: `acc_customer_${j + 1}`, name: `Wallet`, currency: country.currency, balance: Math.round((100 + Math.random() * 4_900) * 100) / 100, isDefault: true });
+  await db.wallet.createMany({ data: mWallets });
+  // Customer wallets (batch)
+  for (let b = 0; b < 10; b++) {
+    const cWallets: any[] = [];
+    for (let j = 0; j < 1000; j++) {
+      const idx = b * 1000 + j;
+      const c = COUNTRIES[Math.floor(idx / 100) % 4];
+      cWallets.push({ accountId: `acc_customer_${idx + 1}`, name: 'Wallet', currency: c.currency, balance: Math.round((100 + Math.random() * 4900) * 100) / 100, isDefault: true });
     }
-    await db.wallet.createMany({ data: chunk });
+    await db.wallet.createMany({ data: cWallets });
   }
-  console.log(`  Created ${merchantWalletData.length + 10000} wallets`);
+  console.log('  All wallets created');
 
-  // ── Step 6: Treasury reserve wallets ──────────────────────────────────
-  console.log('\n━━━ Step 6: Creating treasury reserves ━━━');
-  // Create reserve user + account + merchant
+  // ── Step 6: Reserves ──────────────────────────────────────────────────
+  console.log('\n━━━ Step 6: Reserves ━━━');
   await db.user.create({ data: { id: 'usr_reserve', email: 'reserve@payswap.internal', passwordHash: PASSWORD_HASH, name: 'PaySwap Reserve', status: 'ACTIVE', roles: { create: [{ role: 'TREASURY' }] } } });
   await db.account.create({ data: { id: 'acc_reserve', userId: 'usr_reserve', type: 'MERCHANT', status: 'ACTIVE' } });
   await db.merchant.create({ data: { id: 'mer_reserve', accountId: 'acc_reserve', name: 'PaySwap Reserve', email: 'reserve@payswap.internal', currency: 'USD', country: 'GH', status: 'ACTIVE' } });
-
-  const reserveWallets = [
-    { accountId: 'acc_reserve', name: 'Ghana Fiat Reserve', currency: 'GHS', balance: 5_000_000, isDefault: true },
-    { accountId: 'acc_reserve', name: 'Ghana Stablecoin Reserve', currency: 'USDC', balance: 1_000_000, isDefault: false },
-    { accountId: 'acc_reserve', name: 'Togo Fiat Reserve', currency: 'XOF', balance: 3_000_000, isDefault: false },
-    { accountId: 'acc_reserve', name: 'Togo Stablecoin Reserve', currency: 'USDC', balance: 500_000, isDefault: false },
-    { accountId: 'acc_reserve', name: 'Treasury USDC', currency: 'USDC', balance: 2_000_000, isDefault: false },
-  ];
-  await db.wallet.createMany({ data: reserveWallets });
-  console.log('  Created reserve wallets (Ghana: GHS 5M + USDC 1M, Togo: XOF 3M + USDC 500K)');
+  await db.wallet.createMany({ data: [
+    { accountId: 'acc_reserve', name: 'Ghana Fiat Reserve', currency: 'GHS', balance: 5000000, isDefault: true },
+    { accountId: 'acc_reserve', name: 'Togo Fiat Reserve', currency: 'XOF', balance: 3000000, isDefault: false },
+    { accountId: 'acc_reserve', name: 'Treasury USDC Reserve', currency: 'USDC', balance: 3500000, isDefault: false },
+  ]});
+  console.log('  Reserves created (Ghana: GHS 5M, Togo: XOF 3M, Treasury: USDC 3.5M)');
 
   // ── Summary ───────────────────────────────────────────────────────────
   console.log('\n═══════════════════════════════════════════════════════════════════════');
-  const [merchants, customers, lps, wallets, users] = await Promise.all([
-    db.merchant.count(), db.customer.count(), db.lPProfile.count(), db.wallet.count(), db.user.count(),
-  ]);
-  console.log(`  Merchants: ${merchants}`);
-  console.log(`  Customers: ${customers}`);
-  console.log(`  LPs: ${lps}`);
-  console.log(`  Wallets: ${wallets}`);
-  console.log(`  Users: ${users}`);
-  console.log(`\n  All passwords: Payswap123456`);
-  console.log(`  Merchants: merchant1@demo.payswap ... merchant100@demo.payswap`);
-  console.log(`  Customers: customer1@demo.payswap ... customer10000@demo.payswap`);
-  console.log(`  LPs: lp1@demo.payswap ... lp1000@demo.payswap`);
+  const [m, c, l, w, u] = await Promise.all([db.merchant.count(), db.customer.count(), db.lPProfile.count(), db.wallet.count(), db.user.count()]);
+  console.log(`  Merchants: ${m} | Customers: ${c} | LPs: ${l} | Wallets: ${w} | Users: ${u}`);
+  console.log(`  Password: Payswap123456`);
+  console.log(`  Merchants: merchant1-100@demo.payswap`);
+  console.log(`  Customers: customer1-10000@demo.payswap`);
+  console.log(`  LPs: lp1-1000@demo.payswap`);
   console.log(`  Reserve: reserve@payswap.internal`);
-  console.log(`\n  Reserves: Ghana (GHS 5M + USDC 1M), Togo (XOF 3M + USDC 500K)`);
-  console.log(`  No reserves: Kenya, Nigeria (LP bandwidth only)`);
   console.log('═══════════════════════════════════════════════════════════════════════\n');
-
   await db.$disconnect();
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch(e => { console.error('SEED FAILED:', e); process.exit(1); });
