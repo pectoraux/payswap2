@@ -23,3 +23,4 @@ export * from './inspector';
 export * from './event-log';
 export * from './formal-verifier';
 export * from './dsl';
+export * from './operability';

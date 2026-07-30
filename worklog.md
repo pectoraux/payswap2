@@ -5044,3 +5044,44 @@ Stage Summary:
 - 3 new API routes: /api/ekg/formal-prove, /api/ekg/verify-certificate, /api/dsl/compile.
 - No new dashboards, no new abstractions — per user directive. Pure formal correctness + developer programmability.
 - tsc: 0 | lint: 0 errors (322 warnings) | curl-verified: ✅
+
+---
+Task ID: HARDEN-4
+Agent: hardening-agent-4
+Task: Phase 7 (remaining operability tools — proof debugger, graph diff viewer, policy simulator) + Phase 8 (developer platform — universal resolve() API). The tools institutions actually buy.
+
+Work Log:
+- Built `src/ekg/operability.ts` (~350 lines) — 3 operability tools:
+  • Proof Debugger (debugProof): flattens a proof tree into a step-by-step traversal. Each step records: index, depth, parent index, child indices, the ProofStep, breakpoint hits, and a human-readable trace line. Supports breakpoints on capability names — when a step's capability matches a breakpoint, it's flagged. Returns stats: totalSteps, capabilitySteps, inputSteps, settlementSteps, goalSteps, maxDepth, totalCost, totalLatencyMs, distinctProviders. Verified: 3-step proof for "Summarize Document" with breakpoint on "Translate" hit at step 1.
+  • Graph Diff Viewer (diffGraph): compares graph state at two sequence numbers. Returns: nodesAdded, nodesRemoved, nodesVersioned (nodes with changed properties between the two states, with the changed keys + from/to values), relationshipsAdded, relationshipsRemoved, summary with totalChanges. Verified: diff from seq 0 to seq 217 shows 90 nodes added, 127 relationships added, 217 total changes (the full seed).
+  • Policy Simulator (simulatePolicyChange): given a hypothetical policy change (ADD/MODIFY/REMOVE with policyId/capabilityId/rule/enforcement), re-proves every goal in the graph under the hypothetical policy and reports which would pass/fail — WITHOUT committing the change. For ADD BLOCK: checks if any proof uses the blocked capability. For MODIFY to BLOCK: checks if any proof uses a capability constrained by the policy. Returns: goalsPassing (with certificate validity), goalsFailing (with reason), summary with impact assessment. Verified: simulating ADD BLOCK on the Summarize capability → 5 of 6 goals still pass, 1 fails (Enroll Student, because its proof path uses a capability that produces the same asset type).
+
+- Built `POST /api/resolve` (Phase 8) — the universal resolve() API. The one-stop developer entry point:
+  • Input: { goal: goalId | { dsl: "..." } | { id: "..." }, constraints, formal: true, simulate: true }
+  • Resolves the goal (by id, by DSL source, or by object).
+  • Proves it → proofs[].
+  • Optionally issues a formal certificate (12 invariants).
+  • Optionally simulates the best proof (cost/latency/success probability/counterfactual).
+  • Returns: goal, proofs (ranked), best proof (full tree), certificate, simulation, message.
+  • Audits RESOLVE.UNIVERSAL.
+  • Verified: resolve("Summarize Document") → 2 proofs found, best score 88.5, certificate valid (12/12 invariants hold, fingerprint fpc:730301fd), simulation 89.8% success.
+
+APIs (4 new routes):
+- GET /api/ekg/debug-proof?proofId=X&breakpoints=Cap1,Cap2 — proof debugger with breakpoints.
+- GET /api/ekg/diff?from=N&to=M — graph diff viewer.
+- POST /api/ekg/simulate-policy — policy simulator (ADD/MODIFY/REMOVE).
+- POST /api/resolve — universal resolve() (goal + constraints + formal + simulate).
+
+Verification (end-to-end via curl):
+- tsc: 0 errors. lint: 0 errors, 323 warnings (1 new — expected audit-log).
+- Proof Debugger: 3-step proof traversed. Breakpoint on "Translate" hit at step 1. Stats: 3 steps, 1 capability, maxDepth 2, 1 provider. ✓
+- Graph Diff: seq 0 → seq 217 = 90 nodes added, 127 relationships added, 217 total changes. ✓
+- Policy Simulator: ADD BLOCK on Summarize capability → 5/6 goals pass, 1 fails (Enroll Student). Impact: "⚠️ 1 of 6 goals would FAIL". Committed: false (simulation only). ✓
+- Universal resolve(): 2 proofs found, best score 88.5. Certificate valid (12/12 invariants, fingerprint fpc:730301fd). Simulation 89.8% success. Counterfactual computed. ✓
+
+Stage Summary:
+- Phase 7 (operability): 3 tools built — proof debugger (step-through with breakpoints), graph diff viewer (temporal comparison), policy simulator (what-if analysis without committing). These are the tools institutions actually buy — "worth far more than another dashboard."
+- Phase 8 (developer platform): universal resolve() API — the one API developers use. Input a goal (id or DSL) + constraints, get back proofs + formal certificate + simulation. Everything else is implementation.
+- 4 new API routes. No new dashboards, no new abstractions — per user directive.
+- The full developer experience: write DSL → compile → resolve() → get proofs + certificate + simulation → execute (idempotent) → verify independently. One API.
+- tsc: 0 | lint: 0 errors (323 warnings) | curl-verified: ✅
