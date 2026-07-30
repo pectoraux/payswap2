@@ -5085,3 +5085,41 @@ Stage Summary:
 - 4 new API routes. No new dashboards, no new abstractions — per user directive.
 - The full developer experience: write DSL → compile → resolve() → get proofs + certificate + simulation → execute (idempotent) → verify independently. One API.
 - tsc: 0 | lint: 0 errors (323 warnings) | curl-verified: ✅
+
+---
+Task ID: HARDEN-5
+Agent: hardening-agent-5
+Task: Phase 6 (real-world integrations) — provider adapter framework + mock implementations. Every external system (banking, KYC, card, mobile money) becomes a provider adapter implementing a standard interface. Adapters register as graph entities and participate in proofs. Exact Money used throughout the invocation path.
+
+Work Log:
+- Built `src/ekg/adapters.ts` (~310 lines):
+  • ProviderAdapter interface — the standard interface every real-world provider implements: id, name, label (EntityLabel), description, offers (AdapterCapabilityOffer[]), enabled, jurisdictions, carbonPerInvocation, invoke(capabilityId, inputs) → AdapterInvocationResult, healthCheck(). AdapterInvocationResult includes: success, producedAssets (assetId + Money), consumedAssets (assetId + Money), cost (Money — exact, no float), latencyMs, detail, error, rawResponse.
+  • AdapterCapabilityOffer — pricePerInvocation (Money), latencyMs, slaSuccessRate, capacity, region.
+  • Provider registry on globalThis. registerAdapter() stores the adapter + creates/updates an ENTITY node in the graph + creates OFFERS relationships (with Money price stored as both toNumber + minorUnits string for exactness) + creates LOCATED_IN relationships to jurisdictions. getAdapter(), listAdapters(), setAdapterEnabled().
+  • 4 mock provider implementations (real providers implement the same interface but make real HTTP calls):
+    - StripeAdapter (API, card processing) — 2.9% fee, 500ms, 99.99% SLA, jurisdictions US/EU
+    - EcobankAdapter (BANK, bank transfer) — 1.5% fee, 800ms, 99.95% SLA, jurisdictions GH/NG/KE/TG
+    - SmileIDAdapter (API, KYC verification) — $0.15, 2400ms, 99.8% SLA, jurisdictions GH/NG/KE/TG
+    - MTNMoMoAdapter (API, mobile money) — 1.0% fee, 1200ms, 99.9% SLA, jurisdictions GH/NG/KE/TG
+  • seedAdapters() — registers all 4 mock adapters after the graph is seeded. Finds capability ids by name (Settle Payment, Verify Identity) and creates offers with exact Money prices. ensureAdaptersSeeded() is idempotent.
+
+APIs (2 new routes):
+- GET /api/ekg/providers — list all registered adapters with their offers + health. GET ?id=X for a single adapter + health check.
+- PATCH /api/ekg/providers — enable/disable a provider.
+- POST /api/ekg/invoke-provider — invoke a provider adapter. Returns exact Money result (cost as { minorUnits, currency, major }), produced/consumed assets, latency, raw response.
+
+Verification (end-to-end via curl):
+- tsc: 0 errors. lint: 0 errors, 323 warnings (no new).
+- 4 providers registered: Stripe (API, $0.029, 500ms, 100% SLA), Ecobank (BANK, $0.015, 800ms), Smile ID (API, $0.15, 2400ms), MTN MoMo (API, $0.01, 1200ms). All with jurisdictions + carbon footprint.
+- Entity count increased 21 → 25 (4 mock providers registered as ENTITY nodes in the graph). Relationship count increased 127 → 145 (OFFERS + LOCATED_IN relationships created).
+- Stripe invocation: charged $99.99, fee $2.89 (minorUnits: 289, exact Money — no float). Produced payment receipt, consumed USD. Raw response with charge_id. ✓
+- MTN MoMo invocation: transferred $50.00 to +233244567890, fee $0.50 (exact Money). ✓
+- Health check: Stripe healthy, 45ms latency. ✓
+- Providers participate in the planner automatically — they're graph entities with OFFERS relationships, so resolve() discovers them.
+
+Stage Summary:
+- Phase 6 (real-world integrations): `src/ekg/adapters.ts` (~310 lines). Provider adapter framework + 4 mock implementations (Stripe, Ecobank, Smile ID, MTN MoMo). Every external system implements the same ProviderAdapter interface; the graph treats them as entities offering capabilities. Adding a real provider = implement the interface + call registerAdapter().
+- Exact Money is used throughout the invocation path — adapter costs are Money objects (BigInt minorUnits), not float. Verified: Stripe $99.99 charge → $2.89 fee (minorUnits: 289).
+- 3 new API routes: /api/ekg/providers (list + health), /api/ekg/invoke-provider (invoke with exact Money result).
+- No new dashboards, no new abstractions — per user directive. Pure adoptability: real providers plug in via a standard interface.
+- tsc: 0 | lint: 0 errors (323 warnings) | curl-verified: ✅
