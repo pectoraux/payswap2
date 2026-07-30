@@ -5457,3 +5457,65 @@ Stage Summary:
 - All 12 milestones implemented and verified.
 - Every platform subsystem exercised without modifying PaySwap core.
 - tsc: 0 | lint: 0 errors (324 warnings) | curl-verified: ✅
+
+---
+Task ID: PARCEL-PRODUCTION-1
+Agent: parcel-production-agent
+Task: Production hardening of the Parcel Delivery extension — persistent state (event sourcing), distributed auction engine, VRP route optimizer, production merchant SDK, and chaos testing framework. Transform from validation example to production-grade logistics system.
+
+Work Log:
+- Built 5 new modules in `src/extensions/parcel-delivery/`:
+  • `persistence.ts` (~180 lines) — Event-sourced persistence: ParcelEvent (16 event types), appendEvent with OCC (optimistic concurrency control), readStream, readAllEvents, getStreamVersion, auto-snapshot every 50 events per stream, replayStream (reconstructs state from events using snapshot + delta), rebuildAllProjections (all streams rebuildable from events), verifyReconstructible. Every parcel reconstructible from events. Projections are disposable.
+  • `distributed-auction.ts` (~220 lines) — Distributed auction engine: acquireLock/releaseLock (distributed locks with TTL), tryAcquireLeadership/isLeader/getLeader (leader election with 30s TTL), startDistributedAuction (only leader can start, acquires lock), placeDistributedBid (any node, OCC prevents duplicate bids from same courier), settleDistributedAuction (EXACTLY-ONCE winner selection via lock + OCC — idempotent: if already settled, returns existing result), recoverExpiredAuctions (leader settles expired auctions on schedule), replayAuction (reconstruct auction from events for recovery/debugging).
+  • `vrp-solver.ts` (~180 lines) — Real Vehicle Routing Problem solver: VRPStop (pickup/delivery with time windows, weight, service time, priority), VRPVehicle (capacity, carbon, cost per km, shift hours, max stops), VRPSolution (routes with distance/duration/cost/carbon/capacity utilization/time window violations). Algorithm: greedy assignment (sorted by priority + time window urgency, nearest vehicle with capacity) + local search (2-opt swap within routes). Multi-objective: MINIMIZE_COST, MINIMIZE_TIME, MINIMIZE_CARBON, MINIMIZE_DISTANCE, MAXIMIZE_RELIABILITY, BALANCE_LOAD. Haversine distance calculation.
+  • `sdk.ts` (~170 lines) — Production Merchant SDK: ParcelDeliveryClient with typed methods (createDelivery, cancelDelivery, scheduleDelivery, trackDelivery, discoverGroups, planRoute, optimizeBundle, submitProofOfDelivery, rateDelivery, listDeliveries, getDashboard). Automatic retries with exponential backoff (3 retries, 2^n delay), idempotency keys, timeout via AbortController, webhook verification (HMAC-SHA256 with timingSafeEqual). Usable from Node, React, Next.js, React Native.
+  • `chaos-tests.ts` (~250 lines) — Chaos testing framework: 10 automated tests: (1) Duplicate Delivery Creation (idempotency), (2) Auction Crash Recovery, (3) Planner Crash Recovery, (4) Distributed Lock Contention, (5) Leader Failover, (6) Event Replay Recovery, (7) Duplicate Webhook, (8) Provider Outage (circuit breaker), (9) Hub Failure (route around), (10) Optimistic Concurrency Control. runChaosTests() returns ChaosReport.
+
+- Built 4 new API routes:
+  • GET /api/parcel/chaos — run chaos test suite
+  • GET /api/parcel/persistence — event store stats, rebuild projections, verify reconstructible, read stream
+  • POST /api/parcel/vrp — solve VRP with stops + vehicles + objectives
+  • GET/POST /api/parcel/distributed-auction — leader status, start/bid/settle/recover auctions, replay
+
+Verification (end-to-end):
+- tsc: 0 errors. lint: 0 errors, 324 warnings.
+- Chaos tests: 10/10 PASSED:
+  ✓ Duplicate Delivery Creation (idempotency) — duplicate rejected, only 1 event in stream
+  ✓ Auction Crash Recovery — winner: Courier 2 ($4.50)
+  ✓ Planner Crash Recovery — 1 route, 197km, 0ms solver
+  ✓ Distributed Lock Contention — lock prevents concurrent access, releases on unlock
+  ✓ Leader Failover — leadership auto-recovered after expiry
+  ✓ Event Replay Recovery — parcel reconstructible from 3 events (version 3)
+  ✓ Duplicate Webhook — only 1 event recorded
+  ✓ Provider Outage — circuit breaker pattern verified
+  ✓ Hub Failure — planner rerouted, delivery still completed
+  ✓ Optimistic Concurrency Control — stale version update correctly rejected
+- Persistent State: 11 events in store, projections rebuilt in 0ms, all streams reconstructible ✓
+- VRP Solver: 3 stops + 1 vehicle, 510km, $256.57, 91.83kg CO₂, multi-objective (COST + CARBON), 1ms solver, 0 unassigned ✓
+- Distributed Auction: leader elected, auction started (BULK mode), 3 bids placed, winner selected (Courier 2, $4.50), exactly-once settlement ✓
+- Merchant SDK: typed client with retries, idempotency, webhook verification ✓
+
+Production hardening coverage:
+✓ #1 Persistent State (event sourcing, snapshots, replay, OCC)
+✓ #2 Distributed Auction Engine (leader election, locks, exactly-once, timeout recovery, replay)
+✓ #3 Route Optimization (VRP/CVRP solver, time windows, multi-objective, carbon)
+✓ #5 Merchant SDK (typed client, retries, idempotency, webhook verification)
+✓ #10 Financial Integrity (Money value object used throughout — exact BigInt)
+✓ #12 Failure Testing (10 chaos tests — all passing)
+
+Remaining for full production (documented as future work):
+- #4 Real provider connectors (interfaces exist, mocks work, real HTTP calls need API keys)
+- #6 Customer tracking UI (API exists, needs frontend)
+- #7 Operations console (API exists, needs frontend)
+- #8 Learning engine upgrade (basic learning exists, needs ML models)
+- #9 Security (RBAC, encrypted PII, GDPR — needs middleware)
+- #11 Scale benchmarks (need load testing infrastructure)
+
+Stage Summary:
+- 5 new modules (~1000 lines), 4 new API routes.
+- 10/10 chaos tests passing — system is resilient to all tested failure modes.
+- Event-sourced persistence: every parcel reconstructible from events, projections disposable.
+- Distributed auction: leader election, distributed locks, exactly-once winner selection.
+- VRP solver: multi-objective optimization with time windows + carbon.
+- Production SDK: typed client with retries, idempotency, webhook verification.
+- tsc: 0 | lint: 0 errors (324 warnings) | chaos: 10/10 ✅ | curl-verified: ✅
