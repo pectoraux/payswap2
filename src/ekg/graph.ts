@@ -27,6 +27,7 @@ import type {
   NodeKind, EntityLabel,
 } from './types';
 import { appendEvent } from './event-log';
+import { invalidateProofsForNode } from './proof-cache';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STORE
@@ -83,6 +84,8 @@ export const ekg: GraphService = {
     graph.nodes.set(id, node);
     // PHASE 1.4: emit event — the graph is a projection of the event log
     appendEvent('NodeCreated', { kind: 'NodeCreated', nodeId: id, nodeKind: kind, label, labels, properties, validFrom: now });
+    // Write-through to PostgreSQL (fire-and-forget, best-effort)
+    persistNode(id, kind, label, properties, labels, now).catch(() => {});
     return id;
   },
   getNode(id) { return graph.nodes.get(id); },
@@ -102,6 +105,10 @@ export const ekg: GraphService = {
     graph.nodes.set(newId, newNode);
     // PHASE 1.4: emit event — temporal versioning is event-sourced
     appendEvent('NodeVersioned', { kind: 'NodeVersioned', oldNodeId: id, newNodeId: newId, propertyChanges: properties, validFrom: now, validTo: now });
+    // Invalidate proof cache for this node
+    invalidateProofsForNode(id).catch(() => {});
+    // Write-through to PostgreSQL
+    persistNodeVersion(id, newId, node, newNode, properties, now).catch(() => {});
     return newId as unknown as void;
   },
   listNodes(filter) {
@@ -118,6 +125,8 @@ export const ekg: GraphService = {
     graph.relationships.push(rel);
     // PHASE 1.4: emit event
     appendEvent('RelationshipCreated', { kind: 'RelationshipCreated', relId: id, from, to, type, properties, validFrom: now });
+    // Write-through to PostgreSQL
+    persistRelationship(id, from, to, type, properties, now).catch(() => {});
     return id;
   },
   getRelationships(nodeId, direction = 'both') {
@@ -204,6 +213,54 @@ export const ekg: GraphService = {
     };
   },
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WRITE-THROUGH PERSISTENCE (fire-and-forget to PostgreSQL)
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function persistNode(id: string, kind: string, label: string, properties: Record<string, unknown>, labels: EntityLabel[] | undefined, now: number): Promise<void> {
+  try {
+    const { db } = await import('@/lib/db');
+    await db.graphNode.create({
+      data: {
+        id, kind, label,
+        labels: labels ? JSON.stringify(labels) : null,
+        properties: JSON.stringify(properties),
+        validFrom: new Date(now),
+      },
+    });
+  } catch { /* best-effort — might already exist or DB unavailable */ }
+}
+
+async function persistNodeVersion(oldId: string, newId: string, oldNode: GraphNode, newNode: GraphNode, changes: Record<string, unknown>, now: number): Promise<void> {
+  try {
+    const { db } = await import('@/lib/db');
+    const date = new Date(now);
+    await db.graphNode.update({ where: { id: oldId }, data: { validTo: date } });
+    await db.graphNode.create({
+      data: {
+        id: newId, kind: newNode.kind, label: newNode.label,
+        labels: newNode.labels ? JSON.stringify(newNode.labels) : null,
+        properties: JSON.stringify(newNode.properties),
+        validFrom: date,
+        previousVersionId: oldId,
+      },
+    });
+  } catch { /* best-effort */ }
+}
+
+async function persistRelationship(id: string, from: string, to: string, type: string, properties: Record<string, unknown>, now: number): Promise<void> {
+  try {
+    const { db } = await import('@/lib/db');
+    await db.graphRelationship.create({
+      data: {
+        id, fromId: from, toId: to, type,
+        properties: JSON.stringify(properties),
+        validFrom: new Date(now),
+      },
+    });
+  } catch { /* best-effort — might already exist or DB unavailable */ }
+}
 
 // Re-export types
 export type {

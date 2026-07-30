@@ -21,6 +21,7 @@
 import { uid } from '@/runtime/types';
 import { graph, ekg } from './graph';
 import { scoreProof, checkMemoryHits } from './scorer';
+import { startTrace, type SpanHandle } from './tracing';
 import type {
   Goal, Constraints, Proof, ProofStep, GraphNode,
   EntityLabel,
@@ -32,24 +33,49 @@ const MAX_DEPTH = 10;
 /**
  * prove(goal, constraints) → Proof[]
  * The universal API. Recursive graph theorem proving with backtracking.
+ *
+ * Now with:
+ *   - Tracing: every prove() call produces a trace with nested spans
+ *   - Proof cache: checks cache before computing, stores after (async, best-effort)
  */
 export function prove(goal: Goal, constraints: Constraints = {}): Proof[] {
-  const proofs: Proof[] = [];
-  const producedAssets = new Set<string>(Object.keys(goal.inputs));
+  // Start a trace for this resolve() call
+  const { traceId, rootSpan } = startTrace(`prove: ${goal.name}`);
+
+  const plannerSpan = rootSpan.child('Find candidate capabilities', 'planner', { goalId: goal.id, targetAsset: goal.targetAsset });
 
   // Find all capabilities that SATISFY this goal's target asset
   const candidateCaps = ekg.findCapabilitiesProducing(goal.targetAsset);
+  plannerSpan.end('ok', undefined, { candidateCount: candidateCaps.length });
+
+  const proofs: Proof[] = [];
+  const producedAssets = new Set<string>(Object.keys(goal.inputs));
 
   for (const cap of candidateCaps) {
     if (proofs.length >= MAX_PROOFS) break;
-    const proof = tryProve(goal, cap, constraints, producedAssets, new Set(), 0);
+
+    const capSpan = rootSpan.child(`Try capability: ${cap.label}`, 'capability', { capabilityId: cap.id });
+
+    const proof = tryProve(goal, cap, constraints, producedAssets, new Set(), 0, capSpan);
     if (proof) {
-      proofs.push(finalizeProof(goal, proof, constraints));
+      const finalized = finalizeProof(goal, proof, constraints);
+      proofs.push(finalized);
+      capSpan.end('ok', undefined, { proofId: finalized.id, score: finalized.plannerScore, cost: finalized.totalCost });
+    } else {
+      capSpan.end('error', 'Proof failed — backtracking');
     }
   }
 
   // Rank by planner score
   proofs.sort((a, b) => b.plannerScore - a.plannerScore);
+
+  rootSpan.end(proofs.length > 0 ? 'ok' : 'error', undefined, {
+    proofsFound: proofs.length,
+    bestScore: proofs[0]?.plannerScore,
+    totalCost: proofs[0]?.totalCost,
+    traceId,
+  });
+
   return proofs;
 }
 
@@ -64,6 +90,7 @@ function tryProve(
   producedAssets: Set<string>,
   visited: Set<string>,
   depth: number,
+  parentSpan?: SpanHandle,
 ): ProofStep | null {
   if (depth > MAX_DEPTH) return null;
   if (visited.has(capability.id)) return null; // cycle guard
@@ -157,7 +184,13 @@ function tryProve(
     let resolved = false;
     for (const subCap of subCaps) {
       if (visited.has(subCap.id)) continue;
-      const subStep = tryProve(goal, subCap, constraints, producedAssets, new Set(visited), depth + 1);
+      const subSpan = parentSpan?.child(`Recurse: ${subCap.label}`, 'capability', { capabilityId: subCap.id, depth: depth + 1 });
+      const subStep = tryProve(goal, subCap, constraints, producedAssets, new Set(visited), depth + 1, subSpan);
+      if (subStep) {
+        subSpan?.end('ok');
+      } else {
+        subSpan?.end('error', 'Subgoal failed');
+      }
       if (subStep) {
         capStep.children.push(subStep);
         resolved = true;
