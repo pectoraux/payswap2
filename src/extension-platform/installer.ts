@@ -233,11 +233,16 @@ export function upgradeExtension(pkg: ExtensionPackage, tenantId: string): Insta
   }
 
   // Store previous version for rollback
-  existing.previousVersion = existing.version;
+  const previousVersion = existing.version;
 
   const result = installExtension(pkg, { tenantId, approvedPermissions: existing.approvedPermissions });
   if (result.status === 'ACTIVE') {
-    addUpgradeLog(existing, pkg.manifest.version);
+    // Carry over previousVersion to the newly installed extension
+    const newlyInstalled = store.installed.get(key);
+    if (newlyInstalled) {
+      newlyInstalled.previousVersion = previousVersion;
+      newlyInstalled.log.push({ step: 'Upgrade', status: 'SUCCESS', detail: `Upgraded from ${previousVersion} to ${pkg.manifest.version}`, ts: Date.now() });
+    }
   }
   return result;
 }
