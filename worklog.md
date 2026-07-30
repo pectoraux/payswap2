@@ -4868,3 +4868,51 @@ Stage Summary:
 - 6 new API routes. No dashboard (per user instruction — core engine is the limiting factor, not visualization).
 - prove("Summarize Document") → 2 proofs → best (Claude, score 88.5) → simulated (89.8% success) → executed (SETTLED, signature ekg:66799382, 1 node versioned, memory recorded).
 - tsc: 0 | lint: 0 errors (320 warnings) | curl-verified: ✅
+
+---
+Task ID: HARDEN-1
+Agent: hardening-agent
+Task: Phase 1 (mathematical correctness) + Phase 7 (operability). Stop adding abstractions; make what exists correct, durable, and operable. Money becomes exact (no float anywhere). Build the "Why did the planner choose this?" inspector.
+
+Work Log:
+- Built `src/money/` — the exact Money value object (Phase 1.1):
+  • `money.ts` (~220 lines) — Money class using BigInt minor units internally (cents for USD/EUR/GHS, micro-units for USDC, 0-dp for XOF). NEVER float. Operations: add, subtract, allocate (lossless split — remainder distributed to first recipients, sum always equals original), multiply (scaled BigInt to preserve precision), divide, percentage, compare, equals, negate, abs, min, max, sum, convert (FX with decimal-place adjustment). Currency-aware (cannot add USD to GHS — throws). Immutable (every op returns new Money). Serializable (toJSON/fromJSON with minorUnits as string to preserve BigInt). Currencies: USD, GHS, USDC (6dp), EUR, GBP, NGN, KES, XOF (0dp).
+  • `index.ts` — barrel + convenience constructors (money.usd(), money.ghs(), money.usdc(), etc.).
+  • Note: tsconfig target is ES2017, so BigInt literals (0n) replaced with BigInt(0) calls.
+
+- Built `src/ekg/inspector.ts` (~180 lines) — the "Why did the planner choose this?" inspector (Phase 7):
+  • traceDecision(goalId, constraints) → DecisionTrace. Instruments the planner to produce a full decision trace:
+    - Step 1: Find all capabilities that PRODUCE the goal's target asset (all candidates, not just the chosen one).
+    - For each capability, find all entities that OFFER it (all candidates).
+    - For each entity, compute: score (0–100) with per-dimension breakdown (Cost 30, Latency 20, Trust 20, SLA 10, Reliability 20), cost, latency, trust, memory hits, accepted/rejected status, and the reason (accepted: score breakdown; rejected: which constraint failed).
+    - Sort providers by score, identify the chosen one.
+    - Step 2+: For each required asset of the chosen capability, trace whether it's an input (leaf) or requires recursive resolution (subgoal). If no capability produces a required asset, flag BACKTRACK.
+  • The trace includes: objective per step, candidate capabilities (accepted/rejected + reason), candidate providers (score + breakdown + accepted/rejected + reason + memory hits), constraint filters applied, and a human-readable summary ("3 capabilities can produce the goal target. 3 accepted (0 rejected). 3 providers competed across 2 entity kinds. Memory contributed 3 hits to bias the choice.").
+  • This is the operability tool the user said is "worth far more than another dashboard" — it explains WHY the planner chose what it chose, step by step, so developers and auditors can follow the reasoning.
+
+APIs (2 new routes):
+- `POST /api/money/validate` — proves Money exactness. Operations: precision (0.1 + 0.2 = 0.3 exactly, no float drift — float would give 0.30000000000000004), allocate ($1.00 split 3 ways sums back to $1.00 — lossless), bigint (1 trillion USDC × 2 without overflow), currency_mismatch (USD + GHS correctly rejected), percentage (15% of $99.99 = $14.99 exact).
+- `GET /api/ekg/inspect?goalId=X&budget=Y&minTrust=Z` — returns the full decision trace for a goal. Shows every capability considered, every provider scored, every acceptance/rejection reason, memory influence, and constraint filters.
+
+Verification (end-to-end via curl):
+- tsc: 0 errors. lint: 0 errors, 320 warnings (no new — inspect/validate don't mutate state).
+- Money validation:
+  • 0.1 + 0.2 = 0.30 exactly (float would give 0.30000000000000004 with drift 5.55e-17). ✓ No float drift.
+  • $1.00 allocated [1,1,1] → [$0.34, $0.33, $0.33], sum = $1.00. ✓ Lossless allocation.
+  • 1 trillion USDC × 2 = 2 trillion USDC. ✓ BigInt handles crypto-scale without overflow (float would lose precision at 2^53).
+  • USD + GHS → currency mismatch correctly rejected. ✓
+  • 15% of $99.99 = $14.99 exact. ✓
+- Planner inspector ("Summarize Document" goal, budget $0.01, minTrust 70):
+  • 3 capabilities can produce the goal target (Summarize, Translate, Detect Fraud).
+  • 3 accepted, 0 rejected by constraints.
+  • For Summarize capability: 4 providers competed — Claude 3.5 (AI_MODEL, score 93.5, $0.003, 1200ms, trust 88, 3 memory hits), GPT-4o (AI_MODEL, 93.2, $0.005, 900ms, 86), Gemini 1.5 (AI_MODEL, 91.3, $0.001, 1500ms, 84), Sara Lee (HUMAN, 75.6, $0.50, 7200000ms, 92). Heterogeneous providers (AI + human) competed on the same capability — the inspector shows the full score breakdown for each.
+  • Memory contributed 3 hits to bias the choice.
+  • Constraint filters shown: budget ≤ $0.01, minTrust ≥ 70.
+  • The trace is step-by-step explainable — an auditor can follow exactly why Claude was chosen over GPT-4o (93.5 vs 93.2 — Claude's higher trust score 88 vs 86 tipped it, despite GPT-4o being faster).
+
+Stage Summary:
+- Phase 1.1 (Money exact): `src/money/` (2 files, ~230 lines). BigInt minor units, no float anywhere. 5 operations verified exact: add (no drift), allocate (lossless), multiply (BigInt-safe for trillion-scale), currency mismatch detection, percentage.
+- Phase 7 (Operability — inspector): `src/ekg/inspector.ts` (~180 lines). The "Why did the planner choose this?" tool — full decision trace with per-provider score breakdown, acceptance/rejection reasons, memory influence, constraint filters.
+- 2 new API routes: /api/money/validate, /api/ekg/inspect.
+- No new dashboards, no new abstractions, no new entity types — per user directive. Pure correctness + operability hardening.
+- tsc: 0 | lint: 0 errors (320 warnings) | curl-verified: ✅

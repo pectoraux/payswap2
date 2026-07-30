@@ -19,3 +19,4 @@ export * from './scorer';
 export * from './simulator';
 export * from './verifier';
 export * from './seed';
+export * from './inspector';
