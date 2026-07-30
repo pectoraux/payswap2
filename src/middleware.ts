@@ -38,7 +38,10 @@ export default withAuth(
   },
   {
     callbacks: {
-      authorized: ({ token }) => !!token,
+      // Return true for all requests — let the middleware function handle auth.
+      // This prevents NextAuth from doing its own redirect before our middleware
+      // runs, which can cause issues in Firefox (double redirect / cookie loss).
+      authorized: () => true,
     },
   }
 );
