@@ -18,6 +18,7 @@ import {
   Repeat,
   FileBarChart,
   Boxes,
+  Layers,
   Sparkles,
   Wallet,
   UserCircle,
@@ -223,8 +224,9 @@ export const adminNav: NavGroup[] = [
   {
     label: 'Economic',
     items: [
-      { label: 'Economic OS', href: '/admin/economic-os', icon: <Cpu className="h-4 w-4" /> },
-      { label: 'Composition Engine', href: '/admin/economic-engine', icon: <Boxes className="h-4 w-4" /> },
+      { label: 'Economic Engine', href: '/admin/resolve', icon: <Cpu className="h-4 w-4" /> },
+      { label: 'Economic OS', href: '/admin/economic-os', icon: <Boxes className="h-4 w-4" /> },
+      { label: 'Composition Engine', href: '/admin/economic-engine', icon: <Layers className="h-4 w-4" /> },
       { label: 'Liquidity Market', href: '/admin/liquidity-market', icon: <LineChart className="h-4 w-4" /> },
       { label: 'Compiler Explorer', href: '/admin/compiler-explorer', icon: <GitBranch className="h-4 w-4" /> },
     ],

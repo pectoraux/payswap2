@@ -4730,3 +4730,56 @@ Stage Summary:
 - 1 nav item added (admin Economic group, first position).
 - The compiler is real: "Pay Tuition" → 8-node DAG discovered with 4 actors + 4 opportunistic attachments, $33 cost, settled successfully, P&L recorded for 4 actors.
 - tsc: 0 | lint: 0 errors (315 warnings, +2 expected) | browser-verified: ✅
+
+---
+Task ID: ECONOMIC-ENGINE-1
+Agent: economic-engine-agent
+Task: Build the General-Purpose Economic Computation Engine — the capstone evolution from "economic OS" to "general-purpose economic computation platform". Goal → Planner → Constraint Solver → Distributed Organization Graph → Execution → Verification → Learning. resolve(goal, constraints, policies) → EconomicProof[].
+
+Work Log:
+- Read worklog tail to align with conventions (in-memory store on globalThis, server page + client viewer, requireAdmin guard, audit log, nav-config Economic group).
+- Built `src/economic-engine/` (NEW layer parallel to src/economic-os/, src/economic/, src/runtime/; does NOT modify Prisma schema):
+  • `types.ts` (~330 lines) — Goal (implementation-agnostic: targetAssetType + acceptableStrategies, NOT implementation), Strategy (12: PAYMENT, SCHOLARSHIP, SPONSORSHIP, VOUCHER, STORED_CREDITS, DEFERRED_FINANCE, TOKENIZED_RIGHT, DONATION, GRANT, TRADE, INSURANCE, SUBSCRIPTION), ConstraintBundle (budget, deadline, minTrust, maxRisk, maxCarbon, jurisdiction, preferStrategy, excludeOrganizations, requireOrganizations, policyOverrides), Organization (autonomous economic entity w/ treasury, P&L, profitTarget, objectives, governance rules, workforce, reserveRequirement, carbonPerInvocation), EconomicProof (multiple ranked proofs per resolve()), ProofNode (INPUT/ORGANIZATION/OUTPUT/OPPORTUNISTIC), ScoreBreakdown (dimension + score + weight), VerificationResult + InvariantCheck (9 invariant categories: ASSET_CONSERVATION, POLICY_COMPLIANCE, TRUST_SATISFACTION, SETTLEMENT_COMPLETENESS, REGULATORY, JURISDICTION), MemoryEntry, CooperationScore, StrategyEffectiveness, OrganizationReliability.
+  • `store.ts` (~600 lines) — central store on globalThis.__PAYSWAP_ECONOMIC_ENGINE_STORE__. Seeds 14 organizations (Identity Authority, Treasury Organization, Education Organization, Marketplace, Micro-Bank, Scholarship Foundation, Sponsorship Broker, Voucher Authority, Rewards, Carbon Exchange, Insurance Company, Employment Organization, Compliance Authority, AI Organization) — each with legalName, objectives (MAXIMIZE_REVENUE/IMPACT/TRUST, MINIMIZE_RISK, GROWTH), governance (CONSENT/MAJORITY/AUTONOMOUS/SUPERVISORY), workforceSize, profitTarget, carbonPerInvocation. Seeds 8 goals (Ensure student is enrolled, Acquire goods, Ship package, Insure an asset, Fund a startup, Book hotel, Hire engineer, Verify identity) — each implementation-agnostic with multiple acceptable strategies. Seeds 21 economic memory entries (past executions with outcomes + satisfaction scores) so the planner is adaptive from first use.
+  • `planner.ts` (~430 lines) — THE HEART. resolve(goal, constraints) explores every acceptable strategy, synthesizes a proof graph per strategy (different org chains per strategy: PAYMENT → treasury + target org; SCHOLARSHIP → scholarship + target; SPONSORSHIP → sponsor + target; VOUCHER → voucher + target; DEFERRED_FINANCE → lending + target; etc.), discovers opportunistic orgs (carbon, rewards, compliance), scores each proof across 6 dimensions (Cost 25, Latency 15, Trust 20, Risk 10, Carbon 10, Memory 20), ranks by planner score. THE ADAPTIVE COMPONENT: Memory dimension looks up past executions of this goal+strategy, factors in success rate + customer satisfaction, biases the planner toward historically successful paths.
+  • `verifier.ts` (~210 lines) — Verification Layer. verifyProof() runs 9 invariant checks: Asset Conservation (every consumed asset produced upstream), Goal Satisfaction (target asset produced), Trust Satisfaction (meets minTrust), Budget Compliance, Deadline Compliance, Carbon Compliance, Policy Compliance (all BLOCK policies satisfied), Jurisdiction Compliance, Settlement Completeness (no no-op nodes). Returns structured pass/fail with severity (CRITICAL/MAJOR/MINOR). A proof with any CRITICAL failure cannot settle.
+  • `executor.ts` (~110 lines) — executeProof() verifies first, then settles (updates org P&L + treasury + invocations + objectives), then records to economic memory. Failed verification records a FAILURE memory entry so the planner learns to avoid that path.
+  • `index.ts` — barrel + universal resolve() re-export.
+
+APIs (7 routes, admin-gated for mutations):
+- `POST /api/economic-engine/resolve` — the universal resolve(goalId, constraints). Audits ECONOMIC_ENGINE.RESOLVED.
+- `POST /api/economic-engine/execute` — verify + settle a proof. Audits ECONOMIC_ENGINE.EXECUTED.
+- `GET /api/economic-engine/overview` — KPIs.
+- `GET /api/economic-engine/goals` — goal catalog.
+- `GET /api/economic-engine/organizations` — orgs with P&L + governance.
+- `GET /api/economic-engine/proofs` — discovered proofs.
+- `GET /api/economic-engine/memory` — memory entries + cooperation + strategies + reliability (view param).
+
+UI — `/admin/resolve` (the flagship):
+- `page.tsx` (server) — requireAdmin(), reads economicEngine state, serializes to DTO.
+- `resolve-viewer.tsx` (~1050 lines, client) — 4 tabs:
+  • resolve() (the hero): 7 KPI cards (orgs, goals, memory, executions, strategies, revenue, profit) + goal selector + constraint editor (budget, deadline, minTrust, preferStrategy) + resolve() button with animated stages (parsing → exploring strategies → synthesizing proofs → querying memory → scoring) + Discovered Proofs grid (ranked cards per strategy with planner score, cost/latency/trust/carbon/risk, memory hits + predicted success rate, score breakdown bar) + selected proof detail (6-dimension score breakdown tiles + execution graph with per-node cost/latency/carbon + verification result with per-invariant pass/fail) + Verify+Execute button + execution result card (strategy, orgs, cost, satisfaction, memory recording confirmation).
+  • Organizations: 4 KPIs + card grid of 14 autonomous orgs (legalName, P&L, profit target progress bar, workforce) + detail Sheet (balance sheet, objectives with progress bars, governance rules, produces/consumes contracts).
+  • Memory: 4 KPIs + Strategy Effectiveness table (learned success rates per strategy) + Organization Reliability table (with IMPROVING/STABLE/DECLINING trends) + Cooperation Pairs table (which orgs work well together) + recent memory log.
+  • Verification: 4 KPIs + Economic Proofs with full invariant verification (per-check pass/fail with severity badges).
+- Nav: added "Economic Engine" → /admin/resolve (icon: Cpu) as the first item in admin Economic group.
+
+Verification (end-to-end, curl + agent-browser):
+- tsc: 0 errors in src/economic-engine + src/app/(admin)/admin/resolve + src/app/api/economic-engine + src/lib/nav-config.
+- lint: 0 errors, 317 warnings (2 new — expected audit-log convention from resolve + execute routes).
+- All 7 APIs return real data: 14 organizations, 8 goals, 21 memory entries, 85.7% avg success rate, 9 strategies used, 20 cooperation pairs.
+- RESOLVE "Ensure student is enrolled" with constraints {budget:50, minTrust:80}: planner explored 8 strategies, found 8 proofs, ranked them. PAYMENT scored highest (75.4) — memory shows 100% past success rate. SCHOLARSHIP (72.1) and VOUCHER (75.1) close behind. DEFERRED_FINANCE scored lowest (50.3) — memory recalls a past failure (0% predicted success).
+- EXECUTE the best proof (PAYMENT): status SETTLED. All invariants passed (Asset Conservation ✓, Goal Satisfaction ✓, Trust ✓, Policy Compliance ✓, Settlement Completeness ✓). 6 organizations participated. Satisfaction 93/100. Memory recorded the SUCCESS — future resolves will be even more biased toward this path.
+- Browser DOM checks: H1 "General-Purpose Economic Computation Engine" YES, resolve() button YES, "Ensure student is enrolled" goal YES, PAYMENT + SCHOLARSHIP strategies YES, Organizations tab (Identity Authority, Treasury, Scholarship Foundation) YES, Memory tab (Strategy Effectiveness, Organization Reliability) YES, Verification tab (Invariant Verification) YES. No page errors.
+- Page renders HTTP 200, 294KB.
+
+Stage Summary:
+- New subsystem: `src/economic-engine/` (6 files, ~1900 lines) — the General-Purpose Economic Computation Engine.
+- The capstone evolution is realized: Goal (not Intent) → Planner (constraint solver finding MULTIPLE proofs, not a single DAG) → Economic Memory (adaptive — biases toward historically successful paths) → Verification (mathematical invariant checks) → universal resolve() API.
+- 12 implementation strategies (PAYMENT, SCHOLARSHIP, SPONSORSHIP, VOUCHER, STORED_CREDITS, DEFERRED_FINANCE, TOKENIZED_RIGHT, DONATION, GRANT, TRADE, INSURANCE, SUBSCRIPTION) — the user specifies the goal, the planner chooses the implementation.
+- Organizations are autonomous economic entities with governance (CONSENT/MAJORITY/AUTONOMOUS/SUPERVISORY), objectives (MAXIMIZE_REVENUE/IMPACT/TRUST, MINIMIZE_RISK, GROWTH), profit targets, workforce, and carbon footprints.
+- Economic Memory learns: which strategies succeed, which orgs cooperate well, reliability trends (IMPROVING/STABLE/DECLINING). The planner is adaptive.
+- Verification Layer: 9 invariant categories checked before settlement. A proof with CRITICAL failures cannot settle — the engine mathematically verifies execution.
+- 7 new API routes, 1 new admin page (~1050-line viewer), 1 nav item.
+- resolve("Ensure student is enrolled") → 8 proofs → best (PAYMENT, score 75.4) → verified (all invariants passed) → settled (6 orgs, satisfaction 93/100) → memory updated.
+- tsc: 0 | lint: 0 errors (317 warnings, +2 expected) | browser-verified: ✅
