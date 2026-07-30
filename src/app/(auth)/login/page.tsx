@@ -45,21 +45,25 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    // redirect: true does a full-page navigation — most reliable, no session race.
-    await signIn('credentials', { email, password, callbackUrl: '/dashboard' });
-    // Only reaches here if login failed
-    setLoading(false);
-    toast.error('Invalid credentials');
+    const res = await signIn('credentials', { email, password, redirect: false });
+    if (res?.error) {
+      setLoading(false);
+      toast.error('Invalid credentials');
+    } else if (res?.ok) {
+      window.location.href = '/dashboard';
+    }
   };
 
   const quickLogin = async (demoEmail: string) => {
     setLoading(true);
-    // redirect: true — browser navigates instantly once the auth cookie is set.
     const callbackUrl = roleRedirects[demoEmail] || '/dashboard';
-    await signIn('credentials', { email: demoEmail, password: 'Payswap123456', callbackUrl });
-    // Only reaches here if login failed
-    setLoading(false);
-    toast.error('Login failed');
+    const res = await signIn('credentials', { email: demoEmail, password: 'Payswap123456', redirect: false });
+    if (res?.error) {
+      setLoading(false);
+      toast.error('Login failed');
+    } else if (res?.ok) {
+      window.location.href = callbackUrl;
+    }
   };
 
   return (

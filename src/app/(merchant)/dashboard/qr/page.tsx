@@ -42,7 +42,7 @@ interface GeneratedQr {
   createdAt: string;
 }
 
-const QR_PAY_BASE_URL = 'https://payswap2.vercel.app/pay/';
+const QR_PAY_BASE_URL = typeof window !== 'undefined' ? `${window.location.origin}/pay/` : 'https://payswap.org/pay/';
 const QR_SIZE = 21;
 
 /** FNV-1a hash → 32-bit unsigned int. */
