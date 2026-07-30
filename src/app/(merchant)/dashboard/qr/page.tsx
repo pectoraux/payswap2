@@ -184,7 +184,7 @@ export default function QrPaymentsPage() {
         body: JSON.stringify({
           amount: amt > 0 ? amt : 1, // Payment requires amount > 0; dynamic QRs default to 1
           currency: 'GHS',
-          method: 'QR_CODE',
+          method: 'QR',
           description: `${TYPE_LABELS[type]} QR payment`,
           customerName: 'QR Customer',
         }),

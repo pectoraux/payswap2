@@ -70,5 +70,7 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  secret: process.env.NEXTAUTH_SECRET || 'payswap-build-time-placeholder',
+  // Use a stable secret. In production on Vercel, set NEXTAUTH_SECRET in the
+  // Vercel dashboard. The fallback is only for local dev.
+  secret: process.env.NEXTAUTH_SECRET || 'payswap-dev-secret-7f8a9b2c4e1d6f3a8b5c9d2e7f4a1b8c',
 };
