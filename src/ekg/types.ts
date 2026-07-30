@@ -137,6 +137,7 @@ export interface Goal {
   id: string;
   name: string;
   description: string;
+  category?: string;
   /** The asset node id that must be produced for the goal to be satisfied. */
   targetAsset: string;
   /** Assets the user brings (assetId → amount). */

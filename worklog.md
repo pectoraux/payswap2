@@ -4975,3 +4975,72 @@ Stage Summary:
 - 3 new API routes: /api/ekg/events (list + verify + timetravel), /api/ekg/replay (rebuild), /api/ekg/idempotent-execute (exactly-once).
 - No new dashboards, no new abstractions — per user directive. Pure correctness + durability + operability.
 - tsc: 0 | lint: 0 errors (321 warnings) | curl-verified: ✅
+
+---
+Task ID: HARDEN-3
+Agent: hardening-agent-3
+Task: Phase 3 (formal verification — replayable machine-verifiable proof certificates) + Phase 4 (the Economic DSL — developers declare goals, compiler produces proofs). prove(goal) returns a FormalProofCertificate with 12 named invariants that can be independently verified.
+
+Work Log:
+- Built `src/ekg/formal-verifier.ts` (~400 lines):
+  • 12 named formal invariants: AssetConservation, NoAssetCreated, NoAssetDestroyed, DoubleEntry, GoalSatisfied, DecompositionComplete, PolicySatisfied, JurisdictionLegal, Solvency, AMLSatisfied, SettlementDeterministic, TwinBacking. Each is a named predicate with: name, description, input (what was evaluated), holds (boolean), explanation (human-readable), severity (CRITICAL/MAJOR/MINOR).
+  • FormalProofCertificate structure: id, proofId, goalId, statement (the theorem being proven), decomposition (flattened tree), invariants (12 named checks), valid (formal verdict), verificationChain (replayable step-by-step record), fingerprint (deterministic hash for integrity), issuedAt.
+  • issueCertificate(proof, goal, constraints) — runs all 12 invariant checks and produces the certificate. Each check pushes to the verificationChain (replayable).
+  • verifyCertificate(certificate) — INDEPENDENTLY re-checks the certificate without trusting the issuer. Re-runs each invariant's internal consistency check, confirms the verification chain is complete, recomputes validity, detects tampering.
+  • Certificate store on globalThis.
+  • Key design decisions: DoubleEntry allows root producers (AI/human capabilities that convert non-graph inputs like text/labor into graph assets — they legitimately produce without consuming). SettlementDeterministic holds for unexecuted proofs (the decomposition tree is fixed/deterministic; the signature is issued on execution). AMLSatisfied triggers for transactions >$10K (requires compliance capability in chain).
+
+- Built `src/ekg/dsl.ts` (~280 lines):
+  • DSL syntax (YAML-like, line-based):
+    ```
+    goal IssueCertificate
+      description Issue an education certificate
+      category education
+      requires
+        identity.verified
+        payment.completed
+      produces
+        education.enrollment
+      inputs
+        currency.usd 2000
+        identity.verified 1
+      constraints
+        budget < 100
+        jurisdiction = GH
+        deadline < 2h
+        minTrust >= 80
+    ```
+  • parseDSL(source) — parses DSL text into a DSLGoal AST. Handles: goal declaration, description, category, requires/produces/inputs/constraints sections, constraint operators (<, <=, =, >=, >), deadline units (h/m/s/ms), comments (#). Returns parse errors + warnings.
+  • compileGoal(dsl) — validates the AST against the graph (do the required/produced assets exist?), resolves asset names to graph node ids (multi-strategy: direct match → stableId match → partial match by dot-separated parts → label match), compiles constraints (budget, deadline with time units, minTrust, maxCarbon, jurisdiction name→id, maxRisk), produces a Goal object.
+  • compileDSL(source) — full pipeline: parse → compile → Goal.
+  • The DSL is the programming language of the platform: developers declare goals, the compiler produces Goal objects, the planner proves them, the formal verifier issues certificates.
+
+APIs (3 new routes):
+- POST /api/ekg/formal-prove — prove(goalId, constraints) → issue certificate. Returns: certificateId, valid, fingerprint, statement, 12 invariants (name/holds/severity/explanation), verificationChain, decomposition. Audits EKG.FORMAL_PROVE.
+- POST /api/ekg/verify-certificate — independently verify a certificate by id or inline. Returns: valid, internallyConsistent (not tampered), invariantsRechecked, invariantsPassing, discrepancies.
+- POST /api/dsl/compile — compile DSL source → Goal. Returns: compiled, goal, resolvedAssets (name→nodeId mapping), parseErrors, compileErrors.
+
+Verification (end-to-end via curl):
+- tsc: 0 errors. lint: 0 errors, 322 warnings (2 new — expected audit-logs).
+- DSL compilation: goal "IssueCertificate" with 2 requires (identity.verified, payment.completed), 1 produces (education.enrollment), 2 inputs (currency.usd 2000, identity.verified 1), 4 constraints (budget<100, jurisdiction=GH, deadline<2h, minTrust>=80). All 5 asset references resolved to graph node ids. ✓
+- Formal proof certificate (Summarize Document goal): 12 invariants checked, ALL 12 HOLD. Certificate valid=True. Fingerprint fpc:059eecd8.
+  • AssetConservation ✓ (all consumed assets produced upstream)
+  • NoAssetCreated ✓ (no assets from nothing)
+  • NoAssetDestroyed ✓ (every consumed asset has a producer)
+  • DoubleEntry ✓ (balanced production/consumption)
+  • GoalSatisfied ✓ (target asset produced)
+  • DecompositionComplete ✓ (all steps decompose)
+  • PolicySatisfied ✓ (all BLOCK policies satisfied)
+  • JurisdictionLegal ✓ (no jurisdiction constraint)
+  • Solvency ✓ (cost $0.002 ≤ budget $0.01)
+  • AMLSatisfied ✓ (transaction < $10K, AML not required)
+  • SettlementDeterministic ✓ (3 fixed decomposition steps)
+  • TwinBacking ✓ (no reserve assets involved)
+- Independent verification: valid=True, internallyConsistent=True, 12 invariants rechecked, 12 passing, 0 discrepancies. ✓ Certificate is VALID — internally consistent AND all invariants hold.
+
+Stage Summary:
+- Phase 3 (formal verification): `src/ekg/formal-verifier.ts` (~400 lines). 12 named invariants. Machine-verifiable FormalProofCertificate with replayable verification chain + integrity fingerprint. Independent verifier confirms without trusting issuer. All 12 invariants hold on test proof.
+- Phase 4 (Economic DSL): `src/ekg/dsl.ts` (~280 lines). YAML-like declarative goal language. Parser + compiler validates against the graph + resolves asset names. Developers declare goals; compiler produces Goal objects; planner proves them; formal verifier issues certificates.
+- 3 new API routes: /api/ekg/formal-prove, /api/ekg/verify-certificate, /api/dsl/compile.
+- No new dashboards, no new abstractions — per user directive. Pure formal correctness + developer programmability.
+- tsc: 0 | lint: 0 errors (322 warnings) | curl-verified: ✅
