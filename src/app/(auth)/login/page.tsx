@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { signIn } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
@@ -26,8 +25,19 @@ const demoAccounts = [
   { label: 'Developer', email: 'developer@payswap.demo', color: 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20' },
 ];
 
+const roleRedirects: Record<string, string> = {
+  'ekontetevi@gmail.com': '/admin',
+  'merchant@payswap.demo': '/dashboard',
+  'customer@payswap.demo': '/portal',
+  'lp@payswap.demo': '/lp',
+  'treasury@payswap.demo': '/treasury',
+  'compliance@payswap.demo': '/compliance',
+  'support@payswap.demo': '/support',
+  'ops@payswap.demo': '/ops',
+  'developer@payswap.demo': '/developers',
+};
+
 export default function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -35,40 +45,21 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    const res = await signIn('credentials', { email, password, redirect: false });
+    // redirect: true does a full-page navigation — most reliable, no session race.
+    await signIn('credentials', { email, password, callbackUrl: '/dashboard' });
+    // Only reaches here if login failed
     setLoading(false);
-
-    if (res?.error) {
-      toast.error('Invalid credentials');
-    } else if (res?.ok) {
-      // Don't show toast — navigate immediately for a smooth experience.
-      // The destination page will show the user is logged in.
-      router.replace('/dashboard');
-    }
+    toast.error('Invalid credentials');
   };
 
   const quickLogin = async (demoEmail: string) => {
     setLoading(true);
-    const res = await signIn('credentials', { email: demoEmail, password: 'Payswap123456', redirect: false });
-
-    if (res?.ok) {
-      // Route based on role — navigate immediately, no toast delay.
-      const roleMap: Record<string, string> = {
-        'ekontetevi@gmail.com': '/admin',
-        'merchant@payswap.demo': '/dashboard',
-        'customer@payswap.demo': '/portal',
-        'lp@payswap.demo': '/lp',
-        'treasury@payswap.demo': '/treasury',
-        'compliance@payswap.demo': '/compliance',
-        'support@payswap.demo': '/support',
-        'ops@payswap.demo': '/ops',
-        'developer@payswap.demo': '/developers',
-      };
-      router.replace(roleMap[demoEmail] || '/dashboard');
-    } else {
-      setLoading(false);
-      toast.error('Login failed');
-    }
+    // redirect: true — browser navigates instantly once the auth cookie is set.
+    const callbackUrl = roleRedirects[demoEmail] || '/dashboard';
+    await signIn('credentials', { email: demoEmail, password: 'Payswap123456', callbackUrl });
+    // Only reaches here if login failed
+    setLoading(false);
+    toast.error('Login failed');
   };
 
   return (
