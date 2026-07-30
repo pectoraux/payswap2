@@ -7,7 +7,9 @@ export default withAuth(
     const path = req.nextUrl.pathname;
 
     if (!token) {
-      return NextResponse.redirect(new URL('/login', req.url));
+      const loginUrl = new URL('/login', req.url);
+      loginUrl.searchParams.set('callbackUrl', req.url);
+      return NextResponse.redirect(loginUrl);
     }
 
     const roles = (token.roles as string[]) || [];
@@ -38,10 +40,7 @@ export default withAuth(
   },
   {
     callbacks: {
-      // Return true for all requests — let the middleware function handle auth.
-      // This prevents NextAuth from doing its own redirect before our middleware
-      // runs, which can cause issues in Firefox (double redirect / cookie loss).
-      authorized: () => true,
+      authorized: ({ token }) => !!token,
     },
   }
 );

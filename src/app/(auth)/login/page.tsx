@@ -41,23 +41,18 @@ export default function LoginPage() {
     if (res?.error) {
       toast.error('Invalid credentials');
     } else if (res?.ok) {
-      toast.success('Welcome back!');
-      // The middleware will handle role-based redirects
-      router.push('/dashboard');
-      router.refresh();
+      // Don't show toast — navigate immediately for a smooth experience.
+      // The destination page will show the user is logged in.
+      router.replace('/dashboard');
     }
   };
 
   const quickLogin = async (demoEmail: string) => {
     setLoading(true);
-    setEmail(demoEmail);
-    setPassword('Payswap123456');
     const res = await signIn('credentials', { email: demoEmail, password: 'Payswap123456', redirect: false });
-    setLoading(false);
 
     if (res?.ok) {
-      toast.success('Logged in');
-      // Route based on role
+      // Route based on role — navigate immediately, no toast delay.
       const roleMap: Record<string, string> = {
         'ekontetevi@gmail.com': '/admin',
         'merchant@payswap.demo': '/dashboard',
@@ -69,9 +64,9 @@ export default function LoginPage() {
         'ops@payswap.demo': '/ops',
         'developer@payswap.demo': '/developers',
       };
-      router.push(roleMap[demoEmail] || '/dashboard');
-      router.refresh();
+      router.replace(roleMap[demoEmail] || '/dashboard');
     } else {
+      setLoading(false);
       toast.error('Login failed');
     }
   };
