@@ -4783,3 +4783,45 @@ Stage Summary:
 - 7 new API routes, 1 new admin page (~1050-line viewer), 1 nav item.
 - resolve("Ensure student is enrolled") → 8 proofs → best (PAYMENT, score 75.4) → verified (all invariants passed) → settled (6 orgs, satisfaction 93/100) → memory updated.
 - tsc: 0 | lint: 0 errors (317 warnings, +2 expected) | browser-verified: ✅
+
+---
+Task ID: ECONOMIC-PLATFORM-1
+Agent: economic-platform-agent
+Task: Build the Economic Computation Platform — the final evolution. Capabilities are the primitive; everything else is emergent. Organizations, AI models, humans, APIs, banks, government, and blockchains all compete as providers on the same capabilities. The graph is the only data structure. The economy is self-improving through structured economic memory.
+
+Work Log:
+- Built `src/economic-platform/` (NEW layer; does NOT modify Prisma schema):
+  • `types.ts` (~330 lines) — Capability (THE primitive: produces/requires asset types, universal flag), CapabilityProvider (heterogeneous: ORGANIZATION/AI_MODEL/HUMAN/API/IOT_DEVICE/BANK/GOVERNMENT/BLOCKCHAIN — all the same abstraction), ProviderOffer (marketplace listing), AssetType (28 categories: CURRENCY, CREDENTIAL, REPUTATION, BANDWIDTH, CARBON, ENERGY, GPU, STORAGE, INFERENCE, KNOWLEDGE, PROOF, etc.), UnifiedGraph (one graph: CAPABILITY/PROVIDER/ASSET/GOAL/PROOF/MEMORY/POLICY/JURISDICTION nodes + typed edges: produces/consumes/offers/trusts/prices/verifies/settles/governs/requires/depends_on/competes_with/compatible_with/learns_from), Goal (implementation-agnostic), EconomicProof, EconomicMemoryRecord (STRUCTURED: capabilities + providers + context {jurisdiction, timeOfDay, seasonality, riskLevel} + outcome), ProviderLearningScore (self-improving).
+  • `store.ts` (~600 lines) — central store on globalThis. Seeds 28 asset types, 18 capabilities (verify_identity, settle_payment, issue_education_credit, award_scholarship, originate_loan, process_sale, offset_carbon, summarize, translate, detect_fraud, run_inference, provide_storage, provide_gpu, allocate_bandwidth, etc.), 23 HETEROGENEOUS providers across 7 kinds (11 organizations + 3 AI models [Claude/GPT-4o/Gemini] + 3 humans [translators/reviewer] + 3 APIs [Stripe/AWS S3/IPFS] + 1 bank [Ecobank] + 1 government [Ghana Education Service] + 1 blockchain [Ethereum]), 6 goals, 17 memory records. recomputeLearningScores() derives learned provider scores from memory.
+  • `planner.ts` (~310 lines) — THE HEART. resolveGoal(goal, constraints) does graph search over CAPABILITIES (not organizations): backward-chains from goal target asset, finds capabilities that produce it, recursively resolves required assets. For each capability, selectBestProvider() runs MARKET OPTIMIZATION — all providers offering that capability compete, scored by cost (30) + latency (20) + trust (20) + SLA (10) + LEARNED SCORE (20, the adaptive component). Returns proof with per-node reasoning + alternative providers considered.
+  • `verifier.ts` (~90 lines) — compositional verification: asset conservation, capability satisfaction, trust, budget, deadline, carbon, jurisdiction.
+  • `executor.ts` (~110 lines) — THE SELF-IMPROVING LOOP: executeProof() verifies → settles (updates provider P&L + reliability) → measure() records structured memory → learn() recomputes all provider learning scores. The next resolve() is better.
+  • `index.ts` — barrel.
+
+APIs (7 routes):
+- POST /api/economic-platform/resolve — resolve(goal, constraints) → proof. Audits PLATFORM.RESOLVED.
+- POST /api/economic-platform/execute — verify + settle + learn. Audits PLATFORM.EXECUTED.
+- GET /api/economic-platform/overview, /capabilities, /providers (filter by kind/offersCapability), /graph, /memory (view=records|learning).
+
+UI — /admin/platform (the flagship):
+- page.tsx (server) + platform-viewer.tsx (~700 lines, client) — 4 tabs:
+  • resolve() (the hero): 7 KPI cards + goal selector + resolve() button with animated stages (graph search → market optimization → querying memory → synthesizing proof) + Economic Proof card with HETEROGENEOUS PROVIDER SIGNATURE badge (shows distinct provider kinds that competed) + capability chain (per-node: capability + provider + kind + cost/latency/carbon + reasoning + alternatives considered) + verification result + Verify+Execute+Learn button + self-improving loop card (shows learning updates count + "the economy learned" message).
+  • Capability Market: capabilities grouped, each showing ALL competing providers (heterogeneous kinds compete on same capability) with cheapest highlighted, provider kind icons, trust/reliability/SLA/region.
+  • Unified Graph: SVG visualization (Goals → Providers → Capabilities → Assets, typed edges color-coded, hover to focus).
+  • Self-Improving Memory: Learned Provider Scores table (provider×capability with learnedScore + trend) + structured memory log (capabilities + providers + context + outcome).
+- Nav: "Computation Platform" → /admin/platform (icon: Network) as first item in admin Economic group.
+
+Verification (end-to-end):
+- tsc: 0 errors. lint: 0 errors, 318 warnings (1 new — expected audit-log).
+- Overview: 18 capabilities, 23 providers, 7 provider kinds, 28 asset types, 6 goals, 17 memory records, 75 graph nodes, 78 edges, 19 learning entries.
+- RESOLVE "Summarize document": planner found 1 capability needed. 4 providers competed: Claude (AI_MODEL, $0.003, score 94.7), GPT-4o (AI_MODEL, $0.005, score 94.8 — SELECTED), Gemini (AI_MODEL, $0.001, score 92.9), Sara Lee (HUMAN, $0.50, score 75.8). HETEROGENEOUS COMPETITION: AI models AND a human competed on the same capability. Memory hits: 4. The planner picked GPT-4o over Claude by a hair (94.8 vs 94.7) — the learned scores (both 97) made it nearly tied, cost favored Claude but trust+SLA favored GPT-4o.
+- EXECUTE: SETTLED. All invariants passed. Satisfaction 98/100. Learning scores updated (GPT-4o cap.summarize score=98 trend=IMPROVING).
+- Page renders HTTP 200, 271KB, H1 "Economic Computation Platform".
+- Browser DOM checks: H1 YES, resolve() button YES, goal selector YES, all 4 tabs functional, no page errors.
+
+Stage Summary:
+- New subsystem: src/economic-platform/ (6 files, ~1600 lines) — the Economic Computation Platform.
+- THE FINAL ARCHITECTURE: Capabilities are the primitive. Everything else is emergent. Organizations, AI models (Claude/GPT-4o/Gemini), humans (translators/reviewers), APIs (Stripe/AWS/IPFS), banks (Ecobank), government (Ghana Education Service), and blockchains (Ethereum) ALL compete as providers on the same capabilities. The graph is the only data structure (75 nodes, 78 typed edges). The economy is self-improving — every execution teaches the graph via structured economic memory, and the planner becomes adaptive.
+- resolve("Summarize document") → 4 heterogeneous providers competed (3 AI models + 1 human) → GPT-4o selected (score 94.8) → verified → settled (satisfaction 98/100) → learning scores updated → next resolve() will be better.
+- 7 new API routes, 1 new admin page (~700-line viewer), 1 nav item.
+- tsc: 0 | lint: 0 errors (318 warnings) | browser-verified: ✅
