@@ -17,6 +17,8 @@ export * from './graph';
 export * from './persistent-graph';
 export * from './proof-cache';
 export * from './tracing';
+export * from './optimizer';
+export * from './parallel-executor';
 export * from './planner';
 export * from './scorer';
 export * from './simulator';
