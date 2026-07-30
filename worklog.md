@@ -4916,3 +4916,62 @@ Stage Summary:
 - 2 new API routes: /api/money/validate, /api/ekg/inspect.
 - No new dashboards, no new abstractions, no new entity types — per user directive. Pure correctness + operability hardening.
 - tsc: 0 | lint: 0 errors (320 warnings) | curl-verified: ✅
+
+---
+Task ID: HARDEN-2
+Agent: hardening-agent-2
+Task: Phase 1.4 (event-source the graph) + Phase 1.3 (disposable projections) + Phase 2 (idempotency) + Phase 7 (event replay / time-travel). The graph becomes a projection of an append-only event log. Projections are disposable (rebuildable from events). Idempotency gives exactly-once settlement. Time-travel debugger inspects graph state at any point in history.
+
+Work Log:
+- Built `src/ekg/event-log.ts` (~250 lines):
+  • GraphEvent types: NodeCreated, RelationshipCreated, NodeVersioned (temporal versioning), CapabilityOffered, CapabilityRetired, ProviderRated, PolicyChanged. Each event: seq (monotonic), type, ts, payload (type-specific), causationId, idempotencyKey.
+  • Event store on globalThis (persists across hot-reloads): eventLog array + nextSeq counter + idempotencyIndex set. appendEvent() is idempotent (if idempotencyKey seen, returns existing seq — no duplicate event).
+  • replayProjection(upToSeq?) — replays events from the log to rebuild a fresh graph projection { nodes, relationships }. The graph is disposable; delete all state, replay events, graph is fully reconstructed. Handles all 7 event types: NodeCreated (add to map), RelationshipCreated (push to array), NodeVersioned (close old version + create new), CapabilityOffered (create OFFERS relationship), CapabilityRetired (close relationship), ProviderRated (update entity properties), PolicyChanged (update policy properties).
+  • verifyDisposable() — rebuilds from events + compares to live graph. Returns match + live/replayed counts + discrepancies. If match is false, there's hidden state.
+  • stateAtSeq(seq) — time-travel: returns graph state at any sequence number. Enables replay, debugging, counterfactuals.
+
+- Wired the event log into graph mutations (`src/ekg/graph.ts`):
+  • addNode() now emits NodeCreated event after setting the node.
+  • updateNode() now emits NodeVersioned event after temporal versioning.
+  • addRelationship() now emits RelationshipCreated event after pushing the relationship.
+  • Every graph mutation is now event-sourced — the in-memory graph is a projection of the event log.
+
+- Fixed critical bug: nextSeq was a plain `let` that reset to 1 on Next.js dev hot-reload, while eventLog persisted on globalThis. This caused getCurrentSeq() to return 0 after hot-reload, making replayProjection() replay 0 events. Fix: persist nextSeq on globalThis (__PAYSWAP_EKG_NEXT_SEQ__) + persistNextSeq() after every appendEvent. Also persisted the idempotencyIndex on globalThis.
+
+- Fixed replay type narrowing: switched from `event.payload.kind` (discriminated union — can have runtime narrowing issues in bundled output) to `event.type` (simple string comparison — always correct).
+
+- Built `POST /api/ekg/idempotent-execute` (Phase 2):
+  • Idempotency cache on globalThis (__PAYSWAP_EKG_IDEMPOTENCY__). Keyed by idempotencyKey.
+  • If key seen before: return cached result — do NOT re-execute. Same signature, same status, 0 versioned nodes.
+  • If key new: execute, cache result, return with idempotent=false.
+  • Exactly-once settlement: POST 3 times with same key → 1 execution, 3 identical responses.
+
+- Built `GET /api/ekg/events` (Phase 7):
+  • view=list: paginated event log (from seq, limit).
+  • view=verify: verifyDisposable() — proves projections are disposable.
+  • view=timetravel&seq=N: stateAtSeq(N) — graph state at any point in history.
+
+- Built `POST /api/ekg/replay` (Phase 1.3):
+  • Replays events from the log to rebuild the projection. Returns rebuilt node/relationship counts + duration.
+  • Proves the graph is disposable: delete all state, replay, everything returns.
+
+Verification (end-to-end via curl):
+- tsc: 0 errors. lint: 0 errors, 321 warnings (1 new — expected audit-log from idempotent-execute).
+- Event log: 217 events (all graph mutations from seed: NodeCreated for jurisdictions, assets, policies, capabilities, entities, goals, memory + RelationshipCreated for OFFERS/REQUIRES/PRODUCES/SATISFIES/CONSTRAINED_BY/LOCATED_IN).
+- Projection rebuild: 217 events replayed in 0ms → 90 nodes, 127 relationships restored. ✓
+- Disposable verification: Match=True. Live: 90 nodes, 127 rels | Replayed: 90 nodes, 127 rels. ✓ Projections are disposable — no hidden state.
+- Time-travel: seq=10 → 10 nodes, 0 relationships (early in seed). seq=217 (current) → 90 nodes, 127 relationships. ✓ Graph can be inspected at any point in its history.
+- Idempotency: 3 retries with same idempotencyKey "retry-key-001":
+  • Attempt 1: status=SETTLED, idempotent=False, versioned=1, sig=ekg:6f86da28 (executed)
+  • Attempt 2: status=SETTLED, idempotent=True, versioned=1, sig=ekg:6f86da28 (cached — no re-execution)
+  • Attempt 3: status=SETTLED, idempotent=True, versioned=1, sig=ekg:6f86da28 (cached — no re-execution)
+  • Exactly-once: same signature on all 3, 0 additional versioned nodes on retries. ✓
+
+Stage Summary:
+- Phase 1.4 (event-sourced graph): The graph is now a projection of an append-only event log. Every addNode/updateNode/addRelationship emits an event. 217 events logged.
+- Phase 1.3 (disposable projections): verifyDisposable() confirms replay matches live graph (90 nodes, 127 rels both). No hidden state.
+- Phase 2 (idempotency): /api/ekg/idempotent-execute with idempotencyKey gives exactly-once settlement. 3 retries → 1 execution, 3 identical responses.
+- Phase 7 (time-travel): stateAtSeq(N) returns graph state at any sequence. Time-travel debugger works.
+- 3 new API routes: /api/ekg/events (list + verify + timetravel), /api/ekg/replay (rebuild), /api/ekg/idempotent-execute (exactly-once).
+- No new dashboards, no new abstractions — per user directive. Pure correctness + durability + operability.
+- tsc: 0 | lint: 0 errors (321 warnings) | curl-verified: ✅

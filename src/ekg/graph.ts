@@ -26,6 +26,7 @@ import type {
   EconomicKnowledgeGraph, GraphNode, GraphRelationship, RelationshipType,
   NodeKind, EntityLabel,
 } from './types';
+import { appendEvent } from './event-log';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STORE
@@ -77,26 +78,30 @@ export interface GraphService {
 export const ekg: GraphService = {
   addNode(kind, label, properties = {}, labels) {
     const id = uid('ekg');
-    const node: GraphNode = { id, kind, label, labels, properties, validFrom: Date.now() };
+    const now = Date.now();
+    const node: GraphNode = { id, kind, label, labels, properties, validFrom: now };
     graph.nodes.set(id, node);
+    // PHASE 1.4: emit event — the graph is a projection of the event log
+    appendEvent('NodeCreated', { kind: 'NodeCreated', nodeId: id, nodeKind: kind, label, labels, properties, validFrom: now });
     return id;
   },
   getNode(id) { return graph.nodes.get(id); },
   updateNode(id, properties) {
     const node = graph.nodes.get(id);
     if (!node) return;
+    const now = Date.now();
     // Close the current version
-    node.validTo = Date.now();
+    node.validTo = now;
     // Create a new version
     const newId = uid('ekg');
     const newNode: GraphNode = {
       id: newId, kind: node.kind, label: node.label, labels: node.labels,
       properties: { ...node.properties, ...properties },
-      validFrom: Date.now(), previousVersionId: node.id,
+      validFrom: now, previousVersionId: node.id,
     };
     graph.nodes.set(newId, newNode);
-    // Redirect future relationships to the new version (keep old ones pointing to old version for history)
-    // Note: in a full impl we'd handle this more carefully; for now, callers should use the new id
+    // PHASE 1.4: emit event — temporal versioning is event-sourced
+    appendEvent('NodeVersioned', { kind: 'NodeVersioned', oldNodeId: id, newNodeId: newId, propertyChanges: properties, validFrom: now, validTo: now });
     return newId as unknown as void;
   },
   listNodes(filter) {
@@ -108,8 +113,11 @@ export const ekg: GraphService = {
 
   addRelationship(from, to, type, properties = {}) {
     const id = uid('ekgr');
-    const rel: GraphRelationship = { id, from, to, type, properties, validFrom: Date.now() };
+    const now = Date.now();
+    const rel: GraphRelationship = { id, from, to, type, properties, validFrom: now };
     graph.relationships.push(rel);
+    // PHASE 1.4: emit event
+    appendEvent('RelationshipCreated', { kind: 'RelationshipCreated', relId: id, from, to, type, properties, validFrom: now });
     return id;
   },
   getRelationships(nodeId, direction = 'both') {

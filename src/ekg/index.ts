@@ -20,3 +20,4 @@ export * from './simulator';
 export * from './verifier';
 export * from './seed';
 export * from './inspector';
+export * from './event-log';
