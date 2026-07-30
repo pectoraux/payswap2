@@ -928,3 +928,75 @@ model OrganizationMember {
   @@index([userId])
   @@index([status])
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EKG — Economic Knowledge Graph (persistent storage)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model GraphNode {
+  id            String   @id
+  kind          String   // ENTITY | CAPABILITY | ASSET | GOAL | POLICY | JURISDICTION | MEMORY | etc.
+  label         String
+  labels        String?  // JSON array of EntityLabels (for ENTITY nodes)
+  properties    String   // JSON
+  validFrom     DateTime @default(now())
+  validTo       DateTime?
+  previousVersionId String?
+
+  @@index([kind])
+  @@index([label])
+  @@index([validFrom, validTo])
+}
+
+model GraphRelationship {
+  id            String   @id
+  fromId        String
+  toId          String
+  type          String   // OFFERS | REQUIRES | PRODUCES | SATISFIES | CONSTRAINED_BY | LOCATED_IN | etc.
+  properties    String   // JSON
+  validFrom     DateTime @default(now())
+  validTo       DateTime?
+
+  @@index([fromId])
+  @@index([toId])
+  @@index([type])
+  @@index([validFrom, validTo])
+}
+
+model ProofCache {
+  id            String   @id
+  goalId        String
+  goalName      String
+  constraints   String   // JSON
+  proofData     String   // JSON (serialized proof)
+  plannerScore  Float
+  totalCost     Float
+  totalLatencyMs Int
+  trustScore    Int
+  status        String   @default("valid") // valid | invalidated
+  nodeHash      String   // hash of all graph nodes used in this proof
+  createdAt     DateTime @default(now())
+  invalidatedAt DateTime?
+
+  @@index([goalId])
+  @@index([status])
+  @@index([nodeHash])
+}
+
+model TraceSpan {
+  id            String   @id
+  traceId       String
+  parentSpanId  String?
+  name          String
+  kind          String   // planner | capability | provider | settlement
+  startTime     DateTime @default(now())
+  endTime       DateTime?
+  durationMs    Int?
+  attributes    String?  // JSON
+  status        String   @default("ok") // ok | error
+  errorMessage  String?
+
+  @@index([traceId])
+  @@index([parentSpanId])
+  @@index([kind])
+}

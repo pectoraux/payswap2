@@ -14,6 +14,9 @@
  */
 export * from './types';
 export * from './graph';
+export * from './persistent-graph';
+export * from './proof-cache';
+export * from './tracing';
 export * from './planner';
 export * from './scorer';
 export * from './simulator';

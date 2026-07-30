@@ -62,7 +62,8 @@ export default function LoginPage() {
       setLoading(false);
       toast.error('Login failed');
     } else if (res?.ok) {
-      window.location.href = callbackUrl;
+      // eslint-disable-next-line no-restricted-globals
+      window.location.assign(callbackUrl);
     }
   };
 
