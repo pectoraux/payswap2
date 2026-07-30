@@ -4825,3 +4825,46 @@ Stage Summary:
 - resolve("Summarize document") → 4 heterogeneous providers competed (3 AI models + 1 human) → GPT-4o selected (score 94.8) → verified → settled (satisfaction 98/100) → learning scores updated → next resolve() will be better.
 - 7 new API routes, 1 new admin page (~700-line viewer), 1 nav item.
 - tsc: 0 | lint: 0 errors (318 warnings) | browser-verified: ✅
+
+---
+Task ID: EKG-1
+Agent: ekg-agent
+Task: Build the Economic Knowledge Graph (EKG) — the true foundation. A unified typed property graph where everything is a node. prove(goal) is graph theorem proving. Temporal versioning enables replay/simulation/forecasting/counterfactuals. The proof language is machine-verifiable.
+
+Work Log:
+- Built `src/ekg/` (NEW foundational layer underneath all prior layers; does NOT modify Prisma schema):
+  • `types.ts` (~330 lines) — GraphNode (kind: ENTITY/CAPABILITY/ASSET/GOAL/POLICY/JURISDICTION/MEMORY/OBSERVATION/EVIDENCE/CONTRACT/RISK/TIME/COST/INTENT + properties + temporal versioning validFrom/validTo + previousVersionId), GraphRelationship (typed: OFFERS/REQUIRES/PRODUCES/SATISFIES/CONSTRAINED_BY/LOCATED_IN/TRUSTS/GOVERNS/OWNS/HOLDS/DEPENDS_ON/COMPETES_WITH/LEARNED_FROM/OBSERVED/VERIFIES/PRICED_IN/DECOMPOSES_INTO/SETTLES/PRECEDES/AFFECTS + temporal versioning), EntityLabel (ORGANIZATION/HUMAN/AI_MODEL/API/BANK/GOVERNMENT/DEVICE/DAO/SERVICE/BLOCKCHAIN — organizations disappear into Entity with labels), Goal, Constraints, Proof (machine-verifiable decomposition tree), ProofStep (GOAL/CAPABILITY/INPUT/SETTLEMENT with children + alternatives), Verification (invariant checks + signature), SimulationResult (estimated cost/latency/carbon/risk/success + regulatory impact + liquidity effect + counterfactual + projected state changes), ExecutionResult.
+  • `graph.ts` (~205 lines) — the graph store on globalThis. CRUD for nodes + relationships. Traversal: traverse(fromId, type), findPath(from, to, types) BFS, findEntities(label), findCapabilitiesProducing(assetId), findEntitiesOffering(capabilityId). Temporal: stateAt(time) returns graph as it existed at time T, versionedCount(). updateNode() creates a new version (closes old with validTo, creates new with validFrom + previousVersionId) — temporal versioning.
+  • `planner.ts` (~200 lines) — THE RECURSIVE PLANNER. prove(goal, constraints) → Proof[]. Backward-chaining graph theorem prover: finds capabilities that PRODUCE the goal's target asset, for each candidate finds the best entity that OFFERS it (market optimization — heterogeneous providers compete), recursively proves each REQUIRED asset is available (subgoal decomposition — required assets become subgoals to prove), backtracks when a required asset is unresolvable, continues searching for alternative proofs (up to MAX_PROOFS=5), ranks by planner score. Capabilities are relationships: Entity ──OFFERS──► Capability ──REQUIRES──► Asset, Capability ──PRODUCES──► Asset, Capability ──SATISFIES──► Goal, Capability ──CONSTRAINED_BY──► Policy.
+  • `scorer.ts` (~50 lines) — scores proofs across 6 dimensions (Cost 25, Latency 15, Trust 20, Carbon 10, Risk 10, Memory 20). checkMemoryHits() counts MEMORY nodes referencing the goal.
+  • `simulator.ts` (~80 lines) — simulate(proof) estimates outcome WITHOUT settling: estimatedCost (±5% variance), estimatedLatency (±10%), estimatedCarbon, estimatedRisk, successProbability (trust + memory based), regulatoryImpact (per jurisdiction), liquidityEffect, counterfactual, projectedStateChanges (which nodes would be versioned).
+  • `verifier.ts` (~180 lines) — verify(proof) re-checks 8 invariant categories: ASSET_CONSERVATION (every consumed asset produced upstream), GOAL_SATISFACTION (target produced), DECOMPOSITION (every GOAL step has children), TRUST, BUDGET, DEADLINE, CARBON, JURISDICTION. Produces a verification SIGNATURE — a deterministic hash of the proof tree (signProof walks the tree, hashes kind+ids). execute(proof) verifies → settles (versionizes entity nodes with updated P&L — temporal versioning) → records MEMORY node (learning). Proof + execution stores on globalThis.
+  • `seed.ts` (~250 lines) — populates the graph: 7 jurisdictions, 24 assets, 5 policies, 18 capabilities (each with PRODUCES/REQUIRES/CONSTRAINED_BY relationships), 21 heterogeneous entities (10 organizations, 3 AI models [Claude/GPT-4o/Gemini], 2 humans [translators/reviewer], 3 APIs [Stripe/AWS S3/IPFS], 2 banks [Ecobank, Micro-Bank], 2 blockchains [Ethereum, IPFS], 1 government [Ghana Education Service]) — each with OFFERS relationships (price/latency/SLA) + LOCATED_IN jurisdictions, 6 goals (each with SATISFIES relationship from a capability), 9 memory records. All as typed nodes + typed relationships.
+  • `index.ts` — barrel.
+
+APIs (6 routes, admin-gated for mutations):
+- POST /api/ekg/prove — prove(goalId, constraints) → Proof[]. Audits EKG.PROVE.
+- POST /api/ekg/simulate — simulate(proofId) → SimulationResult.
+- POST /api/ekg/execute — verify + settle + record memory. Audits EKG.EXECUTED.
+- GET /api/ekg/graph — graph query (optional ?kind=, ?at=time for temporal query).
+- GET /api/ekg/proofs — proof history.
+- GET /api/ekg/overview — graph stats.
+
+Verification (end-to-end via curl):
+- tsc: 0 errors. lint: 0 errors, 320 warnings (2 new — expected audit-log).
+- Overview: 90 nodes, 127 relationships, 21 entities, 7 entity labels (heterogeneous), 18 capabilities, 24 assets, 6 goals, 5 policies, 7 jurisdictions, 9 memory records, 0 versioned (before execution).
+- PROVE "Summarize Document": planner found 2 proofs, ranked by planner score (88.5 vs 88.0). Decomposition tree: GOAL → CAPABILITY (Translate via Claude 3.5 AI_MODEL, $0.002) → SETTLEMENT. The planner searched graph paths: Entity ──OFFERS──► Capability ──PRODUCES──► Asset ──SATISFIES──► Goal. Memory hits: 3 (biased toward past successes). Alternatives considered (GPT-4o at $0.003).
+- SIMULATE: estimated cost $0.002, latency 870ms, success probability 89.8%, 1 projected state change, counterfactual "If not executed, the goal remains unsatisfied."
+- EXECUTE: status SETTLED. All invariants passed (Asset Conservation ✓, Goal Satisfaction ✓, Decomposition ✓, Trust ✓). PROOF SIGNATURE: ekg:66799382 (deterministic hash of the proof tree). 1 entity node versioned (Claude's P&L updated — temporal versioning created history). MEMORY node recorded (learning). 
+- Post-execution: versionedCount 0→1 (temporal history created), memoryCount 9→10 (learning recorded), proofCount 0→2, settledProofCount 0→1.
+
+Stage Summary:
+- New foundational layer: `src/ekg/` (7 files, ~1300 lines) — the Economic Knowledge Graph.
+- THE FOUNDATION IS REAL: Everything is a node in a unified typed property graph (90 nodes, 127 typed relationships). Organizations disappeared into Entity with labels (10 orgs, 3 AI models, 2 humans, 3 APIs, 2 banks, 2 blockchains, 1 government — all the same abstraction). Capabilities are relationship hubs (Entity ──OFFERS──► Capability ──REQUIRES/PRODUCES──► Asset ──SATISFIES──► Goal).
+- prove(goal) is graph theorem proving: recursive decomposition, multiple proofs ranked, backtracking on failure.
+- Temporal versioning: every entity update creates a new version (old closed with validTo). stateAt(time) enables replay, simulation, forecasting, counterfactuals. Verified: execution versionized 1 entity node.
+- Simulation engine: estimates cost/latency/carbon/risk/success + regulatory impact + liquidity effect + counterfactual + projected state changes — all before execution.
+- Proof language: machine-verifiable Proof structures with a cryptographic-style signature (deterministic hash of the decomposition tree). verify(proof) re-checks 8 invariant categories.
+- 6 new API routes. No dashboard (per user instruction — core engine is the limiting factor, not visualization).
+- prove("Summarize Document") → 2 proofs → best (Claude, score 88.5) → simulated (89.8% success) → executed (SETTLED, signature ekg:66799382, 1 node versioned, memory recorded).
+- tsc: 0 | lint: 0 errors (320 warnings) | curl-verified: ✅
