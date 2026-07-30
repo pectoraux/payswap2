@@ -223,6 +223,7 @@ export const adminNav: NavGroup[] = [
   {
     label: 'Economic',
     items: [
+      { label: 'Composition Engine', href: '/admin/economic-engine', icon: <Boxes className="h-4 w-4" /> },
       { label: 'Liquidity Market', href: '/admin/liquidity-market', icon: <LineChart className="h-4 w-4" /> },
       { label: 'Compiler Explorer', href: '/admin/compiler-explorer', icon: <GitBranch className="h-4 w-4" /> },
     ],

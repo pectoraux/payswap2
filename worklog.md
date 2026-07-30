@@ -4622,3 +4622,56 @@ Stage Summary:
 - Workaround for Bash tool: each Bash tool call kills child processes spawned within it when the call returns. Must do `start server + curl/browser verification` in a single Bash call to keep the server alive across curl checks.
 - tsc: 0 (in src/app, src/components, src/lib) | lint: 0 errors, 310 pre-existing warnings
 - Verification: ✅ Landing page renders. ✅ Auth flow works. ✅ 17/17 key routes return HTTP 200 with substantial real content. ✅ Browser-verified flagship dashboard renders correctly. ✅ Lint clean.
+
+---
+Task ID: ECONOMIC-1
+Agent: economic-engine-agent
+Task: Build the Economic Composition Engine — extensions as autonomous economic actors exchanging standardized tokens + events with declarative pipeline composition
+
+Work Log:
+- Read worklog tail to align with project conventions (in-memory store pattern from src/claims/store.ts + src/lp/settlement-store.ts, server-component page + client viewer, requireAdmin guard, audit log pattern, nav-config Economic group already exists).
+- Explored existing patterns via Explore subagent: marketplace types (src/marketplace/types.ts), runtime event store (src/runtime/events/), dispatcher, API auth helpers (src/lib/api-auth.ts), admin page pattern (claims/page.tsx + claims-manager.tsx), visuals primitives (src/components/dashboards/visuals.tsx), AuditLog Prisma model.
+
+Architecture — built `src/economic/` (NEW layer parallel to src/runtime/, src/claims/, src/lp/, src/treasury/; does NOT modify Prisma schema):
+- `src/economic/types.ts` (~210 lines) — TokenDefinition, TokenBalance, TokenOperation, EconomicEvent, EventSubscriber, ExtensionManifest, EconomicExtension, TokenPipeline, PipelineStep, PipelineExecution, EconomicGraph (nodes: EXTENSION/TOKEN/EVENT/PIPELINE; edges: EMITS/CONSUMES/PUBLISHES/SUBSCRIBES/TRIGGERS), EconomicOverview.
+- `src/economic/store.ts` (~800 lines) — central store on globalThis.__PAYSWAP_ECONOMIC_STORE__ (survives Next.js hot-reload), idempotent auto-seed. Core service object `economicEngine` with: token lifecycle (mint/burn/transfer/consume — each emits an economic event), economic event bus (publishEvent fires subscribers synchronously AND triggers matching pipelines with cascade depth guard: MAX_CASCADE_DEPTH=8, MAX_CASCADE_EVENTS=60), extension registry, pipeline registry, triggerPipeline, buildGraph, overview. Auto-seeds 12 extensions (identity, marketplace, lending, treasury, ai, storage, bandwidth, rewards, insurance, carbon, education, employment), 18 tokens (VID, TRT, MRP, SRT, COL, CRD, RC, SOL, AIC, STC, LBT, RWP, LYP, POL, COF, EDC, SKL, MCB), 5 pipelines (Payment Settlement Cascade, Identity Verification Cascade, Sale Composition Pipeline, Tuition Learning Pipeline, Reserve Liquidity Cascade), 23 initial balances, 4 execution-history traces, 6 seeded events.
+- `src/economic/pipeline-engine.ts` (~200 lines) — executePipeline runs each step sequentially against the triggering event, with template resolution (${payload.amount}, ${payload.customerId}), step tracing (SUCCESS/FAILED/SKIPPED + detail), and cascade (publish steps trigger further pipelines). Supports mint/burn/consume/transfer/publish/notify/wait/condition.
+- `src/economic/graph.ts` (~90 lines) — buildGraph derives the composition topology from extension manifests + pipelines: EXTENSION→TOKEN (EMITS/CONSUMES), EXTENSION→EVENT (PUBLISHES/SUBSCRIBES), EVENT→PIPELINE (TRIGGERS).
+- `src/economic/index.ts` — barrel re-export.
+
+APIs (7 routes, all admin-gated for mutations):
+- `GET/POST /api/economic/tokens` — list tokens / balances / operations; mint/burn/transfer/consume (admin). Audits ECONOMIC.TOKEN_<OP>.
+- `GET /api/economic/extensions` — list economic actors.
+- `GET/POST /api/economic/pipelines` — list pipelines / executions; register new pipeline (admin). Audits ECONOMIC.PIPELINE_REGISTERED.
+- `POST /api/economic/pipelines/trigger` — trigger a pipeline with a synthetic event payload (admin). Audits ECONOMIC.PIPELINE_TRIGGERED.
+- `GET /api/economic/graph` — full dependency graph (nodes + edges).
+- `GET /api/economic/events` — economic event stream (filter by type/source/limit).
+- `GET /api/economic/overview` — KPI aggregates.
+
+UI — `/admin/economic-engine` (the flagship dashboard):
+- `src/app/(admin)/admin/economic-engine/page.tsx` (server component) — requireAdmin(), reads economicEngine state, serializes to DTO, renders PageHeader + EconomicEngineViewer.
+- `src/app/(admin)/admin/economic-engine/economic-engine-viewer.tsx` (~1000 lines, client) — 5 tabs:
+  • Overview: 6 KPI cards (extensions / token types / pipelines / executions / events / operations) + SVG Economic Dependency Graph (layered layout: extensions→tokens→events→pipelines, curved bezier edges color-coded by kind: EMITS=emerald, CONSUMES=amber-dashed, PUBLISHES=violet, SUBSCRIBES=sky-dashed, TRIGGERS=fuchsia; click/hover to focus connected nodes; legend) + Composition Cascade flow visualization (one payment → six token emissions across five extensions, animated).
+  • Tokens: KPIs (fungible/soulbound/NFT/consumable breakdown) + token registry table (symbol badge, issuer, kind, supply, holders, mints) + detail panel with holders list + Mint/Burn/Transfer/Consume dialog.
+  • Extensions: KPIs + card grid of 12 economic actors (category color, reputation bar, emits/consumes/publishes counts) + detail Sheet (treasury, token contracts, event contracts, capabilities).
+  • Pipelines: KPIs (success rate) + pipeline list (trigger button each) + execution trace list (status/duration/cascade depth) + execution detail Sheet (per-step trace with SUCCESS/FAILED icons + trigger payload JSON + pipeline definition JSON) + pipeline detail Sheet (step-by-step definition) + Trigger dialog (JSON payload editor).
+  • Events: KPIs + filterable event stream table (time, type, source, token, reactors, cascaded flag) + recent token operations table (mint/burn/transfer/consume with from→to + amount + reason).
+- Nav: added "Composition Engine" → /admin/economic-engine (icon: Boxes) to the existing admin "Economic" group in src/lib/nav-config.tsx.
+
+Verification (end-to-end, agent-browser + curl):
+- tsc: 0 errors in src/economic + src/app/(admin)/admin/economic-engine + src/app/api/economic + src/lib/nav-config.
+- lint: 0 errors, 313 warnings (3 new — the expected db.auditLog.create() M-RT-21 audit-logging convention from the 3 mutating API routes; matches existing project convention).
+- All 7 APIs return real data: overview shows 12 extensions, 18 tokens (1.45M total supply), 5 pipelines, 4 seeded executions, 6 events.
+- Page renders HTTP 200, 297KB, H1 "Economic Composition Engine", all 5 tabs present, "Composition Engine" nav item present.
+- DOM verification via agent-browser eval: 67 SVG elements, 229 path elements (graph edges), 63 groups (graph nodes). "Economic Dependency Graph" + "Composition Cascade" headings confirmed present. No page errors.
+- Pipeline trigger (the cascade — the core of the vision): POST /api/economic/pipelines/trigger {id: seed-pipeline-1, payload: {amount:500, customerId, merchantId, category:retail}} → execution COMPLETED, all 5 steps SUCCESS: mint 500 RC → Treasury Reserve, mint 500 RWP → customer, mint 1 MCB → merchant, notify analytics.transaction, publish loyalty.updated. Each mint emitted a real token.mint event. Overview counts updated: totalSupply +1001, executions 4→5, events 6→12, operations 0→3. The cascade composition works end-to-end.
+- Screenshots captured for all 4 tabs (overview 458KB with the graph, tokens 134KB, extensions 194KB, events 114KB).
+
+Stage Summary:
+- New subsystem: `src/economic/` (5 files, ~1300 lines) — the Economic Composition Engine. Extensions are autonomous economic actors; tokens are programmable rights; tokens emit events; events trigger declarative pipelines; pipelines cascade. No direct extension-to-extension coupling — only contracts (tokens + events).
+- 7 new API routes under `src/app/api/economic/`.
+- 1 new admin page (`/admin/economic-engine`) + ~1000-line viewer component with SVG dependency graph + pipeline trace viewer.
+- 1 nav item added (admin Economic group).
+- Seed data: 12 extensions, 18 tokens, 5 pipelines, 23 balances, 4 execution traces, 6 events — all demonstrating the cross-extension composition vision (identity → marketplace → credit → treasury → rewards cascades).
+- The cascade is real: triggering one pipeline mints real tokens across multiple extensions and emits real events that flow through the bus.
+- tsc: 0 | lint: 0 errors (313 warnings, +3 expected audit-log convention) | browser-verified: ✅
