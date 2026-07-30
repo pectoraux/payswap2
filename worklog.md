@@ -5519,3 +5519,62 @@ Stage Summary:
 - VRP solver: multi-objective optimization with time windows + carbon.
 - Production SDK: typed client with retries, idempotency, webhook verification.
 - tsc: 0 | lint: 0 errors (324 warnings) | chaos: 10/10 ✅ | curl-verified: ✅
+
+---
+Task ID: CERTIFICATION-1
+Agent: certification-agent
+Task: Build the PaySwap Certification Suite — the automated quality gate that every extension must pass before publishing. 15 checks covering SDK compliance, manifest validation, security, dependencies, performance, capability graph, economic correctness, Money correctness, planner compatibility, event sourcing, idempotency, multi-tenant isolation, upgrade/rollback, documentation, and marketplace compliance. Issues cryptographically signed certification badges.
+
+Work Log:
+- Built `src/certification/certification-suite.ts` (~430 lines) + `src/certification/index.ts`:
+  • 15 certification checks, each with: id, name, description, category (STRUCTURAL/SECURITY/PERFORMANCE/ECONOMIC/COMPLIANCE/OPERATIONAL), result (PASS/FAIL/WARN/SKIP), detail, durationMs, evidence.
+  • certifyExtension(pkg) runs all 15 checks, determines certification level (CERTIFIED / CONDITIONAL / REJECTED), computes score (0–100), generates a cryptographic badge.
+  • Certification levels: CERTIFIED (0 critical failures, 0 non-critical failures, ≤3 warnings), CONDITIONAL (0 critical failures, some non-critical failures or >3 warnings), REJECTED (any critical failure). Critical checks: SECURITY_SCAN, MANIFEST_VALIDATION, ECONOMIC_CORRECTNESS, MONEY_CORRECTNESS.
+  • CertificationBadge: level, score, fingerprint (SHA-256 hash of the report), signature (RSA-SHA256 signed by PaySwap's certification key), issuedAt. Anyone can verify the badge with verifyBadge() — no trust in the extension or marketplace required.
+  • Certification key generated once (RSA 2048-bit), persisted on globalThis. In production, stored in a secrets manager.
+  • Certifications valid for 90 days (expiresAt).
+  • Store: listCertifications, getCertification, getLatestCertification(extensionId).
+
+- The 15 checks:
+  1. SDK_COMPLIANCE — uses defineExtension(), has valid manifest (id + name)
+  2. MANIFEST_VALIDATION — all required fields, valid semver, valid publisher, capabilities/assets/permissions arrays
+  3. SECURITY_SCAN — no dangerous patterns (eval, child_process, exec, __proto__, process.env)
+  4. DEPENDENCY_VALIDATION — all dependencies resolvable, no conflicts
+  5. PERFORMANCE_BENCHMARK — code < 1MB, install < 5s
+  6. CAPABILITY_GRAPH_VALIDATION — capabilities produce valid assets, assets have valid types, no undeclared asset references
+  7. ECONOMIC_CORRECTNESS — no circular dependencies (produces X requires X), asset conservation satisfiable
+  8. MONEY_CORRECTNESS — no raw float arithmetic on money variables, billing plan valid
+  9. PLANNER_COMPATIBILITY — capabilities have name + produces + requires (discoverable by resolve())
+  10. EVENT_SOURCING_COMPLIANCE — extension emits at least one event
+  11. IDEMPOTENCY_COMPLIANCE — POST routes support idempotency keys
+  12. MULTI_TENANT_ISOLATION — no hardcoded tenant data
+  13. UPGRADE_ROLLBACK_VALIDATION — compatibility declared, migrations have up + down
+  14. DOCUMENTATION_COMPLETENESS — description > 50 chars, has documentationUrl, supportUrl, homepage, tags, license
+  15. MARKETPLACE_COMPLIANCE — has billing plan, valid signature, permissions declared, health checks
+
+- API: GET/POST /api/certification
+  • POST action=certify — runs all 15 checks, returns CertificationReport + badge
+  • POST action=verifyBadge — verifies a badge's RSA-SHA256 signature
+  • GET — list certifications, get by certId, get latest by extensionId
+
+Verification (end-to-end — all 5 extensions certified):
+- tsc: 0 errors. lint: 0 errors, 324 warnings.
+- Parcel Delivery: CERTIFIED — 15/15 checks PASSED. Score: 100/100. Badge issued (fingerprint: 000d9c8c7a019290...). ✓
+- Inventory Management: CONDITIONAL — 14/15 passed. Score: 93/100. 1 failure: "Release Stock" capability produces nothing (should produce a release record asset). ✓
+- Loyalty & Rewards: CONDITIONAL — 14/15 passed. Score: 93/100. 1 failure: "Redeem Points" capability produces nothing (should produce a redemption record). ✓
+- Accounting: CONDITIONAL — 14/15 passed. Score: 93/100. 1 failure: "Export Ledger" capability produces nothing (should produce an export artifact). ✓
+- CRM: CONDITIONAL — 14/15 passed. Score: 93/100. 1 failure: "Log Interaction" capability produces nothing (should produce an interaction record). ✓
+- Badge verification: ✓ Badge signature valid — issued by PaySwap.
+
+The certification suite correctly identified:
+- Parcel Delivery as fully CERTIFIED (100/100) — the reference implementation passes all 15 checks.
+- 4 other extensions as CONDITIONAL (93/100) — each has one capability that produces nothing (a real gap that the developers should fix before publishing). This demonstrates the certification suite catches real issues.
+
+Stage Summary:
+- `src/certification/` (2 files, ~440 lines) — the PaySwap Certification Suite.
+- 15 automated checks. 3 certification levels (CERTIFIED / CONDITIONAL / REJECTED). Cryptographically signed badges.
+- 1 new API route: /api/certification (certify + verifyBadge + list + get).
+- 5 extensions certified: 1 CERTIFIED (100/100), 4 CONDITIONAL (93/100). The suite caught 4 real issues (capabilities that produce nothing).
+- Badge verification: RSA-SHA256 signature valid — anyone can verify without trusting the extension or marketplace.
+- tsc: 0 | lint: 0 errors (324 warnings) | curl-verified: ✅
+- This is the quality gate for the entire ecosystem. Every future extension must pass before publishing.
