@@ -9,11 +9,11 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import {
   CreditCard, Globe, Zap, Loader2, Play, CheckCircle2, XCircle, ExternalLink,
-  Banknote, Satellite, MapPin, ShieldCheck, Activity, FileText, Route as RouteIcon,
+  Banknote, Satellite, MapPin, ShieldCheck, Activity, FileText, Route as RouteIcon, FlaskConical,
 } from 'lucide-react';
 import {
   type LiveProviderResult, type LiveTestResult, type LiveReport, type PlanRouteLiveResult,
-  postShowcase,
+  type TestScenarioReport, postShowcase,
 } from './shared';
 
 interface ProviderConfig {
@@ -170,6 +170,8 @@ export function LiveTab() {
   const [reportLoading, setReportLoading] = useState(false);
   const [routeLive, setRouteLive] = useState<PlanRouteLiveResult | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
+  const [scenarios, setScenarios] = useState<TestScenarioReport | null>(null);
+  const [scenariosLoading, setScenariosLoading] = useState(false);
 
   async function runTest(config: ProviderConfig) {
     setLoading((p) => ({ ...p, [config.id]: true }));
@@ -220,6 +222,21 @@ export function LiveTab() {
       toast.error(`Route failed: ${msg}`, { id: 'routeLive' });
     } finally {
       setRouteLoading(false);
+    }
+  }
+
+  async function runScenarios() {
+    setScenariosLoading(true); setScenarios(null);
+    toast.loading('Running all 15 TEST-SCENARIOS.md through the kernel…', { id: 'scenarios' });
+    try {
+      const r = await postShowcase<TestScenarioReport>({ action: 'testScenarios' });
+      setScenarios(r);
+      toast.success(`Scenarios: ${r.summary.passed}/${r.summary.total} passed (${r.summary.passRate}%).`, { id: 'scenarios' });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'scenarios failed';
+      toast.error(`Scenarios failed: ${msg}`, { id: 'scenarios' });
+    } finally {
+      setScenariosLoading(false);
     }
   }
 
@@ -399,6 +416,88 @@ export function LiveTab() {
             <div className="flex h-28 flex-col items-center justify-center text-center text-xs text-muted-foreground">
               <RouteIcon className="mb-2 h-6 w-6 opacity-30" />
               Plans the multi-hop route with real Google Maps driving distances — compares against the haversine approximation.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Test scenarios from TEST-SCENARIOS.md */}
+      <Card className="border-emerald-500/20">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <FlaskConical className="h-4 w-4 text-emerald-500" /> Test scenarios — TEST-SCENARIOS.md (15 scenarios)
+            </CardTitle>
+            <Button
+              size="sm" className="h-7 bg-emerald-600 text-white hover:bg-emerald-700"
+              onClick={runScenarios} disabled={scenariosLoading}
+            >
+              {scenariosLoading ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Play className="mr-1 h-3 w-3" />}
+              {scenariosLoading ? 'Running 15…' : 'Run all 15 scenarios'}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {scenarios ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-2 text-center">
+                  <div className="text-lg font-bold text-emerald-600 tabular-nums">{scenarios.summary.passed}</div>
+                  <div className="text-[10px] text-muted-foreground">passed</div>
+                </div>
+                <div className="rounded-md border border-rose-500/20 bg-rose-500/5 p-2 text-center">
+                  <div className="text-lg font-bold text-rose-600 tabular-nums">{scenarios.summary.failed}</div>
+                  <div className="text-[10px] text-muted-foreground">failed</div>
+                </div>
+                <div className="rounded-md border border-border bg-muted/30 p-2 text-center">
+                  <div className="text-lg font-bold tabular-nums">{scenarios.summary.passRate}%</div>
+                  <div className="text-[10px] text-muted-foreground">pass rate</div>
+                </div>
+                <div className="rounded-md border border-border bg-muted/30 p-2 text-center">
+                  <div className="text-lg font-bold tabular-nums">{scenarios.summary.total}</div>
+                  <div className="text-[10px] text-muted-foreground">scenarios</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <Badge variant="outline" className="border-emerald-500/30 text-emerald-600">{scenarios.reportId}</Badge>
+                <span>{scenarios.source}</span>
+              </div>
+              <ScrollArea className="max-h-96 pr-2">
+                <div className="space-y-1.5">
+                  {scenarios.results.map((r) => (
+                    <div key={r.id} className={`rounded-md border px-3 py-2 ${r.passed ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-rose-500/30 bg-rose-500/5'}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          {r.passed ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <XCircle className="h-3.5 w-3.5 text-rose-500" />}
+                          <span className="text-xs font-semibold">S{r.id}: {r.name}</span>
+                        </div>
+                        <Badge variant="outline" className="border-border px-1.5 py-0 text-[9px]">{r.category}</Badge>
+                      </div>
+                      <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground sm:grid-cols-3">
+                        <span>strategy: <span className="font-medium text-foreground">{r.actualStrategy.slice(0, 30)}</span></span>
+                        <span>settled: <span className={`font-medium ${r.settled === r.expectedSettled ? 'text-emerald-600' : 'text-rose-600'}`}>{String(r.settled)} (exp {String(r.expectedSettled)})</span></span>
+                        {r.metrics && <span>cost: <span className="font-medium text-foreground tabular-nums">{r.metrics.costPercent}%</span></span>}
+                        {r.metrics && <span>risk: <span className="font-medium text-foreground">{r.metrics.riskLabel}</span></span>}
+                        {r.metrics && <span>time: <span className="font-medium text-foreground">{r.metrics.settlementTimeLabel}</span></span>}
+                        {r.eventCount !== undefined && <span>events: <span className="font-medium text-foreground tabular-nums">{r.eventCount}</span></span>}
+                        {r.ledgerEntries !== undefined && <span>ledger: <span className="font-medium text-foreground tabular-nums">{r.ledgerEntries}</span></span>}
+                      </div>
+                      {r.error && <p className="mt-1 text-[10px] text-rose-500">↳ {r.error.slice(0, 150)}</p>}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+              <details>
+                <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">View raw JSON report</summary>
+                <pre className="mt-2 max-h-64 overflow-auto rounded bg-background/60 p-3 text-[9px] leading-tight">
+{JSON.stringify(scenarios, null, 2).slice(0, 2500)}
+                </pre>
+              </details>
+            </div>
+          ) : (
+            <div className="flex h-28 flex-col items-center justify-center text-center text-xs text-muted-foreground">
+              <FlaskConical className="mb-2 h-6 w-6 opacity-30" />
+              Runs all 15 scenarios from TEST-SCENARIOS.md through the kernel Digital Twin — domestic, cross-border (4 strategies), failed, strategic, refund, payout, concurrent, LP claim, wallet transfer, insufficient funds, emergency freeze, claims.
             </div>
           )}
         </CardContent>

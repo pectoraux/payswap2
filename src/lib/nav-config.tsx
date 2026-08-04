@@ -208,6 +208,7 @@ export const adminNav: NavGroup[] = [
     items: [
       { label: 'Runtime', href: '/admin/runtime', icon: <Globe className="h-4 w-4" /> },
       { label: 'Platform', href: '/admin/platform', icon: <Activity className="h-4 w-4" /> },
+      { label: 'Live Console', href: '/admin/console', icon: <Terminal className="h-4 w-4" /> },
       { label: 'Network', href: '/admin/network', icon: <Globe className="h-4 w-4" /> },
       { label: 'Digital Twin', href: '/admin/digital-twin', icon: <Box className="h-4 w-4" /> },
       { label: 'Time Machine', href: '/admin/time-machine', icon: <Clock className="h-4 w-4" /> },

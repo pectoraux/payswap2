@@ -230,6 +230,31 @@ export interface PlanRouteLiveResult {
   message: string;
 }
 
+// ── Test scenarios report (TEST-SCENARIOS.md) ──
+export interface ScenarioResult {
+  id: number; name: string; category: string;
+  expectedStrategy: string; actualStrategy: string;
+  settled: boolean; expectedSettled: boolean;
+  passed: boolean;
+  metrics?: {
+    costPercent: number; settlementTimeMs: number; settlementTimeLabel: string;
+    riskScore: number; riskLabel: string; confidence: number; twinTokensMinted: number;
+  };
+  eventCount?: number; eventTypes?: string[];
+  ledgerEntries?: number; constitutionPassed?: boolean; candidatePlans?: number;
+  runId?: string;
+  error?: string;
+}
+export interface TestScenarioReport {
+  ok: boolean;
+  reportId: string;
+  generatedAt: string;
+  source: string;
+  summary: { total: number; passed: number; failed: number; passRate: number };
+  results: ScenarioResult[];
+  message: string;
+}
+
 // ── Hooks ──
 export function useShowcase() {
   const [data, setData] = useState<ShowcaseData | null>(null);
