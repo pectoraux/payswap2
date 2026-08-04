@@ -46,6 +46,8 @@ export interface CapabilityNode {
   id: string; name: string; category: string; produces: string[]; requires: string[];
 }
 export interface EntityNode { id: string; name: string; labels: string[]; kind: string }
+export interface AssetNode { id: string; name: string; category: string; stableId: string }
+export interface OffersEdge { from: string; to: string }
 
 export interface ExtensionCert {
   level: 'CERTIFIED' | 'CONDITIONAL' | 'REJECTED';
@@ -94,6 +96,8 @@ export interface ShowcaseData {
     goals: Goal[];
     capabilities: CapabilityNode[];
     entities: EntityNode[];
+    assets: AssetNode[];
+    offersEdges: OffersEdge[];
   };
   extensions: ExtensionInfo[];
   certifications: CertificationReport[];

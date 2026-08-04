@@ -114,6 +114,23 @@ export async function GET() {
       labels: n.labels ?? [],
       kind: (n.properties.kind as string) ?? 'organization',
     }));
+    const assetNodes = ekg.listNodes({ kind: 'ASSET' as never }).slice(0, 24).map((n) => ({
+      id: n.id, name: n.label,
+      category: (n.properties.category as string) ?? 'general',
+      stableId: (n.properties.stableId as string) ?? n.label,
+    }));
+    // Entity → Capability (OFFERS) edges for the graph visualization.
+    const offersEdges: { from: string; to: string }[] = [];
+    for (const e of entityNodes) {
+      try {
+        const rels = ekg.getRelationshipsByType(e.id, 'OFFERS' as never, 'out' as never);
+        for (const r of rels.slice(0, 6)) {
+          if (capabilityNodes.some((c) => c.id === r.to)) {
+            offersEdges.push({ from: e.id, to: r.to });
+          }
+        }
+      } catch { /* ignore */ }
+    }
 
     // ── Extensions + certifications ──
     const certs = getCertifications();
@@ -231,6 +248,8 @@ export async function GET() {
         goals,
         capabilities: capabilityNodes,
         entities: entityNodes,
+        assets: assetNodes,
+        offersEdges,
       },
       extensions,
       certifications: certs.map(({ report }) => ({

@@ -13,6 +13,7 @@ import {
 import {
   type ShowcaseData, type ProveResult, type ProofStepNode, postShowcase,
 } from './shared';
+import { GraphViz } from './graph-viz';
 
 function ProofTree({ node }: { node: ProofStepNode }) {
   const kindColor: Record<string, string> = {
@@ -76,6 +77,21 @@ export function GraphTab({ showcase }: { showcase: ShowcaseData | null }) {
 
   return (
     <div className="space-y-6">
+      {/* Graph visualization */}
+      <section>
+        <div className="mb-3 flex items-center gap-2">
+          <GitBranch className="h-4 w-4 text-emerald-500" />
+          <h3 className="text-sm font-semibold">Capability graph</h3>
+          <span className="text-xs text-muted-foreground">— {entities.length} entities · {capabilities.length} capabilities · {showcase?.ekg.assets.length ?? 0} assets · hover to trace relationships</span>
+        </div>
+        <GraphViz
+          entities={entities}
+          capabilities={capabilities}
+          assets={showcase?.ekg.assets ?? []}
+          offersEdges={showcase?.ekg.offersEdges ?? []}
+        />
+      </section>
+
       <section>
         <div className="mb-3 flex items-center gap-2">
           <Target className="h-4 w-4 text-emerald-500" />
