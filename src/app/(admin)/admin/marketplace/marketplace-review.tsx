@@ -53,7 +53,7 @@ import {
   categoryMeta,
   type PublicPlugin,
   type VerificationResult,
-} from '@/marketplace';
+} from '@/marketplace/types';
 
 interface Stats {
   pending: number;
