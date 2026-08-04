@@ -188,6 +188,48 @@ export interface LiveProviderResult {
   result: Record<string, LiveTestResult>;
 }
 
+// ── Consolidated live report ──
+export interface LiveReportTest {
+  operation: string; success: boolean; latencyMs: number; status: number;
+  summary: string; error?: string;
+}
+export interface LiveReportProvider {
+  name: string;
+  passed: number; failed: number; total: number;
+  tests: LiveReportTest[];
+}
+export interface LiveReport {
+  ok: boolean;
+  reportId: string;
+  generatedAt: string;
+  totalLatencyMs: number;
+  summary: { totalTests: number; passed: number; failed: number; passRate: number; providersTested: number };
+  providers: LiveReportProvider[];
+  message: string;
+}
+
+// ── Real-maps route plan ──
+export interface PlanRouteLiveResult {
+  ok: boolean;
+  priority: string;
+  route: {
+    id: string;
+    hops: Array<{
+      sequence: number; transitNodeName?: string; transitNodeType?: string;
+      address: string; action: string;
+      haversineKm: number; realKm: number; realDurationHours: number; realStatus: string;
+    }>;
+    haversineTotalKm: number;
+    realTotalKm: number;
+    realTotalDurationHours: number;
+    differenceKm: number;
+    differencePct: number;
+    vehicleType: string;
+    optimizedFor: string;
+  };
+  message: string;
+}
+
 // ── Hooks ──
 export function useShowcase() {
   const [data, setData] = useState<ShowcaseData | null>(null);

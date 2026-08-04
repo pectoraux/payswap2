@@ -9,9 +9,12 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import {
   CreditCard, Globe, Zap, Loader2, Play, CheckCircle2, XCircle, ExternalLink,
-  Banknote, Satellite, MapPin, ShieldCheck, Activity,
+  Banknote, Satellite, MapPin, ShieldCheck, Activity, FileText, Route as RouteIcon,
 } from 'lucide-react';
-import { type LiveProviderResult, type LiveTestResult, postShowcase } from './shared';
+import {
+  type LiveProviderResult, type LiveTestResult, type LiveReport, type PlanRouteLiveResult,
+  postShowcase,
+} from './shared';
 
 interface ProviderConfig {
   id: string;
@@ -163,6 +166,10 @@ function ProviderCard({ config, result, loading, onRun }: {
 export function LiveTab() {
   const [results, setResults] = useState<Record<string, LiveProviderResult | null>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
+  const [report, setReport] = useState<LiveReport | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [routeLive, setRouteLive] = useState<PlanRouteLiveResult | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
 
   async function runTest(config: ProviderConfig) {
     setLoading((p) => ({ ...p, [config.id]: true }));
@@ -183,6 +190,36 @@ export function LiveTab() {
       toast.error(`${config.name}: ${msg}`, { id: config.id });
     } finally {
       setLoading((p) => ({ ...p, [config.id]: false }));
+    }
+  }
+
+  async function runFullReport() {
+    setReportLoading(true); setReport(null);
+    toast.loading('Running all 5 live provider tests in parallel…', { id: 'report' });
+    try {
+      const r = await postShowcase<LiveReport>({ action: 'liveReport' });
+      setReport(r);
+      toast.success(`Report ${r.reportId}: ${r.summary.passed}/${r.summary.totalTests} passed (${r.summary.passRate}%).`, { id: 'report' });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'report failed';
+      toast.error(`Report failed: ${msg}`, { id: 'report' });
+    } finally {
+      setReportLoading(false);
+    }
+  }
+
+  async function runRouteLive() {
+    setRouteLoading(true); setRouteLive(null);
+    toast.loading('Planning route with real Google Maps distances…', { id: 'routeLive' });
+    try {
+      const r = await postShowcase<PlanRouteLiveResult>({ action: 'planRouteLive', priority: 'CHEAPEST' });
+      setRouteLive(r);
+      toast.success(r.message, { id: 'routeLive' });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'route failed';
+      toast.error(`Route failed: ${msg}`, { id: 'routeLive' });
+    } finally {
+      setRouteLoading(false);
     }
   }
 
@@ -220,6 +257,152 @@ export function LiveTab() {
           />
         ))}
       </div>
+
+      {/* Full consolidated report */}
+      <Card className="border-emerald-500/20">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <FileText className="h-4 w-4 text-emerald-500" /> Consolidated live-test report
+            </CardTitle>
+            <Button
+              size="sm" className="h-7 bg-emerald-600 text-white hover:bg-emerald-700"
+              onClick={runFullReport} disabled={reportLoading}
+            >
+              {reportLoading ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Play className="mr-1 h-3 w-3" />}
+              {reportLoading ? 'Running all 5…' : 'Run full report'}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {report ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-2 text-center">
+                  <div className="text-lg font-bold text-emerald-600 tabular-nums">{report.summary.passed}</div>
+                  <div className="text-[10px] text-muted-foreground">passed</div>
+                </div>
+                <div className="rounded-md border border-rose-500/20 bg-rose-500/5 p-2 text-center">
+                  <div className="text-lg font-bold text-rose-600 tabular-nums">{report.summary.failed}</div>
+                  <div className="text-[10px] text-muted-foreground">failed</div>
+                </div>
+                <div className="rounded-md border border-border bg-muted/30 p-2 text-center">
+                  <div className="text-lg font-bold tabular-nums">{report.summary.passRate}%</div>
+                  <div className="text-[10px] text-muted-foreground">pass rate</div>
+                </div>
+                <div className="rounded-md border border-border bg-muted/30 p-2 text-center">
+                  <div className="text-lg font-bold tabular-nums">{report.totalLatencyMs}</div>
+                  <div className="text-[10px] text-muted-foreground">total ms</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <Badge variant="outline" className="border-emerald-500/30 text-emerald-600">{report.reportId}</Badge>
+                <span>generated {new Date(report.generatedAt).toLocaleString()}</span>
+              </div>
+              <div className="space-y-2">
+                {report.providers.map((p) => (
+                  <div key={p.name} className="rounded-md border border-border/60 bg-muted/20 p-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold">{p.name}</span>
+                      <Badge variant="outline" className={p.failed === 0 ? 'border-emerald-500/40 text-emerald-600' : 'border-amber-500/40 text-amber-600'}>
+                        {p.passed}/{p.total} passed
+                      </Badge>
+                    </div>
+                    <div className="mt-1.5 space-y-1">
+                      {p.tests.map((t, i) => (
+                        <div key={i} className="flex items-start gap-2 text-[11px]">
+                          {t.success ? <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" /> : <XCircle className="mt-0.5 h-3 w-3 shrink-0 text-rose-500" />}
+                          <span className="font-mono text-muted-foreground">{t.operation}</span>
+                          <span className="ml-auto text-muted-foreground tabular-nums">{t.latencyMs}ms</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <details>
+                <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">View raw JSON report</summary>
+                <pre className="mt-2 max-h-64 overflow-auto rounded bg-background/60 p-3 text-[9px] leading-tight">
+{JSON.stringify(report, null, 2).slice(0, 2000)}
+                </pre>
+              </details>
+            </div>
+          ) : (
+            <div className="flex h-28 flex-col items-center justify-center text-center text-xs text-muted-foreground">
+              <FileText className="mb-2 h-6 w-6 opacity-30" />
+              Run all 5 providers in parallel and get a consolidated pass/fail report with a report ID.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Real-maps route comparison */}
+      <Card className="border-emerald-500/20">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <RouteIcon className="h-4 w-4 text-emerald-500" /> Route planner — real Google Maps vs haversine
+            </CardTitle>
+            <Button
+              size="sm" className="h-7 bg-emerald-600 text-white hover:bg-emerald-700"
+              onClick={runRouteLive} disabled={routeLoading}
+            >
+              {routeLoading ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Play className="mr-1 h-3 w-3" />}
+              {routeLoading ? 'Querying Maps…' : 'Plan with real Maps'}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {routeLive ? (
+            <div className="space-y-3">
+              <div className="rounded-md bg-emerald-500/5 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
+                {routeLive.message}
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="rounded-md border border-border bg-muted/30 p-2 text-center">
+                  <div className="text-lg font-bold tabular-nums">{routeLive.route.realTotalKm}</div>
+                  <div className="text-[10px] text-muted-foreground">real km</div>
+                </div>
+                <div className="rounded-md border border-border bg-muted/30 p-2 text-center">
+                  <div className="text-lg font-bold tabular-nums">{routeLive.route.haversineTotalKm}</div>
+                  <div className="text-[10px] text-muted-foreground">haversine km</div>
+                </div>
+                <div className="rounded-md border border-border bg-muted/30 p-2 text-center">
+                  <div className="text-lg font-bold tabular-nums">{routeLive.route.realTotalDurationHours}h</div>
+                  <div className="text-[10px] text-muted-foreground">real duration</div>
+                </div>
+                <div className={`rounded-md border p-2 text-center ${routeLive.route.differencePct > 0 ? 'border-amber-500/30 bg-amber-500/5' : 'border-emerald-500/30 bg-emerald-500/5'}`}>
+                  <div className="text-lg font-bold tabular-nums">{routeLive.route.differencePct > 0 ? '+' : ''}{routeLive.route.differencePct}%</div>
+                  <div className="text-[10px] text-muted-foreground">vs straight-line</div>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                {routeLive.route.hops.map((h, i) => (
+                  <div key={i} className="rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500/10 text-xs font-bold text-emerald-600">{h.sequence}</div>
+                        <span className="text-xs font-medium">{h.transitNodeName ?? h.address}</span>
+                      </div>
+                      <Badge variant="outline" className="border-border px-1.5 py-0 text-[9px]">{h.action}</Badge>
+                    </div>
+                    <div className="mt-1 grid grid-cols-3 gap-2 text-[10px]">
+                      <span className="text-muted-foreground">haversine: <span className="font-medium text-foreground tabular-nums">{h.haversineKm}km</span></span>
+                      <span className="text-muted-foreground">real: <span className="font-medium text-emerald-600 tabular-nums">{h.realKm}km</span></span>
+                      <span className="text-muted-foreground">duration: <span className="font-medium text-foreground tabular-nums">{h.realDurationHours.toFixed(2)}h</span></span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-28 flex-col items-center justify-center text-center text-xs text-muted-foreground">
+              <RouteIcon className="mb-2 h-6 w-6 opacity-30" />
+              Plans the multi-hop route with real Google Maps driving distances — compares against the haversine approximation.
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Separator />
       <div className="rounded-lg border border-border/60 bg-muted/20 p-4 text-xs text-muted-foreground">

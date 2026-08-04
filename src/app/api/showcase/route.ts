@@ -473,7 +473,119 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, provider: 'Google Maps', result, message: result.distance.success ? `✓ Google Maps: ${result.distance.data?.rows[0]?.elements[0]?.distance?.text} driving distance.` : `✗ Maps test failed: ${result.distance.error}` });
     }
 
-    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps)' }, { status: 400 });
+    // ── planRouteLive: real Google Maps driving distances for the parcel route ──
+    // Plans the multi-hop route via the in-memory planner, then enriches each
+    // hop with real driving distance + duration from the Google Maps Distance
+    // Matrix API. Compares the haversine approximation vs. real road distance.
+    if (action === 'planRouteLive') {
+      const priority = (body.priority as 'FASTEST' | 'CHEAPEST' | 'SAFEST' | 'CARBON_OPTIMIZED') ?? 'CHEAPEST';
+      seedShowcaseDeliveries();
+      const deliveries = parcelService.listDeliveries('showcase');
+      const deliveryIds = deliveries.slice(0, 3).map((d) => d.id);
+      const route = parcelExtService.planMultiHopRoute(deliveryIds, priority);
+
+      // Build origins/destinations for the Distance Matrix (consecutive hops)
+      const { mapsLive } = await import('@/live');
+      const hopAddresses = route.hops.map((h) => h.address);
+      const realSegments: Array<{ from: string; to: string; distanceKm: number; durationHours: number; status: string }> = [];
+      for (let i = 0; i < hopAddresses.length - 1; i++) {
+        try {
+          const dm = await mapsLive.getDistanceMatrix({ origins: [hopAddresses[i]], destinations: [hopAddresses[i + 1]] });
+          const el = dm.data?.rows[0]?.elements[0];
+          if (el?.status === 'OK' && el.distance && el.duration) {
+            realSegments.push({
+              from: hopAddresses[i], to: hopAddresses[i + 1],
+              distanceKm: el.distance.value / 1000,
+              durationHours: el.duration.value / 3600,
+              status: 'OK',
+            });
+          } else {
+            realSegments.push({ from: hopAddresses[i], to: hopAddresses[i + 1], distanceKm: 0, durationHours: 0, status: el?.status ?? 'NO_ROUTE' });
+          }
+        } catch {
+          realSegments.push({ from: hopAddresses[i], to: hopAddresses[i + 1], distanceKm: 0, durationHours: 0, status: 'API_ERROR' });
+        }
+      }
+      const realTotalKm = realSegments.reduce((s, r) => s + r.distanceKm, 0);
+      const realTotalHours = realSegments.reduce((s, r) => s + r.durationHours, 0);
+      const haversineKm = route.totalDistanceKm;
+      const diff = realTotalKm - haversineKm;
+      const diffPct = haversineKm > 0 ? (diff / haversineKm) * 100 : 0;
+
+      return NextResponse.json({
+        ok: true,
+        priority,
+        route: {
+          id: route.id,
+          hops: route.hops.map((h, i) => ({
+            sequence: h.sequence, transitNodeName: h.transitNodeName, transitNodeType: h.transitNodeType,
+            address: h.address, action: h.action,
+            haversineKm: h.distanceFromPreviousKm,
+            realKm: realSegments[i]?.distanceKm ?? 0,
+            realDurationHours: realSegments[i]?.durationHours ?? 0,
+            realStatus: realSegments[i]?.status ?? 'N/A',
+          })),
+          haversineTotalKm: haversineKm,
+          realTotalKm: Math.round(realTotalKm * 10) / 10,
+          realTotalDurationHours: Math.round(realTotalHours * 10) / 10,
+          differenceKm: Math.round(diff * 10) / 10,
+          differencePct: Math.round(diffPct * 10) / 10,
+          vehicleType: route.vehicleType,
+          optimizedFor: route.optimizedFor,
+        },
+        message: `✓ Real Google Maps route: ${Math.round(realTotalKm)}km driving (${haversineKm}km haversine, ${diff > 0 ? '+' : ''}${Math.round(diffPct)}% vs straight-line).`,
+      });
+    }
+
+    // ── liveReport: consolidated live-test report (runs all 5 providers) ──
+    if (action === 'liveReport') {
+      const { stripeLive, paystackLive, flutterwaveLive, mapsLive } = await import('@/live');
+      const stellarMod = await import('@/live/stellar');
+      const startedAt = Date.now();
+      const [stripe, paystack, flutterwave, stellar, maps] = await Promise.all([
+        stripeLive.runStripeTest(),
+        paystackLive.runPaystackTest(),
+        flutterwaveLive.runFlutterwaveTest(),
+        stellarMod.runStellarTest(),
+        mapsLive.runMapsTest(),
+      ]);
+      const totalLatencyMs = Date.now() - startedAt;
+      const providers = [
+        { name: 'Stripe', ...stripe, tests: Object.values(stripe) },
+        { name: 'Paystack', ...paystack, tests: Object.values(paystack) },
+        { name: 'Flutterwave', ...flutterwave, tests: Object.values(flutterwave) },
+        { name: 'Stellar', ...stellar, tests: Object.values(stellar) },
+        { name: 'Google Maps', ...maps, tests: Object.values(maps) },
+      ];
+      const allTests = providers.flatMap((p) => p.tests);
+      const passed = allTests.filter((t) => t.success).length;
+      const failed = allTests.filter((t) => !t.success).length;
+      return NextResponse.json({
+        ok: true,
+        reportId: `LTR-${Date.now().toString(36).toUpperCase()}`,
+        generatedAt: new Date().toISOString(),
+        totalLatencyMs,
+        summary: {
+          totalTests: allTests.length,
+          passed, failed,
+          passRate: Math.round((passed / allTests.length) * 100),
+          providersTested: providers.length,
+        },
+        providers: providers.map((p) => ({
+          name: p.name,
+          passed: p.tests.filter((t) => t.success).length,
+          failed: p.tests.filter((t) => !t.success).length,
+          total: p.tests.length,
+          tests: p.tests.map((t) => ({
+            operation: t.operation, success: t.success, latencyMs: t.latencyMs,
+            status: t.status, summary: t.summary, error: t.error,
+          })),
+        })),
+        message: `✓ Live report: ${passed}/${allTests.length} tests passed across ${providers.length} providers (${failed} failed).`,
+      });
+    }
+
+    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps | planRouteLive | liveReport)' }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },
