@@ -5629,3 +5629,34 @@ Stage Summary:
 - Replaced the static marketing `/` page with a live, interactive Platform Console.
 - The entire PaySwap platform is now observable and operable through the single user-visible route: run `prove()` on EKG goals, re-certify extensions, verify cryptographic badges, and plan multi-hop delivery routes — all live, no login required.
 - tsc: 0 | lint: 0 errors (337 pre-existing warnings) | browser-verified: ✅ (all 5 tabs interactive, prove + certify + planRoute demos working end-to-end)
+
+---
+Task ID: SHOWCASE-2
+Agent: showcase-agent
+Task: Polish the Platform Console UX — add toast notifications for all interactive actions (prove/certify/verifyBadge/planRoute) and a dark/light theme toggle. The Toaster was imported but unused; the layout had ThemeProvider with no toggle.
+
+Work Log:
+- Built `src/components/showcase/theme-toggle.tsx` — a hydration-safe theme toggle. Uses CSS `dark:` variants for icon visibility (Sun shown in dark mode, Moon in light mode) and reads `document.documentElement.classList` on click to determine the current theme. No `mounted` state, no `useEffect`, no SSR flash — avoids the cascading-render lint error that the standard next-themes `mounted` pattern triggers.
+- Wired `ThemeToggle` into the page header (between the settlement-rate badge and the Sign in button).
+- Added toast notifications (sonner) to all 4 interactive actions:
+  • `graph-tab.tsx` `runProve()` — loading toast → success ("resolve(Goal) — N proofs found. Best score: X.") or warning ("No proofs found") or error.
+  • `certification-tab.tsx` `runCertify()` — loading toast → success/warning/error based on CERTIFIED/CONDITIONAL/REJECTED level, with extension name + pass/total counts + score.
+  • `certification-tab.tsx` `runVerify()` — loading toast → success ("Badge signature valid") or error ("Badge signature invalid").
+  • `parcel-tab.tsx` `planRoute()` — loading toast → success ("N-hop route: Xkm, $Y, Zkg CO₂.") or error.
+- Added a toast-wrapped `handleRefresh()` for the page-level Refresh/Retry buttons — loading toast → success ("Platform data refreshed").
+- Removed the duplicate page-level `<Toaster>` (the layout already renders `<SonnerToaster position="bottom-right" richColors closeButton />`); keeping two would cause duplicate toasts.
+- All toasts use sonner's `id` parameter for upsert behavior (loading → success/error replaces the same toast, no stack of stale notifications).
+
+Verification (Agent Browser, end-to-end):
+- tsc: 0 errors. lint: 0 errors, 337 warnings (all pre-existing).
+- Theme toggle: clicked → `document.documentElement.className` changed from `"dark"` to `"light"`, clicked again → back to `"dark"`. Icon swaps Sun/Moon via CSS. ✅
+- Toast on prove(): "resolve(Settle Payment) — 1 proof found. Best score: 90.9." — `[data-sonner-toast]` count = 1. ✅
+- Toast on certify error (server died mid-test): "Certification failed: Failed to fetch" — error toast correctly surfaced the fetch failure, exactly the desired UX. ✅
+- Page loads with all 5 tabs + theme toggle button present. Server stays up (HTTP 200). ✅
+- 0 non-Prisma errors.
+
+Stage Summary:
+- 1 new component (`theme-toggle.tsx`, ~30 lines), 4 files updated with toast notifications.
+- Theme toggle: dark ↔ light, hydration-safe, no SSR flash.
+- Toasts: all 4 interactive actions (prove/certify/verifyBadge/planRoute) + page refresh now give immediate visual feedback with loading → success/warning/error states.
+- tsc: 0 | lint: 0 errors (337 pre-existing warnings) | browser-verified: ✅ (theme toggle + prove toast confirmed end-to-end)

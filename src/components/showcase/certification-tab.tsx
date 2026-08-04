@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -37,11 +38,21 @@ export function CertificationTab({ reports }: { reports: CertificationReport[] |
   async function runCertify(extensionId: string) {
     setSelectedId(extensionId);
     setLoading(true); setError(null); setLiveReport(null);
+    toast.loading('Running 15 certification checks…', { id: 'certify' });
     try {
       const r = await postShowcase<CertifyResult>({ action: 'certify', extensionId });
       setLiveReport(r);
+      if (r.report.level === 'CERTIFIED') {
+        toast.success(`${r.extension.name} v${r.extension.version} — CERTIFIED. ${r.report.passed}/${r.report.totalChecks} checks, score ${r.report.score}/100.`, { id: 'certify' });
+      } else if (r.report.level === 'CONDITIONAL') {
+        toast.warning(`${r.extension.name} — CONDITIONAL. ${r.report.passed}/${r.report.totalChecks} passed, ${r.report.failed} failed.`, { id: 'certify' });
+      } else {
+        toast.error(`${r.extension.name} — REJECTED. ${r.report.failed} critical checks failed.`, { id: 'certify' });
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'certify failed');
+      const msg = e instanceof Error ? e.message : 'certify failed';
+      setError(msg);
+      toast.error(`Certification failed: ${msg}`, { id: 'certify' });
     } finally {
       setLoading(false);
     }
@@ -49,11 +60,19 @@ export function CertificationTab({ reports }: { reports: CertificationReport[] |
 
   async function runVerify(extensionId: string) {
     setVerifying(extensionId);
+    toast.loading('Verifying RSA-SHA256 badge signature…', { id: 'verify' });
     try {
       const r = await postShowcase<VerifyBadgeResult>({ action: 'verifyBadge', extensionId });
       setVerifyResult((p) => ({ ...p, [extensionId]: r }));
+      if (r.valid) {
+        toast.success('Badge signature valid — issued by PaySwap', { id: 'verify' });
+      } else {
+        toast.error(`Badge signature invalid — ${r.error ?? 'may be forged'}`, { id: 'verify' });
+      }
     } catch (e) {
-      setVerifyResult((p) => ({ ...p, [extensionId]: { ok: false, extensionId, valid: false, message: e instanceof Error ? e.message : 'verify failed' } }));
+      const msg = e instanceof Error ? e.message : 'verify failed';
+      setVerifyResult((p) => ({ ...p, [extensionId]: { ok: false, extensionId, valid: false, message: msg } }));
+      toast.error(`Verification failed: ${msg}`, { id: 'verify' });
     } finally {
       setVerifying(null);
     }

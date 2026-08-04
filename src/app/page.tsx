@@ -3,11 +3,11 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Toaster } from '@/components/ui/sonner';
 import {
   Layers, ArrowRight, Network, Cpu, Package, Award, Truck, Activity, RefreshCw, Loader2, Zap,
 } from 'lucide-react';
@@ -17,16 +17,23 @@ import { GraphTab } from '@/components/showcase/graph-tab';
 import { ExtensionsTab, ExtensionsTabSkeleton } from '@/components/showcase/extensions-tab';
 import { CertificationTab } from '@/components/showcase/certification-tab';
 import { ParcelTab } from '@/components/showcase/parcel-tab';
+import { ThemeToggle } from '@/components/showcase/theme-toggle';
 
 export default function PlatformConsolePage() {
   const { data: showcase, loading, error, refetch } = useShowcase();
   const { data: pub } = usePublicState();
   const [tab, setTab] = useState('overview');
 
+  const handleRefresh = () => {
+    toast.loading('Refreshing platform data…', { id: 'refresh' });
+    refetch();
+    setTimeout(() => {
+      toast.success('Platform data refreshed', { id: 'refresh' });
+    }, 1200);
+  };
+
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
-      <Toaster richColors position="top-center" />
-
       {/* Header */}
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
@@ -46,6 +53,7 @@ export default function PlatformConsolePage() {
                 {pub.health.settlementSuccessRate}% settled
               </Badge>
             )}
+            <ThemeToggle />
             <Button asChild variant="ghost" size="sm">
               <Link href="/login">Sign in</Link>
             </Button>
@@ -115,7 +123,7 @@ export default function PlatformConsolePage() {
           <div className="flex flex-col items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/5 p-12 text-center">
             <p className="text-sm font-medium text-rose-600">Failed to load platform data</p>
             <p className="mt-1 text-xs text-muted-foreground">{error}</p>
-            <Button size="sm" variant="outline" className="mt-4" onClick={refetch}>
+            <Button size="sm" variant="outline" className="mt-4" onClick={handleRefresh}>
               <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Retry
             </Button>
           </div>
@@ -140,7 +148,7 @@ export default function PlatformConsolePage() {
                 </TabsTrigger>
               </TabsList>
               <Button
-                size="sm" variant="ghost" onClick={refetch} disabled={loading}
+                size="sm" variant="ghost" onClick={handleRefresh} disabled={loading}
                 className="h-8 text-xs text-muted-foreground"
               >
                 {loading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}

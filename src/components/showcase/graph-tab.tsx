@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -52,13 +53,22 @@ export function GraphTab({ showcase }: { showcase: ShowcaseData | null }) {
   const [error, setError] = useState<string | null>(null);
 
   async function runProve(goalId: string) {
+    const goal = goals.find((g) => g.id === goalId);
     setSelectedGoal(goalId);
     setLoading(true); setError(null); setResult(null);
+    toast.loading('Proving… backward-chaining through the capability graph', { id: 'prove' });
     try {
       const r = await postShowcase<ProveResult>({ action: 'prove', goalId });
       setResult(r);
+      if (r.proofs.length > 0) {
+        toast.success(`resolve(${goal?.name ?? 'goal'}) — ${r.proofs.length} proof${r.proofs.length === 1 ? '' : 's'} found. Best score: ${(r.best as { plannerScore?: number }).plannerScore ?? '—'}.`, { id: 'prove' });
+      } else {
+        toast.warning('No proofs found — the goal cannot be satisfied under the given constraints', { id: 'prove' });
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'prove failed');
+      const msg = e instanceof Error ? e.message : 'prove failed';
+      setError(msg);
+      toast.error(`prove() failed: ${msg}`, { id: 'prove' });
     } finally {
       setLoading(false);
     }

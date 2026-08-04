@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -50,11 +51,15 @@ export function ParcelTab({ showcase }: { showcase: ShowcaseData | null }) {
 
   async function planRoute() {
     setLoading(true); setError(null); setRoute(null);
+    toast.loading(`Planning ${priority.toLowerCase()} route through transit hubs…`, { id: 'route' });
     try {
       const r = await postShowcase<PlanRouteResult>({ action: 'planRoute', priority });
       setRoute(r);
+      toast.success(`${r.route.hops.length}-hop route: ${r.route.totalDistanceKm}km, ${r.route.estimatedCost}, ${r.route.estimatedCarbon}kg CO₂.`, { id: 'route' });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'plan failed');
+      const msg = e instanceof Error ? e.message : 'plan failed';
+      setError(msg);
+      toast.error(`Route planning failed: ${msg}`, { id: 'route' });
     } finally {
       setLoading(false);
     }
