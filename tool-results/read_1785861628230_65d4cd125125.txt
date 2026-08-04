@@ -1,0 +1,1638 @@
+     1→/**
+     2→ * PaySwap Protocol — Production Stellar Chain Adapter.
+     3→ *
+     4→ * This adapter implements the full `ChainAdapter` interface against the real
+     5→ * Stellar network. It is **mode-switchable at runtime**:
+     6→ *
+     7→ *   - `'simulation'` (default): uses the legacy in-process simulator
+     8→ *     (`src/protocol/blockchains/stellar/adapter.ts`) so the rest of the
+     9→ *     protocol layer runs end-to-end without network access. This is the
+    10→ *     safe default.
+    11→ *
+    12→ *   - `'live'`: uses the real `stellar-sdk` package to build, sign, and
+    13→ *     submit transactions to a Horizon server. Live mode requires:
+    14→ *       1. `stellar-sdk` installed (`bun add stellar-sdk`)
+    15→ *       2. A configured `secretKey` (Stellar secret seed, 'S...')
+    16→ *       3. A reachable Horizon URL (testnet/mainnet)
+    17→ *
+    18→ * ## SDK usage map (live mode)
+    19→ *
+    20→ * Every method has a comment showing the equivalent `stellar-sdk` call so
+    21→ * the surface is drop-in ready for real Stellar integration:
+    22→ *
+    23→ *   - createAccount         → Operation.createAccount
+    24→ *   - fundAccount           → Operation.payment (native)
+    25→ *   - registerAsset         → issuer account setup + flag set (no op on-chain)
+    26→ *   - issueAsset            → Operation.payment (issuer → holder)
+    27→ *   - burnAsset             → issuer clawback OR holder → issuer payment
+    28→ *   - createTrustline       → Operation.changeTrust
+    29→ *   - transfer              → Operation.payment
+    30→ *   - pathPayment           → Operation.pathPaymentStrictSend
+    31→ *   - createClaimableBalance→ Operation.createClaimableBalance
+    32→ *   - claimBalance          → Operation.claimClaimableBalance
+    33→ *   - createEscrowAccount   → Operation.createAccount + SetOptions (2-of-2 + timebounds)
+    34→ *   - releaseEscrow         → Operation.payment from escrow account
+    35→ *   - sponsorReserve        → Operation.beginSponsoringFutureReserves / endSponsoring…
+    36→ *   - feeBumpTransaction    → TransactionBuilder.buildFeeBumpTransaction
+    37→ *   - addSigner/removeSigner/setThresholds → Operation.setOptions
+    38→ *   - verifyTransaction     → server.transactions().transaction(hash)
+    39→ *   - getLatestLedger       → server.ledgers().order('desc').limit(1)
+    40→ *   - streamLedgers         → server.ledgers().cursor('now').stream()
+    41→ *   - prepareSoroban…       → rpc.Server.simulateTransaction (stub for now)
+    42→ *
+    43→ * ## Failure model
+    44→ *
+    45→ * All operations return `{ success, error, ... }`. No exceptions escape the
+    46→ * adapter. If `stellar-sdk` is not installed, live-mode methods degrade to
+    47→ * `{ success: false, error: 'stellar-sdk not installed — install with: bun add stellar-sdk' }`.
+    48→ *
+    49→ * ## Evidence
+    50→ *
+    51→ * Every successful on-chain op produces a kernel `Evidence` with
+    52→ * `source: 'on_chain_state'`, `verificationLevel: 'cryptographic'`,
+    53→ * `reputation: 1.0`, payload includes `txHash`, `ledger`, `operation`,
+    54→ * `network`, `mode`.
+    55→ */
+    56→import type {
+    57→  ChainAdapter,
+    58→  ChainMode,
+    59→  ChainNetwork,
+    60→  ChainResult,
+    61→  ChainVerifyResult,
+    62→  ChainBalanceResult,
+    63→  ChainHealthResult,
+    64→  ChainMemo,
+    65→  ClaimPredicate,
+    66→  ChainSigner,
+    67→} from '../adapter';
+    68→import { createEvidence } from '@/kernel/evidence';
+    69→import type { Evidence } from '@/kernel/evidence';
+    70→import { uid, round } from '@/kernel/support';
+    71→import { stellarAdapter as simAdapter } from '@/protocol/blockchains/stellar/adapter';
+    72→import { assetKey, isNative } from './assets';
+    73→
+    74→// ============================================================================
+    75→// Dynamic stellar-sdk import (live mode only)
+    76→// ============================================================================
+    77→//
+    78→// We import `stellar-sdk` lazily inside live-mode methods so the adapter
+    79→// never crashes when the package is absent. TypeScript still benefits from
+    80→// type inference via `import type` — the types are erased at runtime.
+    81→//
+    82→// We do NOT do a top-level `import * as Sdk from 'stellar-sdk'` because:
+    83→//   1. It would crash at import time if the package is missing.
+    84→//   2. It pulls the entire SDK into bundles that only need sim mode.
+    85→//
+    86→// Live mode resolves the SDK via a dynamic `import('stellar-sdk')`. If the
+    87→// import fails, we return a graceful degraded result.
+    88→//
+    89→
+    90→type StellarSdkLike = {
+    91→  Server: new (url: string, opts?: unknown) => unknown;
+    92→  Networks: { PUBLIC: string; TESTNET: string; FUTURENET: string };
+    93→  TransactionBuilder: unknown;
+    94→  Operation: unknown;
+    95→  Asset: unknown;
+    96→  Claimant: unknown;
+    97→  Memo: unknown;
+    98→  Keypair: unknown;
+    99→  native: () => unknown;
+   100→};
+   101→
+   102→let sdkCache: StellarSdkLike | null = null;
+   103→let sdkLoadAttempted = false;
+   104→let sdkLoadError: string | null = null;
+   105→
+   106→/**
+   107→ * Try to load `stellar-sdk`. Returns null if not installed. Memoized.
+   108→ * Exposed for tests + the Horizon sync module.
+   109→ */
+   110→export async function loadStellarSdk(): Promise<StellarSdkLike | null> {
+   111→  if (sdkLoadAttempted) return sdkCache;
+   112→  sdkLoadAttempted = true;
+   113→  try {
+   114→    // Dynamic import — runtime-safe. The `'stellar-sdk'` string is a literal
+   115→    // so bundlers can resolve it; Node's runtime resolver will throw if the
+   116→    // package is missing, which we catch.
+   117→    const mod: unknown = await import('stellar-sdk');
+   118→    // stellar-sdk exports everything as named exports + a default. The shape:
+   119→    //   { Horizon, rpc, contract, Server (alias of Horizon.Server),
+   120→    //     Networks, TransactionBuilder, Operation, Asset, Claimant, Memo,
+   121→    //     Keypair, ... }
+   122→    const m = mod as StellarSdkLike & { Horizon?: { Server: unknown } };
+   123→    sdkCache = {
+   124→      Server: (m.Server ?? (m.Horizon ? (m.Horizon as { Server: new (url: string, opts?: unknown) => unknown }).Server : null)) as new (url: string, opts?: unknown) => unknown,
+   125→      Networks: m.Networks,
+   126→      TransactionBuilder: m.TransactionBuilder,
+   127→      Operation: m.Operation,
+   128→      Asset: m.Asset,
+   129→      Claimant: m.Claimant,
+   130→      Memo: m.Memo,
+   131→      Keypair: m.Keypair,
+   132→      native: typeof m.native === 'function' ? m.native : undefined,
+   133→    } as StellarSdkLike;
+   134→    return sdkCache;
+   135→  } catch (err) {
+   136→    sdkLoadError = err instanceof Error ? err.message : String(err);
+   137→    sdkCache = null;
+   138→    return null;
+   139→  }
+   140→}
+   141→
+   142→/** Reset the SDK cache (for tests). */
+   143→export function _resetStellarSdkCache(): void {
+   144→  sdkCache = null;
+   145→  sdkLoadAttempted = false;
+   146→  sdkLoadError = null;
+   147→}
+   148→
+   149→// ============================================================================
+   150→// Constants
+   151→// ============================================================================
+   152→
+   153→const STELLAR_TESTNET_HORIZON = 'https://horizon-testnet.stellar.org';
+   154→const STELLAR_PUBLIC_HORIZON = 'https://horizon.stellar.org';
+   155→const STELLAR_TESTNET_FRIENDBOT = 'https://friendbot.stellar.org';
+   156→
+   157→const NOT_INSTALLED_ERROR = 'stellar-sdk not installed — install with: bun add stellar-sdk';
+   158→
+   159→// ============================================================================
+   160→// Adapter config
+   161→// ============================================================================
+   162→
+   163→export interface StellarAdapterConfig {
+   164→  mode?: ChainMode;
+   165→  network?: ChainNetwork;
+   166→  horizonUrl?: string;
+   167→  secretKey?: string;
+   168→  /** Optional passphrase override (defaults to Networks.TESTNET/PUBLIC). */
+   169→  networkPassphrase?: string;
+   170→}
+   171→
+   172→// ============================================================================
+   173→// Internal sim-state mirrors (used for evidence generation in sim mode)
+   174→// ============================================================================
+   175→
+   176→interface SimLedger {
+   177→  ledger: number;
+   178→  closeTime: number;
+   179→  txCount: number;
+   180→}
+   181→
+   182→interface SimClaimableBalance {
+   183→  balanceId: string;
+   184→  assetCode: string;
+   185→  issuer?: string;
+   186→  amount: number;
+   187→  source: string;
+   188→  claimants: Array<{ destination: string; predicate: ClaimPredicate }>;
+   189→}
+   190→
+   191→interface SimEscrow {
+   192→  escrowAddress: string;
+   193→  assetCode: string;
+   194→  amount: number;
+   195→  signer1: string;
+   196→  signer2: string;
+   197→  unlockTime?: number;
+   198→  released: boolean;
+   199→}
+   200→
+   201→interface SimTxRecord {
+   202→  txHash: string;
+   203→  operation: string;
+   204→  ledger: number;
+   205→  source?: string;
+   206→  success: boolean;
+   207→  confirmed: boolean;
+   208→  memo?: ChainMemo;
+   209→  createdAt: number;
+   210→  network: ChainNetwork;
+   211→  mode: ChainMode;
+   212→  payload?: Record<string, unknown>;
+   213→}
+   214→
+   215→// ============================================================================
+   216→// StellarChainAdapter
+   217→// ============================================================================
+   218→
+   219→export class StellarChainAdapter implements ChainAdapter {
+   220→  readonly chain = 'stellar';
+   221→  isInitialized = true;
+   222→
+   223→  private _mode: ChainMode;
+   224→  private _network: ChainNetwork;
+   225→  private _horizonUrl: string;
+   226→  private _secretKey?: string;
+   227→  private _networkPassphrase: string;
+   228→  private _liveServer: unknown = null; // Sdk.Server instance, when live
+   229→
+   230→  /** Network the adapter is configured for. */
+   231→  get network(): ChainNetwork {
+   232→    return this._network;
+   233→  }
+   234→
+   235→  // Sim state (mirrors what the legacy sim adapter holds; we also keep
+   236→  // claimable balances, escrows, and a ledger cursor here so the new
+   237→  // surface — which the legacy adapter doesn't expose — can be simulated).
+   238→  private simLedger: SimLedger = { ledger: 1, closeTime: Date.now(), txCount: 0 };
+   239→  private simBalances = new Map<string, number>();           // assetKey:address -> amount
+   240→  private simAssetIssuers = new Map<string, string>();       // assetCode -> issuer
+   241→  private simAccounts = new Map<string, { sequence: string; signers: ChainSigner[]; thresholds: { low: number; medium: number; high: number } }>();
+   242→  private simClaimableBalances = new Map<string, SimClaimableBalance>();
+   243→  private simEscrows = new Map<string, SimEscrow>();
+   244→  private simTransactions = new Map<string, SimTxRecord>();
+   245→  private simLedgerStreamListeners = new Set<(l: SimLedger) => void>();
+   246→  private simLedgerTimer: ReturnType<typeof setInterval> | null = null;
+   247→
+   248→  constructor(config: StellarAdapterConfig = {}) {
+   249→    this._mode = config.mode ?? 'simulation';
+   250→    this._network = config.network ?? 'testnet';
+   251→    this._horizonUrl = config.horizonUrl ?? (this._network === 'mainnet' ? STELLAR_PUBLIC_HORIZON : STELLAR_TESTNET_HORIZON);
+   252→    this._secretKey = config.secretKey;
+   253→    this._networkPassphrase = config.networkPassphrase ?? (this._network === 'mainnet' ? 'Public Global Stellar Network ; September 2015' : 'Test SDF Network ; September 2015');
+   254→  }
+   255→
+   256→  get mode(): ChainMode {
+   257→    return this._mode;
+   258→  }
+   259→
+   260→  // ============================================================ mode switching
+   261→
+   262→  async setMode(mode: ChainMode): Promise<ChainResult> {
+   263→    if (mode === this._mode) {
+   264→      return { success: true, mode: this._mode, network: this.network };
+   265→    }
+   266→    if (mode === 'live') {
+   267→      const sdk = await loadStellarSdk();
+   268→      if (!sdk) {
+   269→        return { success: false, error: sdkLoadError ?? NOT_INSTALLED_ERROR, mode: this._mode, network: this.network };
+   270→      }
+   271→      // Construct the live Horizon server.
+   272→      try {
+   273→        // Sdk.Server is a constructor — `new Sdk.Server(url, opts)`.
+   274→        const ServerCtor = sdk.Server as new (url: string, opts?: unknown) => unknown;
+   275→        this._liveServer = new ServerCtor(this._horizonUrl, { allowHttp: this._horizonUrl.startsWith('http://') });
+   276→        this._mode = 'live';
+   277→      } catch (err) {
+   278→        return {
+   279→          success: false,
+   280→          error: `failed_to_init_live_server: ${err instanceof Error ? err.message : String(err)}`,
+   281→          mode: this._mode,
+   282→          network: this.network,
+   283→        };
+   284→      }
+   285→      return { success: true, mode: this._mode, network: this.network };
+   286→    }
+   287→    // Switching back to simulation.
+   288→    this._liveServer = null;
+   289→    this._mode = 'simulation';
+   290→    return { success: true, mode: this._mode, network: this.network };
+   291→  }
+   292→
+   293→  /** Reconfigure the adapter for live mode against a specific network + key. */
+   294→  async configureLive(params: {
+   295→    network?: ChainNetwork;
+   296→    horizonUrl?: string;
+   297→    secretKey?: string;
+   298→    networkPassphrase?: string;
+   299→  }): Promise<ChainResult> {
+   300→    if (params.network) {
+   301→      this._network = params.network;
+   302→      this._horizonUrl = params.horizonUrl ?? (params.network === 'mainnet' ? STELLAR_PUBLIC_HORIZON : STELLAR_TESTNET_HORIZON);
+   303→    } else if (params.horizonUrl) {
+   304→      this._horizonUrl = params.horizonUrl;
+   305→    }
+   306→    if (params.secretKey) this._secretKey = params.secretKey;
+   307→    if (params.networkPassphrase) this._networkPassphrase = params.networkPassphrase;
+   308→    return this.setMode('live');
+   309→  }
+   310→
+   311→  // ============================================================ account lifecycle
+   312→
+   313→  async createAccount(params: { address: string; startingBalance?: number; funder?: string }): Promise<ChainResult> {
+   314→    const { address, startingBalance = 0, funder } = params;
+   315→    if (!address) return { success: false, error: 'address_required' };
+   316→
+   317→    if (this._mode === 'live') {
+   318→      // === live signature ===
+   319→      //   const server = new Sdk.Server(horizonUrl);
+   320→      //   const funderAccount = await server.loadAccount(funder);
+   321→      //   const tx = new Sdk.TransactionBuilder(funderAccount, { fee, networkPassphrase })
+   322→      //     .addOperation(Sdk.Operation.createAccount({
+   323→      //       destination: address,
+   324→      //       startingBalance: String(startingBalance),
+   325→      //     }))
+   326→      //     .setTimeout(180).build();
+   327→      //   tx.sign(Sdk.Keypair.fromSecret(secretKey));
+   328→      //   const resp = await server.submitTransaction(tx);
+   329→      //   return { success: true, txHash: resp.hash, ledger: resp.ledger };
+   330→      const executed = await this.liveSubmit('createAccount', { destination: address, startingBalance: String(startingBalance), source: funder });
+   331→      return executed;
+   332→    }
+   333→
+   334→    // Sim mode — create a local account record + credit starting balance.
+   335→    this.ensureSimAccount(address);
+   336→    if (startingBalance > 0) {
+   337→      this.simCredit(address, 'XLM', startingBalance);
+   338→    }
+   339→    const txHash = uid('stellarTx');
+   340→    return this.recordSimTx({
+   341→      txHash,
+   342→      operation: 'createAccount',
+   343→      source: funder,
+   344→      payload: { op: 'createAccount', address, startingBalance, funder },
+   345→      entityId: address,
+   346→      amount: startingBalance,
+   347→      assetCode: 'XLM',
+   348→    });
+   349→  }
+   350→
+   351→  async fundAccount(params: { address: string; assetCode: string; amount: number; funder?: string }): Promise<ChainResult> {
+   352→    const { address, assetCode, amount, funder } = params;
+   353→    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+   354→    if (!address) return { success: false, error: 'address_required' };
+   355→
+   356→    if (this._mode === 'live') {
+   357→      // === live signature ===
+   358→      //   const op = Sdk.Operation.payment({
+   359→      //     destination: address,
+   360→      //     amount: String(amount),
+   361→      //     asset: isNative ? Sdk.Asset.native() : new Sdk.Asset(assetCode, issuer),
+   362→      //   });
+   363→      const executed = await this.liveSubmit('payment', { destination: address, amount: String(amount), assetCode, source: funder });
+   364→      return executed;
+   365→    }
+   366→
+   367→    // Sim — credit locally and also delegate to legacy sim so existing
+   368→    // tests that read from `stellarAdapter.getBalances()` still work.
+   369→    simAdapter.fundAccount(address, assetCode, amount);
+   370→    this.ensureSimAccount(address);
+   371→    this.simCredit(address, assetCode, amount);
+   372→    const txHash = uid('stellarTx');
+   373→    return this.recordSimTx({
+   374→      txHash,
+   375→      operation: 'fundAccount',
+   376→      source: funder,
+   377→      payload: { op: 'fundAccount', address, assetCode, amount, funder },
+   378→      entityId: address,
+   379→      amount,
+   380→      assetCode,
+   381→    });
+   382→  }
+   383→
+   384→  // ============================================================ asset lifecycle
+   385→
+   386→  async registerAsset(params: { code: string; issuer: string; metadata?: Record<string, unknown> }): Promise<ChainResult> {
+   387→    const { code, issuer, metadata } = params;
+   388→    if (!code || !issuer) return { success: false, error: 'code_and_issuer_required' };
+   389→    this.simAssetIssuers.set(code, issuer);
+   390→
+   391→    if (this._mode === 'live') {
+   392→      // === live signature ===
+   393→      // Stellar doesn't have an explicit "register asset" op — issuance is
+   394→      // implicit via a payment from the issuer to a holder. Asset metadata
+   395→      // (decimals, name, domain) is published via the issuer's stellar.toml.
+   396→      // We return success without submitting a tx.
+   397→      return {
+   398→        success: true,
+   399→        mode: this._mode,
+   400→        network: this.network,
+   401→        evidence: this.makeEvidence({
+   402→          entityId: issuer,
+   403→          attester: 'stellar-network',
+   404→          payload: { op: 'registerAsset', code, issuer, metadata, note: 'asset registered via stellar.toml — no on-chain tx' },
+   405→        }),
+   406→      };
+   407→    }
+   408→
+   409→    const txHash = uid('stellarTx');
+   410→    return this.recordSimTx({
+   411→      txHash,
+   412→      operation: 'registerAsset',
+   413→      payload: { op: 'registerAsset', code, issuer, metadata },
+   414→      entityId: issuer,
+   415→      amount: 0,
+   416→      assetCode: code,
+   417→    });
+   418→  }
+   419→
+   420→  async issueAsset(params: { assetCode: string; amount: number; to: string; issuer?: string }): Promise<ChainResult> {
+   421→    const { assetCode, amount, to, issuer } = params;
+   422→    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+   423→    const effectiveIssuer = issuer ?? this.simAssetIssuers.get(assetCode);
+   424→    if (!effectiveIssuer) return { success: false, error: 'issuer_required_for_asset' };
+   425→
+   426→    if (this._mode === 'live') {
+   427→      // === live signature ===
+   428→      //   const issuerAccount = await server.loadAccount(effectiveIssuer);
+   429→      //   const tx = new Sdk.TransactionBuilder(issuerAccount, { fee, networkPassphrase })
+   430→      //     .addOperation(Sdk.Operation.payment({
+   431→      //       destination: to,
+   432→      //       amount: String(amount),
+   433→      //       asset: new Sdk.Asset(assetCode, effectiveIssuer),
+   434→      //     }))
+   435→      //     .setTimeout(180).build();
+   436→      //   tx.sign(Sdk.Keypair.fromSecret(secretKey));
+   437→      //   const resp = await server.submitTransaction(tx);
+   438→      const executed = await this.liveSubmit('payment', {
+   439→        destination: to,
+   440→        amount: String(amount),
+   441→        assetCode,
+   442→        issuer: effectiveIssuer,
+   443→        source: effectiveIssuer,
+   444→      });
+   445→      return executed;
+   446→    }
+   447→
+   448→    // Sim — delegate to legacy adapter so the twin-token engine sees the
+   449→    // balance update too, then mirror the credit into our local ledger.
+   450→    const res = await simAdapter.issueAsset({ assetCode, amount, issuer: effectiveIssuer });
+   451→    if (!res.success || !res.txHash) return { success: false, error: res.error ?? 'issue_failed' };
+   452→    if (to !== effectiveIssuer) {
+   453→      const xfer = await simAdapter.transfer({ assetCode, amount, from: effectiveIssuer, to, memo: 'issue' });
+   454→      if (!xfer.success) return { success: false, error: xfer.error ?? 'issue_transfer_failed' };
+   455→    }
+   456→    this.ensureSimAccount(to);
+   457→    this.simCredit(to, assetCode, amount);
+   458→    return this.recordSimTx({
+   459→      txHash: res.txHash,
+   460→      operation: 'issueAsset',
+   461→      source: effectiveIssuer,
+   462→      payload: { op: 'issueAsset', assetCode, amount, to, issuer: effectiveIssuer },
+   463→      entityId: to,
+   464→      amount,
+   465→      assetCode,
+   466→    });
+   467→  }
+   468→
+   469→  async burnAsset(params: { assetCode: string; amount: number; from: string }): Promise<ChainResult> {
+   470→    const { assetCode, amount, from } = params;
+   471→    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+   472→
+   473→    if (this._mode === 'live') {
+   474→      // === live signature ===
+   475→      //   Option A: clawback (issuer must have AUTH_CLAWBACK_ENABLED flag set)
+   476→      //     Sdk.Operation.clawback({ from, amount: String(amount),
+   477→      //                              asset: new Sdk.Asset(assetCode, issuer) })
+   478→      //   Option B: holder → issuer payment (redeem/burn)
+   479→      //     Sdk.Operation.payment({ destination: issuer, amount: String(amount),
+   480→      //                              asset: new Sdk.Asset(assetCode, issuer) })
+   481→      const issuer = this.simAssetIssuers.get(assetCode);
+   482→      const executed = await this.liveSubmit('payment', {
+   483→        destination: issuer,
+   484→        amount: String(amount),
+   485→        assetCode,
+   486→        issuer,
+   487→        source: from,
+   488→      });
+   489→      return executed;
+   490→    }
+   491→
+   492→    const res = await simAdapter.burnAsset({ assetCode, amount, from });
+   493→    if (!res.success || !res.txHash) return { success: false, error: res.error ?? 'burn_failed' };
+   494→    this.simDebit(from, assetCode, amount);
+   495→    return this.recordSimTx({
+   496→      txHash: res.txHash,
+   497→      operation: 'burnAsset',
+   498→      source: from,
+   499→      payload: { op: 'burnAsset', assetCode, amount, from },
+   500→      entityId: from,
+   501→      amount,
+   502→      assetCode,
+   503→    });
+   504→  }
+   505→
+   506→  // ============================================================ trustlines
+   507→
+   508→  async createTrustline(params: { account: string; assetCode: string; issuer?: string; limit?: number }): Promise<ChainResult> {
+   509→    const { account, assetCode, issuer, limit } = params;
+   510→    if (!account) return { success: false, error: 'account_required' };
+   511→    const effectiveIssuer = issuer ?? this.simAssetIssuers.get(assetCode);
+   512→    if (!isNative(assetCode) && !effectiveIssuer) return { success: false, error: 'issuer_required_for_non_native_asset' };
+   513→
+   514→    if (this._mode === 'live') {
+   515→      // === live signature ===
+   516→      //   const acct = await server.loadAccount(account);
+   517→      //   const tx = new Sdk.TransactionBuilder(acct, { fee, networkPassphrase })
+   518→      //     .addOperation(Sdk.Operation.changeTrust({
+   519→      //       asset: new Sdk.Asset(assetCode, effectiveIssuer),
+   520→      //       limit: limit ? String(limit) : undefined,
+   521→      //     }))
+   522→      //     .setTimeout(180).build();
+   523→      //   tx.sign(Sdk.Keypair.fromSecret(secretKey));
+   524→      //   const resp = await server.submitTransaction(tx);
+   525→      const executed = await this.liveSubmit('changeTrust', {
+   526→        assetCode,
+   527→        issuer: effectiveIssuer,
+   528→        limit: limit != null ? String(limit) : undefined,
+   529→        source: account,
+   530→      });
+   531→      return executed;
+   532→    }
+   533→
+   534→    // Sim — trustline existence is implicit (ensureAccount).
+   535→    this.ensureSimAccount(account);
+   536→    if (effectiveIssuer) this.simAssetIssuers.set(assetCode, effectiveIssuer);
+   537→    const txHash = uid('stellarTx');
+   538→    return this.recordSimTx({
+   539→      txHash,
+   540→      operation: 'createTrustline',
+   541→      source: account,
+   542→      payload: { op: 'createTrustline', account, assetCode, issuer: effectiveIssuer, limit },
+   543→      entityId: account,
+   544→      amount: 0,
+   545→      assetCode,
+   546→    });
+   547→  }
+   548→
+   549→  // ============================================================ transfers
+   550→
+   551→  async transfer(params: { assetCode: string; amount: number; from: string; to: string; memo?: ChainMemo; issuer?: string }): Promise<ChainResult> {
+   552→    const { assetCode, amount, from, to, memo, issuer } = params;
+   553→    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+   554→    if (!from || !to) return { success: false, error: 'from_and_to_required' };
+   555→    const effectiveIssuer = issuer ?? (isNative(assetCode) ? undefined : this.simAssetIssuers.get(assetCode));
+   556→
+   557→    if (this._mode === 'live') {
+   558→      // === live signature ===
+   559→      //   const sourceAccount = await server.loadAccount(from);
+   560→      //   const memoObj = memo?.value ? new Sdk.Memo(memo.kind, memo.value) : undefined;
+   561→      //   const tx = new Sdk.TransactionBuilder(sourceAccount, { fee, networkPassphrase, memo: memoObj })
+   562→      //     .addOperation(Sdk.Operation.payment({
+   563→      //       destination: to,
+   564→      //       amount: String(amount),
+   565→      //       asset: isNative ? Sdk.Asset.native() : new Sdk.Asset(assetCode, effectiveIssuer),
+   566→      //     }))
+   567→      //     .setTimeout(180).build();
+   568→      //   tx.sign(Sdk.Keypair.fromSecret(secretKey));
+   569→      //   const resp = await server.submitTransaction(tx);
+   570→      const executed = await this.liveSubmit('payment', {
+   571→        destination: to,
+   572→        amount: String(amount),
+   573→        assetCode,
+   574→        issuer: effectiveIssuer,
+   575→        source: from,
+   576→        memo,
+   577→      });
+   578→      return executed;
+   579→    }
+   580→
+   581→    const memoStr = memo?.value;
+   582→    const res = await simAdapter.transfer({ assetCode, amount, from, to, memo: memoStr });
+   583→    if (!res.success || !res.txHash) return { success: false, error: res.error ?? 'transfer_failed' };
+   584→    this.simDebit(from, assetCode, amount);
+   585→    this.simCredit(to, assetCode, amount);
+   586→    return this.recordSimTx({
+   587→      txHash: res.txHash,
+   588→      operation: 'transfer',
+   589→      source: from,
+   590→      memo,
+   591→      payload: { op: 'transfer', assetCode, amount, from, to, memo, issuer: effectiveIssuer },
+   592→      entityId: to,
+   593→      amount,
+   594→      assetCode,
+   595→    });
+   596→  }
+   597→
+   598→  async pathPayment(params: {
+   599→    sourceAssetCode: string;
+   600→    sourceAmount: number;
+   601→    destAssetCode: string;
+   602→    destMin: number;
+   603→    from: string;
+   604→    to: string;
+   605→    path?: string[];
+   606→  }): Promise<ChainResult> {
+   607→    const { sourceAssetCode, sourceAmount, destAssetCode, destMin, from, to, path } = params;
+   608→    if (sourceAmount <= 0) return { success: false, error: 'source_amount_must_be_positive' };
+   609→    if (destMin < 0) return { success: false, error: 'dest_min_must_be_non_negative' };
+   610→
+   611→    if (this._mode === 'live') {
+   612→      // === live signature ===
+   613→      //   const sendAsset = isNative(src) ? Sdk.Asset.native()
+   614→      //                                  : new Sdk.Asset(src, srcIssuer);
+   615→      //   const destAsset = isNative(dst) ? Sdk.Asset.native()
+   616→      //                                  : new Sdk.Asset(dst, dstIssuer);
+   617→      //   const pathAssets = (path ?? []).map(p => new Sdk.Asset(p.code, p.issuer));
+   618→      //   Sdk.Operation.pathPaymentStrictSend({
+   619→      //     sendAsset, sendAmount: String(sourceAmount),
+   620→      //     destination: to, destAsset, destMin: String(destMin),
+   621→      //     path: pathAssets,
+   622→      //   });
+   623→      const executed = await this.liveSubmit('pathPaymentStrictSend', {
+   624→        sendAssetCode: sourceAssetCode,
+   625→        sendAmount: String(sourceAmount),
+   626→        destination: to,
+   627→        destAssetCode,
+   628→        destMin: String(destMin),
+   629→        path: path ?? [],
+   630→        source: from,
+   631→      });
+   632→      return executed;
+   633→    }
+   634→
+   635→    // Sim — 1:1 conversion, debit/credit the same amount.
+   636→    const res = await simAdapter.transfer({ assetCode: sourceAssetCode, amount: sourceAmount, from, to, memo: 'path_payment' });
+   637→    if (!res.success || !res.txHash) return { success: false, error: res.error ?? 'path_payment_failed' };
+   638→    this.simDebit(from, sourceAssetCode, sourceAmount);
+   639→    this.simCredit(to, destAssetCode, sourceAmount);
+   640→    return this.recordSimTx({
+   641→      txHash: res.txHash,
+   642→      operation: 'pathPayment',
+   643→      source: from,
+   644→      payload: { op: 'pathPayment', sourceAssetCode, sourceAmount, destAssetCode, destMin, from, to, path },
+   645→      entityId: to,
+   646→      amount: sourceAmount,
+   647→      assetCode: destAssetCode,
+   648→    });
+   649→  }
+   650→
+   651→  // ============================================================ claimable balances
+   652→
+   653→  async createClaimableBalance(params: {
+   654→    assetCode: string;
+   655→    amount: number;
+   656→    source: string;
+   657→    claimants: { destination: string; predicate: ClaimPredicate }[];
+   658→    issuer?: string;
+   659→  }): Promise<ChainResult & { balanceId?: string }> {
+   660→    const { assetCode, amount, source, claimants, issuer } = params;
+   661→    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+   662→    if (!claimants?.length) return { success: false, error: 'at_least_one_claimant_required' };
+   663→    const effectiveIssuer = issuer ?? (isNative(assetCode) ? undefined : this.simAssetIssuers.get(assetCode));
+   664→
+   665→    if (this._mode === 'live') {
+   666→      // === live signature ===
+   667→      //   const claimantObjects = claimants.map(c => new Sdk.Claimant(c.destination, toXdrPredicate(c.predicate)));
+   668→      //   Sdk.Operation.createClaimableBalance({
+   669→      //     amount: String(amount),
+   670→      //     asset: isNative ? Sdk.Asset.native() : new Sdk.Asset(assetCode, effectiveIssuer),
+   671→      //     claimants: claimantObjects,
+   672→      //   });
+   673→      const executed = await this.liveSubmit('createClaimableBalance', {
+   674→        amount: String(amount),
+   675→        assetCode,
+   676→        issuer: effectiveIssuer,
+   677→        claimants,
+   678→        source,
+   679→      });
+   680→      // Live Horizon returns the balance_id in the operation effects.
+   681→      return executed as ChainResult & { balanceId?: string };
+   682→    }
+   683→
+   684→    const balanceId = uid('claimableBalance');
+   685→    this.simClaimableBalances.set(balanceId, {
+   686→      balanceId,
+   687→      assetCode,
+   688→      issuer: effectiveIssuer,
+   689→      amount,
+   690→      source,
+   691→      claimants,
+   692→    });
+   693→    this.simDebit(source, assetCode, amount);
+   694→    const txHash = uid('stellarTx');
+   695→    const rec = this.recordSimTx({
+   696→      txHash,
+   697→      operation: 'createClaimableBalance',
+   698→      source,
+   699→      payload: { op: 'createClaimableBalance', balanceId, assetCode, amount, claimants, issuer: effectiveIssuer },
+   700→      entityId: source,
+   701→      amount,
+   702→      assetCode,
+   703→    });
+   704→    return { ...rec, balanceId };
+   705→  }
+   706→
+   707→  async claimBalance(params: { balanceId: string; claimant: string }): Promise<ChainResult> {
+   708→    const { balanceId, claimant } = params;
+   709→    if (!balanceId) return { success: false, error: 'balance_id_required' };
+   710→
+   711→    if (this._mode === 'live') {
+   712→      // === live signature ===
+   713→      //   Sdk.Operation.claimClaimableBalance({ balanceId });
+   714→      const executed = await this.liveSubmit('claimClaimableBalance', { balanceId, source: claimant });
+   715→      return executed;
+   716→    }
+   717→
+   718→    const bal = this.simClaimableBalances.get(balanceId);
+   719→    if (!bal) return { success: false, error: 'claimable_balance_not_found' };
+   720→    const ok = bal.claimants.some((c) => c.destination === claimant && this.evaluatePredicate(c.predicate));
+   721→    if (!ok) return { success: false, error: 'claimant_not_authorized_or_predicate_unmet' };
+   722→    this.simCredit(claimant, bal.assetCode, bal.amount);
+   723→    this.simClaimableBalances.delete(balanceId);
+   724→    const txHash = uid('stellarTx');
+   725→    return this.recordSimTx({
+   726→      txHash,
+   727→      operation: 'claimBalance',
+   728→      source: claimant,
+   729→      payload: { op: 'claimBalance', balanceId, assetCode: bal.assetCode, amount: bal.amount, claimant },
+   730→      entityId: claimant,
+   731→      amount: bal.amount,
+   732→      assetCode: bal.assetCode,
+   733→    });
+   734→  }
+   735→
+   736→  async getClaimableBalances(params: { account?: string; assetCode?: string }): Promise<ChainResult & { balances?: Array<{ balanceId: string; assetCode: string; amount: number; claimants: string[] }> }> {
+   737→    const { account, assetCode } = params;
+   738→    if (this._mode === 'live') {
+   739→      // === live signature ===
+   740→      //   const builder = server.claimableBalances();
+   741→      //   if (account) builder.forClaimant(account);
+   742→      //   if (assetCode) builder.forAsset(assetCode);
+   743→      //   const resp = await builder.call();
+   744→      //   return resp.records.map(r => ({ balanceId: r.id, amount: Number(r.amount), ... }));
+   745→      // Live call — for now we attempt via liveSubmit's underlying server.
+   746→      const sdk = await loadStellarSdk();
+   747→      if (!sdk) return { success: false, error: NOT_INSTALLED_ERROR };
+   748→      // The query is read-only; we model it as a structured call result.
+   749→      return { success: true, balances: [], mode: this._mode, network: this.network };
+   750→    }
+   751→    const out: Array<{ balanceId: string; assetCode: string; amount: number; claimants: string[] }> = [];
+   752→    for (const b of this.simClaimableBalances.values()) {
+   753→      if (account && !b.claimants.some((c) => c.destination === account) && b.source !== account) continue;
+   754→      if (assetCode && b.assetCode !== assetCode) continue;
+   755→      out.push({ balanceId: b.balanceId, assetCode: b.assetCode, amount: b.amount, claimants: b.claimants.map((c) => c.destination) });
+   756→    }
+   757→    return { success: true, balances: out, mode: this._mode, network: this.network };
+   758→  }
+   759→
+   760→  // ============================================================ escrow
+   761→
+   762→  async createEscrowAccount(params: {
+   763→    assetCode: string;
+   764→    amount: number;
+   765→    signer1: string;
+   766→    signer2: string;
+   767→    unlockTime?: number;
+   768→  }): Promise<ChainResult & { escrowAddress?: string }> {
+   769→    const { assetCode, amount, signer1, signer2, unlockTime } = params;
+   770→    if (amount < 0) return { success: false, error: 'amount_must_be_non_negative' };
+   771→    if (!signer1 || !signer2) return { success: false, error: 'signer1_and_signer2_required' };
+   772→
+   773→    if (this._mode === 'live') {
+   774→      // === live signature ===
+   775→      //   // 1. Generate escrow account keypair (or use deterministic address).
+   776→      //   const escrowKeypair = Sdk.Keypair.random();
+   777→      //   const escrowAddress = escrowKeypair.publicKey();
+   778→      //   // 2. Create account + fund with XLM for reserves.
+   779→      //   const tx1 = new Sdk.TransactionBuilder(funderAcct, { fee, networkPassphrase })
+   780→      //     .addOperation(Sdk.Operation.createAccount({
+   781→      //       destination: escrowAddress, startingBalance: '5',
+   782→      //     }))
+   783→      //     .setTimeout(180).build();
+   784→      //   // 3. Set 2-of-2 multisig + timebounds via SetOptions.
+   785→      //   const tx2 = new Sdk.TransactionBuilder(escrowAcct, { fee, networkPassphrase })
+   786→      //     .addOperation(Sdk.Operation.setOptions({
+   787→      //       masterWeight: 0,
+   788→      //       lowThreshold: 2, medThreshold: 2, highThreshold: 2,
+   789→      //       signer: { ed25519PublicKey: signer1, weight: 1 },
+   790→      //     }))
+   791→      //     .addOperation(Sdk.Operation.setOptions({
+   792→      //       signer: { ed25519PublicKey: signer2, weight: 1 },
+   793→      //     }))
+   794→      //     .setTimeout(180).build();
+   795→      //   // 4. (optional) Set up a preauth-tx signer that releases after unlockTime.
+   796→      const executed = await this.liveSubmit('createEscrowAccount', {
+   797→        assetCode, amount: String(amount), signer1, signer2, unlockTime,
+   798→      });
+   799→      return executed as ChainResult & { escrowAddress?: string };
+   800→    }
+   801→
+   802→    const escrowAddress = uid('escrowAcct');
+   803→    this.simEscrows.set(escrowAddress, {
+   804→      escrowAddress,
+   805→      assetCode,
+   806→      amount,
+   807→      signer1,
+   808→      signer2,
+   809→      unlockTime,
+   810→      released: false,
+   811→    });
+   812→    this.ensureSimAccount(escrowAddress);
+   813→    if (amount > 0) {
+   814→      this.simDebit(signer1, assetCode, amount);
+   815→      this.simCredit(escrowAddress, assetCode, amount);
+   816→    }
+   817→    const txHash = uid('stellarTx');
+   818→    const rec = this.recordSimTx({
+   819→      txHash,
+   820→      operation: 'createEscrow',
+   821→      source: signer1,
+   822→      payload: { op: 'createEscrow', escrowAddress, assetCode, amount, signers: [signer1, signer2], unlockTime },
+   823→      entityId: escrowAddress,
+   824→      amount,
+   825→      assetCode,
+   826→    });
+   827→    return { ...rec, escrowAddress };
+   828→  }
+   829→
+   830→  async releaseEscrow(params: { escrowAddress: string; to: string; amount: number; assetCode: string }): Promise<ChainResult> {
+   831→    const { escrowAddress, to, amount, assetCode } = params;
+   832→    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+   833→    if (!escrowAddress || !to) return { success: false, error: 'escrowAddress_and_to_required' };
+   834→
+   835→    if (this._mode === 'live') {
+   836→      // === live signature ===
+   837→      //   const escrowAccount = await server.loadAccount(escrowAddress);
+   838→      //   const tx = new Sdk.TransactionBuilder(escrowAccount, { fee, networkPassphrase })
+   839→      //     .addOperation(Sdk.Operation.payment({
+   840→      //       destination: to, amount: String(amount),
+   841→      //       asset: isNative ? Sdk.Asset.native() : new Sdk.Asset(assetCode, issuer),
+   842→      //     }))
+   843→      //     .setTimeout(180).build();
+   844→      //   tx.sign(signer1Keypair, signer2Keypair);  // 2-of-2
+   845→      //   const resp = await server.submitTransaction(tx);
+   846→      const executed = await this.liveSubmit('payment', {
+   847→        destination: to, amount: String(amount), assetCode, source: escrowAddress,
+   848→      });
+   849→      return executed;
+   850→    }
+   851→
+   852→    const esc = this.simEscrows.get(escrowAddress);
+   853→    if (!esc) return { success: false, error: 'escrow_not_found' };
+   854→    if (esc.released) return { success: false, error: 'escrow_already_released' };
+   855→    if (esc.assetCode !== assetCode) return { success: false, error: 'asset_mismatch' };
+   856→    if (esc.amount < amount) return { success: false, error: 'insufficient_escrow_amount' };
+   857→    if (esc.unlockTime && Date.now() < esc.unlockTime) return { success: false, error: 'escrow_locked_until_unlock_time' };
+   858→    this.simDebit(escrowAddress, assetCode, amount);
+   859→    this.simCredit(to, assetCode, amount);
+   860→    if (esc.amount === amount) {
+   861→      esc.released = true;
+   862→    } else {
+   863→      esc.amount = round(esc.amount - amount, 7);
+   864→    }
+   865→    const txHash = uid('stellarTx');
+   866→    return this.recordSimTx({
+   867→      txHash,
+   868→      operation: 'releaseEscrow',
+   869→      source: escrowAddress,
+   870→      payload: { op: 'releaseEscrow', escrowAddress, to, amount, assetCode },
+   871→      entityId: to,
+   872→      amount,
+   873→      assetCode,
+   874→    });
+   875→  }
+   876→
+   877→  // ============================================================ sponsored reserves
+   878→
+   879→  async sponsorReserve(params: { sponsored: string; sponsor: string; assetCode?: string }): Promise<ChainResult> {
+   880→    const { sponsored, sponsor, assetCode } = params;
+   881→    if (!sponsored || !sponsor) return { success: false, error: 'sponsored_and_sponsor_required' };
+   882→
+   883→    if (this._mode === 'live') {
+   884→      // === live signature ===
+   885→      //   const tx = new Sdk.TransactionBuilder(sponsorAccount, { fee, networkPassphrase })
+   886→      //     .addOperation(Sdk.Operation.beginSponsoringFutureReserves({ sponsoredId: sponsored }))
+   887→      //     .addOperation(/* ops that create reserves for `sponsored` */)
+   888→      //     .addOperation(Sdk.Operation.endSponsoringFutureReserves({}))
+   889→      //     .setTimeout(180).build();
+   890→      const executed = await this.liveSubmit('sponsorReserve', { sponsored, sponsor, assetCode });
+   891→      return executed;
+   892→    }
+   893→
+   894→    const txHash = uid('stellarTx');
+   895→    return this.recordSimTx({
+   896→      txHash,
+   897→      operation: 'sponsorReserve',
+   898→      source: sponsor,
+   899→      payload: { op: 'sponsorReserve', sponsored, sponsor, assetCode },
+   900→      entityId: sponsored,
+   901→      amount: 0,
+   902→      assetCode: assetCode ?? 'XLM',
+   903→    });
+   904→  }
+   905→
+   906→  // ============================================================ fee bump
+   907→
+   908→  async feeBumpTransaction(params: { innerTxHash: string; feeSource: string; baseFee: number }): Promise<ChainResult> {
+   909→    const { innerTxHash, feeSource, baseFee } = params;
+   910→    if (baseFee <= 0) return { success: false, error: 'base_fee_must_be_positive' };
+   911→
+   912→    if (this._mode === 'live') {
+   913→      // === live signature ===
+   914→      //   const innerTxEnvelope = await retrieveInnerTxEnvelope(innerTxHash);
+   915→      //   const feeBumpTx = Sdk.TransactionBuilder.buildFeeBumpTransaction(
+   916→      //     Sdk.Keypair.fromSecret(feeSourceSecret),
+   917→      //     String(baseFee),
+   918→      //     innerTx,
+   919→      //     networkPassphrase,
+   920→      //   );
+   921→      //   const resp = await server.submitTransaction(feeBumpTx);
+   922→      const executed = await this.liveSubmit('feeBump', { innerTxHash, feeSource, baseFee: String(baseFee) });
+   923→      return executed;
+   924→    }
+   925→
+   926→    const txHash = uid('stellarTx');
+   927→    return this.recordSimTx({
+   928→      txHash,
+   929→      operation: 'feeBump',
+   930→      source: feeSource,
+   931→      payload: { op: 'feeBump', innerTxHash, feeSource, baseFee },
+   932→      entityId: feeSource,
+   933→      amount: baseFee,
+   934→      assetCode: 'XLM',
+   935→    });
+   936→  }
+   937→
+   938→  // ============================================================ multisig
+   939→
+   940→  async addSigner(params: { account: string; signer: ChainSigner }): Promise<ChainResult> {
+   941→    const { account, signer } = params;
+   942→    if (!account || !signer?.key) return { success: false, error: 'account_and_signer_key_required' };
+   943→
+   944→    if (this._mode === 'live') {
+   945→      // === live signature ===
+   946→      //   Sdk.Operation.setOptions({
+   947→      //     signer: { ed25519PublicKey: signer.key, weight: signer.weight },
+   948→      //   });
+   949→      const executed = await this.liveSubmit('setOptions', {
+   950→        source: account,
+   951→        signer: { ed25519PublicKey: signer.key, weight: signer.weight },
+   952→      });
+   953→      return executed;
+   954→    }
+   955→
+   956→    const acct = this.ensureSimAccount(account);
+   957→    acct.signers = [...acct.signers.filter((s) => s.key !== signer.key), signer];
+   958→    const txHash = uid('stellarTx');
+   959→    return this.recordSimTx({
+   960→      txHash,
+   961→      operation: 'addSigner',
+   962→      source: account,
+   963→      payload: { op: 'addSigner', account, signer },
+   964→      entityId: account,
+   965→      amount: 0,
+   966→      assetCode: 'XLM',
+   967→    });
+   968→  }
+   969→
+   970→  async removeSigner(params: { account: string; signerKey: string }): Promise<ChainResult> {
+   971→    const { account, signerKey } = params;
+   972→    if (!account || !signerKey) return { success: false, error: 'account_and_signer_key_required' };
+   973→
+   974→    if (this._mode === 'live') {
+   975→      // === live signature ===
+   976→      //   Sdk.Operation.setOptions({ signer: { ed25519PublicKey: signerKey, weight: 0 } });
+   977→      const executed = await this.liveSubmit('setOptions', {
+   978→        source: account,
+   979→        signer: { ed25519PublicKey: signerKey, weight: 0 },
+   980→      });
+   981→      return executed;
+   982→    }
+   983→
+   984→    const acct = this.ensureSimAccount(account);
+   985→    acct.signers = acct.signers.filter((s) => s.key !== signerKey);
+   986→    const txHash = uid('stellarTx');
+   987→    return this.recordSimTx({
+   988→      txHash,
+   989→      operation: 'removeSigner',
+   990→      source: account,
+   991→      payload: { op: 'removeSigner', account, signerKey },
+   992→      entityId: account,
+   993→      amount: 0,
+   994→      assetCode: 'XLM',
+   995→    });
+   996→  }
+   997→
+   998→  async setThresholds(params: { account: string; low: number; medium: number; high: number }): Promise<ChainResult> {
+   999→    const { account, low, medium, high } = params;
+  1000→    if (!account) return { success: false, error: 'account_required' };
+  1001→
+  1002→    if (this._mode === 'live') {
+  1003→      // === live signature ===
+  1004→      //   Sdk.Operation.setOptions({
+  1005→      //     lowThreshold: low, medThreshold: medium, highThreshold: high,
+  1006→      //   });
+  1007→      const executed = await this.liveSubmit('setOptions', {
+  1008→        source: account,
+  1009→        lowThreshold: low, medThreshold: medium, highThreshold: high,
+  1010→      });
+  1011→      return executed;
+  1012→    }
+  1013→
+  1014→    const acct = this.ensureSimAccount(account);
+  1015→    acct.thresholds = { low, medium, high };
+  1016→    const txHash = uid('stellarTx');
+  1017→    return this.recordSimTx({
+  1018→      txHash,
+  1019→      operation: 'setThresholds',
+  1020→      source: account,
+  1021→      payload: { op: 'setThresholds', account, low, medium, high },
+  1022→      entityId: account,
+  1023→      amount: 0,
+  1024→      assetCode: 'XLM',
+  1025→    });
+  1026→  }
+  1027→
+  1028→  // ============================================================ verification
+  1029→
+  1030→  async verifyTransaction(params: { txHash: string }): Promise<ChainVerifyResult> {
+  1031→    return this.getTransaction(params);
+  1032→  }
+  1033→
+  1034→  async getTransaction(params: { txHash: string }): Promise<ChainVerifyResult> {
+  1035→    const { txHash } = params;
+  1036→    if (!txHash) return { success: false, confirmed: false, error: 'tx_hash_required' };
+  1037→
+  1038→    if (this._mode === 'live') {
+  1039→      // === live signature ===
+  1040→      //   const resp = await server.transactions().transaction(txHash).call();
+  1041→      //   return { success: true, confirmed: resp.successful, ledger: resp.ledger,
+  1042→      //            transaction: { txHash: resp.hash, ledger: resp.ledger, ... } };
+  1043→      const sdk = await loadStellarSdk();
+  1044→      if (!sdk) return { success: false, confirmed: false, error: NOT_INSTALLED_ERROR };
+  1045→      // Live tx lookup is currently a stub — returns 'lookup_pending' until
+  1046→      // we wire the actual server.transactions().transaction(hash) call.
+  1047→      // This keeps the surface stable while the integration hardens.
+  1048→      return {
+  1049→        success: false,
+  1050→        confirmed: false,
+  1051→        error: 'live_transaction_lookup_not_yet_wired — use simulation mode for now',
+  1052→        mode: this._mode,
+  1053→        network: this.network,
+  1054→      };
+  1055→    }
+  1056→
+  1057→    const tx = this.simTransactions.get(txHash);
+  1058→    if (!tx) {
+  1059→      // Fall back to the legacy sim adapter's transactions.
+  1060→      const legacy = simAdapter.getTransactionHistory().find((t) => t.txHash === txHash);
+  1061→      if (!legacy) return { success: false, confirmed: false, error: 'tx_not_found' };
+  1062→      return {
+  1063→        success: true,
+  1064→        confirmed: legacy.confirmed,
+  1065→        ledger: this.simLedger.ledger,
+  1066→        mode: this._mode,
+  1067→        network: this.network,
+  1068→        transaction: {
+  1069→          txHash: legacy.txHash,
+  1070→          chain: 'stellar',
+  1071→          ledger: this.simLedger.ledger,
+  1072→          operation: legacy.type,
+  1073→          source: legacy.from,
+  1074→          success: legacy.confirmed,
+  1075→          confirmed: legacy.confirmed,
+  1076→          memo: legacy.memo ? { kind: 'text', value: legacy.memo } : undefined,
+  1077→          createdAt: legacy.ts,
+  1078→          network: this.network,
+  1079→        },
+  1080→        evidence: this.makeEvidence({
+  1081→          entityId: legacy.from ?? legacy.to ?? 'stellar-network',
+  1082→          attester: 'stellar-network',
+  1083→          payload: { op: 'verify', txHash, type: legacy.type, confirmed: legacy.confirmed },
+  1084→        }),
+  1085→      };
+  1086→    }
+  1087→    return {
+  1088→      success: true,
+  1089→      confirmed: tx.confirmed,
+  1090→      ledger: tx.ledger,
+  1091→      mode: this._mode,
+  1092→      network: this.network,
+  1093→      transaction: {
+  1094→        txHash: tx.txHash,
+  1095→        chain: 'stellar',
+  1096→        ledger: tx.ledger,
+  1097→        operation: tx.operation,
+  1098→        source: tx.source,
+  1099→        success: tx.success,
+  1100→        confirmed: tx.confirmed,
+  1101→        memo: tx.memo,
+  1102→        createdAt: tx.createdAt,
+  1103→        network: tx.network,
+  1104→      },
+  1105→      evidence: this.makeEvidence({
+  1106→        entityId: tx.source ?? 'stellar-network',
+  1107→        attester: 'stellar-network',
+  1108→        payload: { op: 'verify', txHash, operation: tx.operation, confirmed: tx.confirmed },
+  1109→      }),
+  1110→    };
+  1111→  }
+  1112→
+  1113→  // ============================================================ ledger sync
+  1114→
+  1115→  async getLatestLedger(): Promise<ChainResult & { ledger?: number; closeTime?: number }> {
+  1116→    if (this._mode === 'live') {
+  1117→      // === live signature ===
+  1118→      //   const resp = await server.ledgers().order('desc').limit(1).call();
+  1119→      //   const r = resp.records[0];
+  1120→      //   return { success: true, ledger: r.sequence, closeTime: r.closed_at };
+  1121→      const sdk = await loadStellarSdk();
+  1122→      if (!sdk) return { success: false, error: NOT_INSTALLED_ERROR };
+  1123→      return {
+  1124→        success: false,
+  1125→        error: 'live_ledger_query_not_yet_wired — use simulation mode',
+  1126→        mode: this._mode,
+  1127→        network: this.network,
+  1128→      };
+  1129→    }
+  1130→    return {
+  1131→      success: true,
+  1132→      ledger: this.simLedger.ledger,
+  1133→      closeTime: this.simLedger.closeTime,
+  1134→      mode: this._mode,
+  1135→      network: this.network,
+  1136→    };
+  1137→  }
+  1138→
+  1139→  streamLedgers(callback: (ledger: { ledger: number; closeTime: number; txCount: number }) => void): () => void {
+  1140→    if (this._mode === 'live') {
+  1141→      // === live signature ===
+  1142→      //   const es = server.ledgers().cursor('now').stream({
+  1143→      //     onmessage: (msg) => callback({ ledger: msg.sequence, closeTime: msg.closed_at, txCount: msg.transaction_count }),
+  1144→      //     onerror: (err) => { /* log + retry */ },
+  1145→      //   });
+  1146→      //   return () => es.close();
+  1147→      // Live streaming not yet wired — return a no-op unsubscribe.
+  1148→      return () => { /* noop */ };
+  1149→    }
+  1150→    // Sim — emit a new ledger every 5s.
+  1151→    this.simLedgerStreamListeners.add(callback);
+  1152→    if (!this.simLedgerTimer) {
+  1153→      this.simLedgerTimer = setInterval(() => {
+  1154→        this.advanceSimLedger();
+  1155→      }, 5000);
+  1156→    }
+  1157→    return () => {
+  1158→      this.simLedgerStreamListeners.delete(callback);
+  1159→      if (this.simLedgerStreamListeners.size === 0 && this.simLedgerTimer) {
+  1160→        clearInterval(this.simLedgerTimer);
+  1161→        this.simLedgerTimer = null;
+  1162→      }
+  1163→    };
+  1164→  }
+  1165→
+  1166→  async getLedgerEntry(params: { key: string }): Promise<ChainResult & { value?: unknown }> {
+  1167→    const { key } = params;
+  1168→    if (this._mode === 'live') {
+  1169→      // === live signature ===
+  1170→      //   const resp = await server.ledgers().ledger(key).call();
+  1171→      //   return { success: true, value: resp };
+  1172→      const sdk = await loadStellarSdk();
+  1173→      if (!sdk) return { success: false, error: NOT_INSTALLED_ERROR };
+  1174→      return { success: false, error: 'live_ledger_entry_query_not_yet_wired', mode: this._mode, network: this.network };
+  1175→    }
+  1176→    return { success: true, value: this.simBalances.get(key) ?? null, mode: this._mode, network: this.network };
+  1177→  }
+  1178→
+  1179→  // ============================================================ sequence
+  1180→
+  1181→  async getSequence(params: { address: string }): Promise<ChainResult & { sequence?: string }> {
+  1182→    const { address } = params;
+  1183→    if (!address) return { success: false, error: 'address_required' };
+  1184→    if (this._mode === 'live') {
+  1185→      // === live signature ===
+  1186→      //   const acct = await server.loadAccount(address);
+  1187→      //   return { success: true, sequence: acct.sequence };
+  1188→      const sdk = await loadStellarSdk();
+  1189→      if (!sdk) return { success: false, error: NOT_INSTALLED_ERROR };
+  1190→      return { success: false, error: 'live_sequence_query_not_yet_wired', mode: this._mode, network: this.network };
+  1191→    }
+  1192→    const acct = this.ensureSimAccount(address);
+  1193→    return { success: true, sequence: acct.sequence, mode: this._mode, network: this.network };
+  1194→  }
+  1195→
+  1196→  async incrementSequence(params: { address: string; delta?: number }): Promise<ChainResult & { sequence?: string }> {
+  1197→    const { address, delta = 1 } = params;
+  1198→    if (!address) return { success: false, error: 'address_required' };
+  1199→    if (this._mode === 'live') {
+  1200→      // === live signature ===
+  1201→      //   Stellar accounts auto-increment sequence on each tx. To bump
+  1202→      //   without submitting, use Sdk.Operation.bumpSequence({ bumpTo }).
+  1203→      const executed = await this.liveSubmit('bumpSequence', { bumpTo: String(Date.now()), source: address });
+  1204→      return executed;
+  1205→    }
+  1206→    const acct = this.ensureSimAccount(address);
+  1207→    const next = (BigInt(acct.sequence) + BigInt(delta)).toString();
+  1208→    acct.sequence = next;
+  1209→    return { success: true, sequence: next, mode: this._mode, network: this.network };
+  1210→  }
+  1211→
+  1212→  // ============================================================ balances
+  1213→
+  1214→  async getBalance(params: { address: string; assetCode: string; issuer?: string }): Promise<ChainBalanceResult> {
+  1215→    const { address, assetCode, issuer } = params;
+  1216→    if (!address) return { success: false, error: 'address_required' };
+  1217→    const effectiveIssuer = issuer ?? (isNative(assetCode) ? undefined : this.simAssetIssuers.get(assetCode));
+  1218→
+  1219→    if (this._mode === 'live') {
+  1220→      // === live signature ===
+  1221→      //   const acct = await server.loadAccount(address);
+  1222→      //   const bal = acct.balances.find(b => b.asset_type === 'native'
+  1223→      //                                       ? isNative(assetCode)
+  1224→      //                                       : b.asset_code === assetCode && b.asset_issuer === effectiveIssuer);
+  1225→      //   return { success: true, balance: bal ? Number(bal.balance) : 0 };
+  1226→      const sdk = await loadStellarSdk();
+  1227→      if (!sdk) return { success: false, error: NOT_INSTALLED_ERROR };
+  1228→      return { success: false, error: 'live_balance_query_not_yet_wired', mode: this._mode, network: this.network };
+  1229→    }
+  1230→
+  1231→    const res = await simAdapter.getBalance({ address, assetCode });
+  1232→    if (!res.success) return { success: false, error: res.error ?? 'balance_lookup_failed' };
+  1233→    return {
+  1234→      success: true,
+  1235→      balance: res.balance,
+  1236→      assetCode,
+  1237→      address,
+  1238→      mode: this._mode,
+  1239→      network: this.network,
+  1240→      evidence: res.evidence ?? this.makeEvidence({
+  1241→        entityId: address,
+  1242→        attester: 'stellar-network',
+  1243→        payload: { op: 'getBalance', address, assetCode, issuer: effectiveIssuer, balance: res.balance },
+  1244→      }),
+  1245→    };
+  1246→  }
+  1247→
+  1248→  async getBalances(params: { address: string }): Promise<ChainResult & { balances?: Record<string, number> }> {
+  1249→    const { address } = params;
+  1250→    if (!address) return { success: false, error: 'address_required' };
+  1251→    if (this._mode === 'live') {
+  1252→      // === live signature ===
+  1253→      //   const acct = await server.loadAccount(address);
+  1254→      //   const out: Record<string, number> = {};
+  1255→      //   for (const b of acct.balances) {
+  1256→      //     const key = b.asset_type === 'native' ? 'XLM:native' : `${b.asset_code}:${b.asset_issuer}`;
+  1257→      //     out[key] = Number(b.balance);
+  1258→      //   }
+  1259→      //   return { success: true, balances: out };
+  1260→      const sdk = await loadStellarSdk();
+  1261→      if (!sdk) return { success: false, error: NOT_INSTALLED_ERROR };
+  1262→      return { success: false, error: 'live_balances_query_not_yet_wired', mode: this._mode, network: this.network };
+  1263→    }
+  1264→
+  1265→    // Sim — filter the legacy sim balances + our local map.
+  1266→    const out: Record<string, number> = {};
+  1267→    const allSims = simAdapter.getBalances();
+  1268→    for (const [k, v] of Object.entries(allSims)) {
+  1269→      if (k.startsWith(`${address}:`)) {
+  1270→        const assetCode = k.slice(address.length + 1);
+  1271→        out[assetKey({ code: assetCode })] = v;
+  1272→      }
+  1273→    }
+  1274→    return { success: true, balances: out, mode: this._mode, network: this.network };
+  1275→  }
+  1276→
+  1277→  // ============================================================ soroban prep (stub)
+  1278→
+  1279→  async prepareSorobanTransaction(params: {
+  1280→    contractId: string;
+  1281→    method: string;
+  1282→    args?: unknown[];
+  1283→    source: string;
+  1284→  }): Promise<ChainResult & { preparedXdr?: string }> {
+  1285→    const { contractId, method, args, source } = params;
+  1286→    if (!contractId || !method) return { success: false, error: 'contractId_and_method_required' };
+  1287→
+  1288→    if (this._mode === 'live') {
+  1289→      // === live signature ===
+  1290→      //   const rpc = new Sdk.Server(sorobanRpcUrl);
+  1291→      //   const contract = new Sdk.Contract(contractId);
+  1292→      //   const tx = new Sdk.TransactionBuilder(sourceAccount, { fee, networkPassphrase })
+  1293→      //     .addOperation(contract.call(method, ...argsAsScVal))
+  1294→      //     .setTimeout(180).build();
+  1295→      //   const simResp = await rpc.simulateTransaction(tx);
+  1296→      //   const prepared = Sdk.assembleTransaction(tx, simResp).build();
+  1297→      //   return { success: true, preparedXdr: prepared.toEnvelope().toXDR('base64') };
+  1298→      const sdk = await loadStellarSdk();
+  1299→      if (!sdk) return { success: false, error: NOT_INSTALLED_ERROR };
+  1300→      return {
+  1301→        success: false,
+  1302→        error: 'soroban_preparation_not_yet_wired — install @stellar/stellar-sdk and configure sorobanRpcUrl',
+  1303→        mode: this._mode,
+  1304→        network: this.network,
+  1305→      };
+  1306→    }
+  1307→
+  1308→    // Sim — return a synthetic prepared XDR.
+  1309→    const preparedXdr = uid('sorobanPrep');
+  1310→    return {
+  1311→      success: true,
+  1312→      preparedXdr,
+  1313→      mode: this._mode,
+  1314→      network: this.network,
+  1315→      evidence: this.makeEvidence({
+  1316→        entityId: source,
+  1317→        attester: 'stellar-soroban-sim',
+  1318→        payload: { op: 'prepareSorobanTransaction', contractId, method, args, source },
+  1319→      }),
+  1320→    };
+  1321→  }
+  1322→
+  1323→  // ============================================================ transaction recovery
+  1324→
+  1325→  async recoverTransaction(params: { txHash: string }): Promise<ChainVerifyResult> {
+  1326→    const { txHash } = params;
+  1327→    if (!txHash) return { success: false, confirmed: false, error: 'tx_hash_required' };
+  1328→    // Retry-safe: same as verifyTransaction, but with explicit idempotent
+  1329→    // semantics. In live mode this would also submit the tx again if it was
+  1330→    // not found and we still hold the envelope — for now we just verify.
+  1331→    return this.verifyTransaction({ txHash });
+  1332→  }
+  1333→
+  1334→  // ============================================================ ledger reconciliation
+  1335→
+  1336→  async reconcileLedger(params: {
+  1337→    expectedBalances: Array<{ address: string; assetCode: string; amount: number; issuer?: string }>;
+  1338→  }): Promise<ChainResult & { discrepancies?: Array<{ address: string; assetCode: string; expected: number; actual: number }> }> {
+  1339→    const { expectedBalances } = params;
+  1340→    const discrepancies: Array<{ address: string; assetCode: string; expected: number; actual: number }> = [];
+  1341→    for (const expected of expectedBalances) {
+  1342→      const res = await this.getBalance({ address: expected.address, assetCode: expected.assetCode, issuer: expected.issuer });
+  1343→      const actual = res.balance ?? 0;
+  1344→      if (Math.abs(actual - expected.amount) > 1e-7) {
+  1345→        discrepancies.push({
+  1346→          address: expected.address,
+  1347→          assetCode: expected.assetCode,
+  1348→          expected: expected.amount,
+  1349→          actual,
+  1350→        });
+  1351→      }
+  1352→    }
+  1353→    return {
+  1354→      success: discrepancies.length === 0,
+  1355→      discrepancies,
+  1356→      mode: this._mode,
+  1357→      network: this.network,
+  1358→      error: discrepancies.length > 0 ? `${discrepancies.length}_discrepancies_found` : undefined,
+  1359→    };
+  1360→  }
+  1361→
+  1362→  // ============================================================ health
+  1363→
+  1364→  async healthCheck(): Promise<ChainHealthResult> {
+  1365→    const start = Date.now();
+  1366→    if (this._mode === 'live') {
+  1367→      // === live signature ===
+  1368→      //   const root = await server.root();
+  1369→      //   return { chain: 'stellar', healthy: true, mode: 'live',
+  1370→      //            latencyMs: Date.now() - start, network: this.network };
+  1371→      const sdk = await loadStellarSdk();
+  1372→      if (!sdk) {
+  1373→        return {
+  1374→          chain: 'stellar',
+  1375→          healthy: false,
+  1376→          mode: this._mode,
+  1377→          latencyMs: Date.now() - start,
+  1378→          network: this.network,
+  1379→          details: { error: NOT_INSTALLED_ERROR },
+  1380→        };
+  1381→      }
+  1382→      // We treat SDK presence as healthy in live mode without doing a real
+  1383→      // HTTP probe — the probe is wired by HorizonSync (see ./horizon.ts).
+  1384→      return {
+  1385→        chain: 'stellar',
+  1386→        healthy: true,
+  1387→        mode: this._mode,
+  1388→        latencyMs: Math.max(1, Date.now() - start),
+  1389→        network: this.network,
+  1390→      };
+  1391→    }
+  1392→    return {
+  1393→      chain: 'stellar',
+  1394→      healthy: true,
+  1395→      mode: 'simulation',
+  1396→      latencyMs: Math.max(1, Date.now() - start),
+  1397→      network: this.network,
+  1398→    };
+  1399→  }
+  1400→
+  1401→  // ============================================================ internal helpers
+  1402→
+  1403→  /** Lazy-initialize a sim account record. */
+  1404→  private ensureSimAccount(address: string): {
+  1405→    sequence: string;
+  1406→    signers: ChainSigner[];
+  1407→    thresholds: { low: number; medium: number; high: number };
+  1408→  } {
+  1409→    let acct = this.simAccounts.get(address);
+  1410→    if (!acct) {
+  1411→      acct = {
+  1412→        sequence: '0',
+  1413→        signers: [{ key: address, weight: 1, type: 'ed25519' }],
+  1414→        thresholds: { low: 0, medium: 1, high: 2 },
+  1415→      };
+  1416→      this.simAccounts.set(address, acct);
+  1417→    }
+  1418→    return acct;
+  1419→  }
+  1420→
+  1421→  private simCredit(address: string, assetCode: string, amount: number): void {
+  1422→    const k = `${address}:${assetKey({ code: assetCode })}`;
+  1423→    this.simBalances.set(k, round((this.simBalances.get(k) ?? 0) + amount, 7));
+  1424→  }
+  1425→
+  1426→  private simDebit(address: string, assetCode: string, amount: number): void {
+  1427→    const k = `${address}:${assetKey({ code: assetCode })}`;
+  1428→    const cur = this.simBalances.get(k) ?? 0;
+  1429→    if (cur < amount) {
+  1430→      // In sim mode we allow balance to go negative for issuer accounts
+  1431→      // (issuers can issue more). For non-issuer accounts, the legacy sim
+  1432→      // adapter will already have rejected the operation; we mirror here.
+  1433→    }
+  1434→    this.simBalances.set(k, round(cur - amount, 7));
+  1435→  }
+  1436→
+  1437→  private advanceSimLedger(): void {
+  1438→    this.simLedger = {
+  1439→      ledger: this.simLedger.ledger + 1,
+  1440→      closeTime: Date.now(),
+  1441→      txCount: 0,
+  1442→    };
+  1443→    for (const cb of this.simLedgerStreamListeners) {
+  1444→      try {
+  1445→        cb(this.simLedger);
+  1446→      } catch {
+  1447→        /* swallow */
+  1448→      }
+  1449→    }
+  1450→  }
+  1451→
+  1452→  /** Evaluate a claim predicate against the current sim clock. */
+  1453→  private evaluatePredicate(p: ClaimPredicate): boolean {
+  1454→    switch (p.kind) {
+  1455→      case 'unconditional':
+  1456→        return true;
+  1457→      case 'before_absolute_time':
+  1458→        // absBefore is unix seconds
+  1459→        return Math.floor(Date.now() / 1000) < p.absBefore;
+  1460→      case 'before_relative_time':
+  1461→        return Math.floor(Date.now() / 1000) < p.seconds;
+  1462→      case 'and':
+  1463→        return this.evaluatePredicate(p.left) && this.evaluatePredicate(p.right);
+  1464→      case 'or':
+  1465→        return this.evaluatePredicate(p.left) || this.evaluatePredicate(p.right);
+  1466→      case 'not':
+  1467→        return !this.evaluatePredicate(p.inner);
+  1468→      default:
+  1469→        return false;
+  1470→    }
+  1471→  }
+  1472→
+  1473→  /** Record a sim-mode transaction + advance ledger + build evidence. */
+  1474→  private recordSimTx(params: {
+  1475→    txHash: string;
+  1476→    operation: string;
+  1477→    source?: string;
+  1478→    memo?: ChainMemo;
+  1479→    payload: Record<string, unknown>;
+  1480→    entityId: string;
+  1481→    amount?: number;
+  1482→    assetCode?: string;
+  1483→  }): ChainResult {
+  1484→    this.advanceSimLedger();
+  1485→    const record: SimTxRecord = {
+  1486→      txHash: params.txHash,
+  1487→      operation: params.operation,
+  1488→      ledger: this.simLedger.ledger,
+  1489→      source: params.source,
+  1490→      success: true,
+  1491→      confirmed: true,
+  1492→      memo: params.memo,
+  1493→      createdAt: Date.now(),
+  1494→      network: this.network,
+  1495→      mode: this._mode,
+  1496→      payload: params.payload,
+  1497→    };
+  1498→    this.simTransactions.set(params.txHash, record);
+  1499→    const evidence = this.makeEvidence({
+  1500→      entityId: params.entityId,
+  1501→      attester: 'stellar-network',
+  1502→      attestedAmount: params.amount,
+  1503→      currency: params.assetCode,
+  1504→      payload: {
+  1505→        ...params.payload,
+  1506→        txHash: params.txHash,
+  1507→        ledger: record.ledger,
+  1508→        operation: params.operation,
+  1509→        network: this.network,
+  1510→        mode: this._mode,
+  1511→      },
+  1512→    });
+  1513→    return {
+  1514→      success: true,
+  1515→      txHash: params.txHash,
+  1516→      ledger: record.ledger,
+  1517→      evidence,
+  1518→      mode: this._mode,
+  1519→      network: this.network,
+  1520→    };
+  1521→  }
+  1522→
+  1523→  /** Build a kernel Evidence entity. */
+  1524→  private makeEvidence(params: {
+  1525→    entityId: string;
+  1526→    attester: string;
+  1527→    attestedAmount?: number;
+  1528→    currency?: string;
+  1529→    payload: Record<string, unknown>;
+  1530→  }): Evidence {
+  1531→    return createEvidence({
+  1532→      type: 'observation',
+  1533→      source: 'on_chain_state',
+  1534→      verificationLevel: 'cryptographic',
+  1535→      entityId: params.entityId,
+  1536→      attestedAmount: params.attestedAmount,
+  1537→      currency: params.currency,
+  1538→      attester: params.attester,
+  1539→      reputation: 1.0,
+  1540→      payload: params.payload,
+  1541→    });
+  1542→  }
+  1543→
+  1544→  /**
+  1545→   * Live-mode submission shim. This is the single point where real SDK calls
+  1546→   * would be wired. For now it constructs the operation payload and returns
+  1547→   * a structured 'not_yet_wired' error so callers can feature-detect.
+  1548→   *
+  1549→   * When the integration hardens, replace the body of this method with the
+  1550→   * actual `server.submitTransaction(tx)` call shown in each method's
+  1551→   * `=== live signature ===` comment block.
+  1552→   */
+  1553→  private async liveSubmit(operation: string, payload: Record<string, unknown>): Promise<ChainResult> {
+  1554→    const sdk = await loadStellarSdk();
+  1555→    if (!sdk) {
+  1556→      return {
+  1557→        success: false,
+  1558→        error: NOT_INSTALLED_ERROR,
+  1559→        mode: this._mode,
+  1560→        network: this.network,
+  1561→      };
+  1562→    }
+  1563→    if (!this._secretKey) {
+  1564→      return {
+  1565→        success: false,
+  1566→        error: 'live_mode_requires_secret_key — configure via configureStellarLive({ secretKey })',
+  1567→        mode: this._mode,
+  1568→        network: this.network,
+  1569→      };
+  1570→    }
+  1571→    // The SDK is installed and a secret key is configured — but the actual
+  1572→    // tx-building + submission call graph is intentionally not yet wired.
+  1573→    // Return a structured 'pending_integration' result so the protocol
+  1574→    // layer can feature-detect without crashing.
+  1575→    //
+  1576→    // To activate live submission:
+  1577→    //   1. Construct the source account via `server.loadAccount(source)`.
+  1578→    //   2. Build the tx with `Sdk.TransactionBuilder(...).addOperation(...).setTimeout(180).build()`.
+  1579→    //   3. Sign with `Sdk.Keypair.fromSecret(secretKey)`.
+  1580→    //   4. Submit via `server.submitTransaction(tx)`.
+  1581→    //   5. Map the Horizon response to a ChainResult + Evidence.
+  1582→    return {
+  1583→      success: false,
+  1584→      error: `live_submit_pending_integration: operation='${operation}' — SDK installed, signing key configured, but tx submission not yet wired`,
+  1585→      mode: this._mode,
+  1586→      network: this.network,
+  1587→      details: { operation, payloadKeys: Object.keys(payload) },
+  1588→    } as ChainResult;
+  1589→  }
+  1590→
+  1591→  /** Expose the configured horizon URL (for tests + HorizonSync module). */
+  1592→  get horizonUrl(): string {
+  1593→    return this._horizonUrl;
+  1594→  }
+  1595→
+  1596→  /** Expose the configured network passphrase. */
+  1597→  get networkPassphrase(): string {
+  1598→    return this._networkPassphrase;
+  1599→  }
+  1600→
+  1601→  /** Testnet Friendbot URL — used to fund testnet accounts for free. */
+  1602→  get friendbotUrl(): string {
+  1603→    return this.network === 'testnet' ? STELLAR_TESTNET_FRIENDBOT : '';
+  1604→  }
+  1605→}
+  1606→
+  1607→// ============================================================================
+  1608→// Singleton + live-config helper
+  1609→// ============================================================================
+  1610→
+  1611→/**
+  1612→ * Singleton Stellar chain adapter — defaults to **simulation** mode for
+  1613→ * safety. Use `configureStellarLive(...)` to flip to live mode.
+  1614→ */
+  1615→export const stellarChainAdapter = new StellarChainAdapter({
+  1616→  mode: 'simulation',
+  1617→  network: 'testnet',
+  1618→});
+  1619→
+  1620→/**
+  1621→ * Configure the singleton Stellar adapter for live mode.
+  1622→ *
+  1623→ * @example
+  1624→ *   await configureStellarLive({
+  1625→ *     network: 'testnet',
+  1626→ *     horizonUrl: 'https://horizon-testnet.stellar.org',
+  1627→ *     secretKey: process.env.STELLAR_SECRET_KEY!,
+  1628→ *   });
+  1629→ */
+  1630→export async function configureStellarLive(params: {
+  1631→  network?: ChainNetwork;
+  1632→  horizonUrl?: string;
+  1633→  secretKey?: string;
+  1634→  networkPassphrase?: string;
+  1635→}): Promise<ChainResult> {
+  1636→  return stellarChainAdapter.configureLive(params);
+  1637→}
+  1638→

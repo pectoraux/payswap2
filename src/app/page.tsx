@@ -17,6 +17,7 @@ import { GraphTab } from '@/components/showcase/graph-tab';
 import { ExtensionsTab, ExtensionsTabSkeleton } from '@/components/showcase/extensions-tab';
 import { CertificationTab } from '@/components/showcase/certification-tab';
 import { ParcelTab } from '@/components/showcase/parcel-tab';
+import { LiveTab } from '@/components/showcase/live-tab';
 import { ThemeToggle } from '@/components/showcase/theme-toggle';
 
 export default function PlatformConsolePage() {
@@ -146,6 +147,9 @@ export default function PlatformConsolePage() {
                 <TabsTrigger value="parcel" className="gap-1.5 text-xs">
                   <Truck className="h-3.5 w-3.5" /> Parcel Delivery
                 </TabsTrigger>
+                <TabsTrigger value="live" className="gap-1.5 text-xs">
+                  <Zap className="h-3.5 w-3.5" /> Live Testing
+                </TabsTrigger>
               </TabsList>
               <Button
                 size="sm" variant="ghost" onClick={handleRefresh} disabled={loading}
@@ -170,6 +174,9 @@ export default function PlatformConsolePage() {
             </TabsContent>
             <TabsContent value="parcel" className="mt-0 focus-visible:outline-none">
               {loading ? <ParcelSkeleton /> : <ParcelTab showcase={showcase} />}
+            </TabsContent>
+            <TabsContent value="live" className="mt-0 focus-visible:outline-none">
+              <LiveTab />
             </TabsContent>
           </Tabs>
         )}

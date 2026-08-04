@@ -1,0 +1,973 @@
+     1→/**
+     2→ * PaySwap Runtime — public entry point. (Principle 1: Runtime First.)
+     3→ *
+     4→ * The Runtime is the product. Every client (Dashboard, Admin, Twin, SDK,
+     5→ * CLI, Extensions, AI Agents, Mobile, API) enters through `dispatch()`.
+     6→ *
+     7→ * M-RT-1 ships the skeleton: a working RuntimeClock (live 1×), an in-memory
+     8→ * EventStore with OCC, an IntentEngine with overridable hooks, a 14-stage
+     9→ * Pipeline scaffold with no-op handlers, and the Decision/Policy/Inspector
+    10→ * interfaces. Dispatching any intent flows through all stages, appends real
+    11→ * events, and produces a real trace — with zero business logic.
+    12→ *
+    13→ * The existing app is untouched. M-RT-2 wires real payment logic into the
+    14→ * stages and connects the first vertical slice to the UI.
+    15→ */
+    16→
+    17→import { LiveClock, VirtualClock, type RuntimeClock } from './clock';
+    18→import { InMemoryEventStore, PostgresEventStore, type EventStore } from './events';
+    19→import { IntentEngine } from './intent';
+    20→import { Pipeline } from './pipeline';
+    21→import { DefaultPolicyEngine, type PolicyEngine } from './policy';
+    22→import { ProjectionRunner } from './read-models';
+    23→// Amendment 1 engines:
+    24→import { InMemoryReserveMarket, type ReserveMarket } from './engines/reserve-market';
+    25→import { ReserveLedgerService } from './engines/reserve-ledger';
+    26→import { ReserveMarketEngine } from './engines/reserve-market-v2';
+    27→import { LiquidityMarketplaceService } from './engines/liquidity-marketplace';
+    28→import { RouteCompiler, RouteScoringEngine } from './engines/routing';
+    29→import { OpportunityDiscoveryEngine } from './engines/opportunity-discovery-v2';
+    30→import { RecommendationLifecycleService } from './engines/recommendation-lifecycle-v2';
+    31→import { DigitalTwinEngine } from './engines/digital-twin';
+    32→import { ExecutionPipeline } from './engines/execution-pipeline';
+    33→import { SimulatorEngine } from './engines/simulator';
+    34→import { InspectorService } from './engines/inspector';
+    35→import { APIGateway } from './engines/api-gateway';
+    36→import { SchedulingEngine } from './engines/scheduling';
+    37→import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
+    38→import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
+    39→import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine as OldOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
+    40→import { InMemoryRecommendationStore, type RecommendationStore } from './recommendations';
+    41→import { InMemoryLiquidityGraph, type LiquidityGraphQuery } from './graphs/liquidity-graph';
+    42→// Amendment 2 engines:
+    43→import { NoOpEconomicHealthDashboard, type EconomicHealthDashboard } from './engines/economic-health';
+    44→import { NoOpMultiHopRouter, type MultiHopRouter } from './graphs/multi-hop';
+    45→// Final Amendment engines + graphs:
+    46→import {
+    47→  InMemoryCapabilityGraph,
+    48→  type CapabilityGraph,
+    49→  CapabilityCompiler,
+    50→  CapabilityGraphProjection,
+    51→  type CapabilityCompilerInput,
+    52→  compilerInputFromKernel,
+    53→} from './graphs/capability';
+    54→import { InMemoryRouteGraph, type RouteGraph } from './graphs/route';
+    55→import { NoOpCapabilityDiscoveryEngine, type CapabilityDiscoveryEngine } from './engines/capability-discovery';
+    56→import { NoOpCorridorDiscoveryEngine, type CorridorDiscoveryEngine } from './engines/corridor-discovery';
+    57→import { NoOpReserveDiscoveryEngine, type ReserveDiscoveryEngine } from './engines/reserve-discovery';
+    58→import { NoOpLPGrowthEngine, type LPGrowthEngine } from './engines/lp-growth';
+    59→import { NoOpTreasuryGrowthEngine, type TreasuryGrowthEngine } from './engines/treasury-growth';
+    60→import { NoOpEconomicScoreEngine, type EconomicScoreEngine } from './engines/economic-score';
+    61→import { NoOpCounterfactualEngine, type CounterfactualEngine } from './engines/counterfactual';
+    62→import { InMemoryRecommendationLifecycle, type RecommendationLifecycle } from './engines/recommendation-lifecycle';
+    63→// v1.4 True Final Freeze — Financial Compiler + Knowledge Graph:
+    64→import { NoOpFinancialCompiler, type FinancialCompiler, RealFinancialCompiler, type RealCompilerContext } from './compiler';
+    65→import { NoOpFinancialKnowledgeGraph, type FinancialKnowledgeGraph } from './graphs/knowledge-graph';
+    66→// M-RT-16/18/19: Capability migration + liquidity composition:
+    67→import { PaymentsService, PaymentBackfillService } from './engines/payments';
+    68→import { RefundsService, RefundBackfillService } from './engines/refunds';
+    69→import { WalletsService, WalletBackfillService } from './engines/wallets';
+    70→import { TreasuryService, TreasuryBackfillService } from './engines/treasury';
+    71→import { ProjectionHealthRegistry, MigrationManager } from './migration';
+    72→import { LiquidityComposer } from './engines/liquidity-composer';
+    73→// M-RT-20: Economic Integrity Hardening (Invariant Engine):
+    74→import { InvariantEngine, BUILTIN_INVARIANTS } from './invariants';
+    75→// M-RT-21: Runtime Enforcement (Dispatcher — the only way to mutate state):
+    76→import { RuntimeDispatcher, CommandRegistry, BUILTIN_HANDLERS } from './dispatcher';
+    77→// M-RT-25: Economic Kernel (Twin Tokens + LP Runtime + Marketplace + Economic Compiler):
+    78→import { TwinTokenProjection, LPRuntimeProjection, EconomicMarketplace, EconomicCompiler } from './economic';
+    79→// M-RT-26: Transaction Coordinator + Settlement Adapters:
+    80→import { TransactionCoordinator } from './transaction';
+    81→import { createDefaultAdapters, type SettlementAdapterRegistry } from './settlement';
+    82→// M-RT-27: Event Evolution (Schema Registry + Event Upcaster):
+    83→import { SchemaRegistry, registerAllEventTypes } from './event-evolution';
+    84→// M-RT-28: Runtime Recovery (Recovery Manager + Kernel Manifest):
+    85→import { RecoveryManager, buildManifest, type KernelManifest } from './recovery';
+    86→// M-RT-29: Dual Runtime (RuntimeHost — Sandbox + Live isolation):
+    87→import { RuntimeHost, type RuntimeContext } from './host';
+    88→// M-RT-30: Liquidity Intelligence & Settlement Kernel:
+    89→import { LiquidityPolicyEngine, BandwidthEngine, SettlementContractEngine, DisputeEngine } from './liquidity';
+    90→// M-ECO-31: Adaptive Liquidity Intelligence (the "brain"):
+    91→import { LiquidityIntelligenceEngine as EcoIntelligenceEngine } from './eco-intelligence';
+    92→// M-ECO-32/33/34: Settlement Orchestrator + Autonomous Treasury + LP Intelligence:
+    93→import {
+    94→  SettlementOrchestrator, TimerEngine, RetryEngine, CompensationEngine,
+    95→  TreasuryDirector, LPIntelligenceEngine,
+    96→} from './settlement-orchestrator';
+    97→// M-ECO-34.5: Economic Control Plane (constitution + digital twin + capital allocation):
+    98→import { EconomicControlPlane } from './control-plane';
+    99→// M-ECO-35: Canonical Economic Ledger & Solvency Engine:
+   100→import { EconomicLedgerEngine } from './ledger';
+   101→// M-ECO-36: Global Economic Directorate (strategic planning + autonomous directors):
+   102→import { GlobalEconomicDirectorate } from './directorate';
+   103→// M-ECO-37: Economic Council (coordinated decision protocol + consensus):
+   104→import { EconomicCouncil } from './council';
+   105→// M-TRUST: Global Audit & Transparency Layer:
+   106→import { TrustLayer } from './trust';
+   107→// M-PLATFORM-38: Platform Experience & Developer Ecosystem:
+   108→import { PlatformEngine } from './platform';
+   109→
+   110→// Re-export the public surface.
+   111→export * from './types';
+   112→export * from './principles';
+   113→export * from './vocabulary';
+   114→export * from './clock';
+   115→export * from './events';
+   116→export * from './decisions';
+   117→export * from './intent';
+   118→export * from './policy';
+   119→export * from './pipeline';
+   120→export * from './inspector';
+   121→export * from './read-models';
+   122→// Amendment 1 public surface:
+   123→export * from './engines/reserve-market';
+   124→export * from './engines/reserve-ledger';
+   125→export * from './engines/reserve-market-v2';
+   126→export * from './engines/liquidity-marketplace';
+   127→// M-RT-6 routing: explicit re-exports to avoid collision with graphs/route types.
+   128→export { RouteCompiler } from './engines/routing';
+   129→export { RouteScoringEngine } from './engines/routing';
+   130→export type { ScoringInputs } from './engines/routing';
+   131→export type {
+   132→  RouteScoreComponents,
+   133→  ScoredRoute,
+   134→  RoutingRequest,
+   135→  RoutingResult,
+   136→  ScoringWeights,
+   137→} from './engines/routing';
+   138→export { computeTotalScore, DEFAULT_SCORING_WEIGHTS, validateRoute } from './engines/routing';
+   139→export * from './engines/opportunity-discovery-v2';
+   140→export * from './engines/recommendation-lifecycle-v2';
+   141→// M-RT-11 Digital Twin: explicit re-exports to avoid collision with counterfactual types.
+   142→export { DigitalTwinEngine } from './engines/digital-twin';
+   143→export type { DigitalTwinInputs } from './engines/digital-twin';
+   144→export type {
+   145→  NetworkSnapshot as TwinNetworkSnapshot,
+   146→  PredictedMetric,
+   147→  NetworkComparison,
+   148→  SimulationAssumption,
+   149→  SimulationResult,
+   150→  TwinConfig,
+   151→  SimulatableRecommendation,
+   152→} from './engines/digital-twin';
+   153→export { DEFAULT_TWIN_CONFIG } from './engines/digital-twin';
+   154→export * from './engines/execution-pipeline';
+   155→export * from './engines/simulator';
+   156→export * from './engines/inspector';
+   157→export * from './engines/api-gateway';
+   158→export * from './engines/scheduling';
+   159→export * from './read-models/v2';
+   160→export * from './engines/liquidity-market';
+   161→export * from './engines/liquidity-intelligence';
+   162→// v1 opportunity-discovery (legacy NoOp — replaced by v2):
+   163→export { NoOpOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
+   164→export type { OpportunityDiscoveryEngine as OldOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
+   165→export * from './recommendations';
+   166→export * from './graphs/liquidity-graph';
+   167→// Amendment 2 public surface:
+   168→export * from './engines/economic-health';
+   169→export * from './graphs/multi-hop';
+   170→// Final Amendment public surface:
+   171→export * from './graphs/capability';
+   172→export * from './graphs/route';
+   173→export * from './engines/capability-discovery';
+   174→export * from './engines/corridor-discovery';
+   175→export * from './engines/reserve-discovery';
+   176→export * from './engines/lp-growth';
+   177→export * from './engines/treasury-growth';
+   178→export * from './engines/economic-score';
+   179→export * from './engines/counterfactual';
+   180→export * from './engines/recommendation-lifecycle';
+   181→// v1.4 True Final Freeze public surface:
+   182→export * from './compiler';
+   183→export * from './graphs/knowledge-graph';
+   184→// Integration Pass public surface (type-only — compresses peer concepts):
+   185→export * from './integration';
+   186→// v1.5 Final Tightening public surface (type-only — closed-loop optimization):
+   187→export * from './optimization-loop';
+   188→// M-RT-16/18/19 public surface (explicit re-exports to avoid naming conflicts):
+   189→export { PaymentsService, PaymentBackfillService, PaymentProjection } from './engines/payments';
+   190→export type { PaymentView, PaymentRecordedPayload, PaymentListOptions } from './engines/payments';
+   191→export { RefundsService, RefundBackfillService, RefundProjection } from './engines/refunds';
+   192→export type { RefundView, RefundRequestedPayload, RefundListOptions } from './engines/refunds';
+   193→export { WalletsService, WalletBackfillService, WalletProjection } from './engines/wallets';
+   194→export type { WalletView, WalletCreatedPayload, WalletListOptions } from './engines/wallets';
+   195→export { TreasuryService, TreasuryBackfillService, TreasuryProjection } from './engines/treasury';
+   196→export type { TreasuryAccountView, AccountKind, TreasuryListOptions } from './engines/treasury';
+   197→export * from './migration';
+   198→export { LiquidityComposer, buildGraph, findPaths, optimizeSplit, rankPaths, decomposeCost } from './engines/liquidity-composer';
+   199→export type { CompositionRequest, ComposedExecutionPlan, ExecutionLeg, SplitPlan, PathAllocation, GraphBuildInputs, LPOfferInput, ReserveBridgeInput } from './engines/liquidity-composer';
+   200→export * from './read-models/v2';
+   201→// M-RT-20: Invariant Engine public surface:
+   202→export * from './invariants';
+   203→// M-RT-21/22: Runtime Dispatcher public surface (explicit re-exports to avoid RetryPolicy conflict with scheduling):
+   204→export { RuntimeDispatcher, CommandRegistry, BUILTIN_HANDLERS } from './dispatcher';
+   205→export type { DispatchResult, DispatcherInputs, CommandHandler, CommandResult } from './dispatcher';
+   206→export type { RuntimeCommand, CommandMetadata, AnyRuntimeCommand, CommandType } from './dispatcher';
+   207→export type { CreatePaymentCommand, CreateRefundCommand, ExecuteRefundCommand, ReserveLiquidityCommand, ReleaseLiquidityCommand, WalletCreditCommand, WalletDebitCommand, WalletReserveCommand, WalletReleaseCommand } from './dispatcher';
+   208→export { IdempotencyStore } from './dispatcher';
+   209→export type { CachedResult } from './dispatcher';
+   210→export { defaultShouldRetry } from './dispatcher';
+   211→export type { RetryPolicyOptions, RetryOutcome } from './dispatcher';
+   212→// Re-export RetryPolicy with an alias to avoid conflict with scheduling's RetryPolicy.
+   213→export { RetryPolicy as DispatcherRetryPolicy } from './dispatcher';
+   214→// M-RT-25: Economic Kernel public surface:
+   215→export * from './economic';
+   216→// M-RT-26: Transaction Coordinator + Settlement public surface:
+   217→export * from './transaction';
+   218→export * from './settlement';
+   219→// M-RT-27: Event Evolution public surface:
+   220→export * from './event-evolution';
+   221→// M-RT-28: Runtime Recovery public surface:
+   222→export * from './recovery';
+   223→// M-RT-29: Dual Runtime public surface:
+   224→export { RuntimeHost } from './host';
+   225→export type { RuntimeContext } from './host';
+   226→// M-RT-30: Liquidity Intelligence public surface (explicit re-exports to avoid conflicts):
+   227→export { LiquidityPolicyEngine, liquidityPolicyEngine } from './liquidity';
+   228→export type { SettlementStrategy, LiquidityExecutionPlan, BandwidthPosition, PolicyEngineInput } from './liquidity';
+   229→// M-ECO-31: Adaptive Liquidity Intelligence public surface (explicit re-exports to avoid conflicts):
+   230→export { LiquidityIntelligenceEngine as EcoIntelligenceEngine } from './eco-intelligence';
+   231→export type {
+   232→  ReserveForecast, BandwidthOptimization, CorridorIntelligenceView,
+   233→  CorridorHealth, LPIntelligenceView, ReserveExpansionRecommendation,
+   234→  TreasuryPolicyDecision as EcoTreasuryPolicyDecision,
+   235→  PredictiveOpportunity, EconomicHealthDashboard as EcoEconomicHealthDashboard,
+   236→  CountryEconomicHealth, IntelligencePolicyConfig,
+   237→} from './eco-intelligence';
+   238→// M-ECO-32/33/34: Settlement Orchestrator + Autonomous Treasury + LP Intelligence:
+   239→// Explicit re-exports to avoid TreasuryAction conflict with liquidity module.
+   240→export {
+   241→  SettlementOrchestrator, TimerEngine, RetryEngine, CompensationEngine,
+   242→  TreasuryDirector, LPIntelligenceEngine,
+   243→} from './settlement-orchestrator';
+   244→export type {
+   245→  WorkflowState, SettlementActor, SettlementTimer, CompensationStep,
+   246→  SettlementHistoryEntry, SettlementMetrics,
+   247→  TreasuryGovernancePolicy, TreasuryAction as AutonomousTreasuryAction,
+   248→  TreasuryRiskAssessment,
+   249→  LPReputation, LPIncentive, LPLearningUpdate,
+   250→} from './settlement-orchestrator';
+   251→// M-ECO-34.5: Economic Control Plane (explicit re-exports to avoid conflicts):
+   252→export { EconomicControlPlane } from './control-plane';
+   253→export type {
+   254→  ConstitutionConfig, ConstitutionResult, ConstitutionContext,
+   255→  ConstitutionalRule, LiquidityDigitalTwin, CountryDigitalTwin,
+   256→  ReserveMaturity, Scenario, ScenarioResult, ScenarioType,
+   257→  CapitalAllocation as EcoCapitalAllocation, CapitalAction,
+   258→  InventoryState, InventoryRecommendation,
+   259→  ReserveEvolutionPlan, NetworkOptimization,
+   260→  GovernanceDecision, ApprovalClass,
+   261→  EconomicExplanation, ControlPlaneReport,
+   262→} from './control-plane';
+   263→// M-ECO-35: Economic Ledger:
+   264→export * from './ledger';
+   265→// M-ECO-36: Global Economic Directorate:
+   266→export * from './directorate';
+   267→// M-ECO-37: Economic Council:
+   268→export * from './council';
+   269→// M-TRUST: Global Audit & Transparency Layer:
+   270→export * from './trust';
+   271→// M-PLATFORM-38: Platform Experience:
+   272→export * from './platform';
+   273→
+   274→import type { MerchantIntent, TypedIntent } from './intent';
+   275→import type { ExecutionResult, StageHandler, PipelineStageId } from './pipeline';
+   276→import type { Environment, IntentSource, Actor, RequestContext } from './types';
+   277→import { requestContext } from './intent';
+   278→
+   279→/** The Runtime container — holds every component and exposes dispatch. */
+   280→export interface Runtime {
+   281→  clock: RuntimeClock;
+   282→  eventStore: EventStore;
+   283→  intentEngine: IntentEngine;
+   284→  pipeline: Pipeline;
+   285→  policyEngine: PolicyEngine;
+   286→  projectionRunner: ProjectionRunner;
+   287→  // Amendment 1 engines (interface-only in M-RT-1; wired in later milestones):
+   288→  reserveMarketState: ReserveMarket;  // A1 shadow-price publisher (legacy interface)
+   289→  liquidityStrategyMarketplace: LiquidityStrategyMarketplace;
+   290→  liquidityIntelligence: LiquidityIntelligenceEngine;
+   291→  opportunityDiscovery: OldOpportunityDiscoveryEngine;
+   292→  recommendationStore: RecommendationStore;
+   293→  liquidityGraph: LiquidityGraphQuery;
+   294→  // Amendment 2 engines (interface-only in M-RT-1; wired in later milestones):
+   295→  economicHealth: EconomicHealthDashboard;
+   296→  multiHopRouter: MultiHopRouter;
+   297→  // Final Amendment engines + graphs (interface-only in M-RT-1; wired in later milestones):
+   298→  capabilityGraph: CapabilityGraph;
+   299→  routeGraph: RouteGraph;
+   300→  capabilityDiscovery: CapabilityDiscoveryEngine;
+   301→  corridorDiscovery: CorridorDiscoveryEngine;
+   302→  reserveDiscovery: ReserveDiscoveryEngine;
+   303→  lpGrowth: LPGrowthEngine;
+   304→  treasuryGrowth: TreasuryGrowthEngine;
+   305→  economicScore: EconomicScoreEngine;
+   306→  counterfactual: CounterfactualEngine;
+   307→  recommendationLifecycle: RecommendationLifecycle;
+   308→  // v1.4 True Final Freeze — Financial Compiler + Knowledge Graph (interface-only in M-RT-1):
+   309→  compiler: FinancialCompiler;
+   310→  knowledgeGraph: FinancialKnowledgeGraph;
+   311→  // M-RT-2: Capability Graph as a compiled projection (compiler + projection):
+   312→  capabilityCompiler: CapabilityCompiler;
+   313→  capabilityProjection: CapabilityGraphProjection;
+   314→  // M-RT-3: Reserve Ledger (event-derived projection; the only writer):
+   315→  reserveLedger: ReserveLedgerService;
+   316→  // M-RT-4: Reserve Market (pure read model — no persistent state; derived from ledger):
+   317→  reserveMarket: ReserveMarketEngine;
+   318→  // M-RT-5: Liquidity Marketplace (offer events → order book projection; deterministic matching):
+   319→  liquidityMarketplace: LiquidityMarketplaceService;
+   320→  // M-RT-6: Route Graph (compiled projection) + Reserve-Aware Routing (pure scoring):
+   321→  routeCompiler: RouteCompiler;
+   322→  routeScoringEngine: RouteScoringEngine;
+   323→  // M-RT-7: The real Financial Compiler (pure, deterministic, reads-only):
+   324→  realCompiler: RealFinancialCompiler;
+   325→  // M-RT-9: Opportunity Discovery (pure, deterministic network analysis → Recommendations):
+   326→  opportunityDiscoveryV2: OpportunityDiscoveryEngine;
+   327→  // M-RT-10: Recommendation Lifecycle (event-driven state management; the only writer):
+   328→  recLifecycle: RecommendationLifecycleService;
+   329→  // M-RT-11: Digital Twin (pure simulation — no state, no events, no mutations):
+   330→  digitalTwin: DigitalTwinEngine;
+   331→  // M-RT-12: Execution Pipeline (side-effect-owning executor; owns all mutations):
+   332→  executionPipeline: ExecutionPipeline;
+   333→  // M-RT-13: Simulator (sim = prod; same runtime, different context):
+   334→  simulator: SimulatorEngine;
+   335→  // M-RT-14: Inspector (read-only visualization, explanation, provenance):
+   336→  inspector: InspectorService;
+   337→  // M-RT-15: API Gateway (single ingress; auth, validation, idempotency, rate limiting, tracing):
+   338→  apiGateway: APIGateway;
+   339→  // M-RT-15: Scheduling Engine (clock-driven, deterministic, retry, dead-letter):
+   340→  schedulingEngine: SchedulingEngine;
+   341→  // M-RT-16: Liquidity Composer (multi-hop + split routing). Pure — never executes.
+   342→  composer: LiquidityComposer;
+   343→  // M-RT-18: Payments capability (Events → Projection → Read Model → View).
+   344→  payments: PaymentsService;
+   345→  paymentBackfill: PaymentBackfillService;
+   346→  // M-RT-19: Refunds capability (uses BackfillEngine<T>).
+   347→  refunds: RefundsService;
+   348→  refundBackfill: RefundBackfillService;
+   349→  // M-RT-23: Wallets capability (stateful aggregate — derived balances).
+   350→  wallets: WalletsService;
+   351→  walletBackfill: WalletBackfillService;
+   352→  // M-RT-24: Treasury Kernel (financial source of truth — 5 account types).
+   353→  treasury: TreasuryService;
+   354→  treasuryBackfill: TreasuryBackfillService;
+   355→  // M-RT-25: Economic Kernel (Twin Tokens + LP Runtime + Marketplace + Economic Compiler).
+   356→  twinTokens: TwinTokenProjection;
+   357→  lpRuntime: LPRuntimeProjection;
+   358→  marketplace: EconomicMarketplace;
+   359→  economicCompiler: EconomicCompiler;
+   360→  // M-RT-26: Transaction Coordinator (the ONLY component allowed to commit events).
+   361→  coordinator: TransactionCoordinator;
+   362→  // M-RT-26: Settlement Adapter Registry (pluggable blockchain settlement).
+   363→  settlements: SettlementAdapterRegistry;
+   364→  // M-RT-27: Schema Registry (event evolution + upcasters + projection compatibility).
+   365→  schema: SchemaRegistry;
+   366→  // M-RT-28: Recovery Manager (checkpoint + crash recovery + projection verification).
+   367→  recovery: RecoveryManager;
+   368→  // M-RT-30: Liquidity Intelligence (policy engine + bandwidth + settlement contracts + disputes).
+   369→  liquidityPolicy: LiquidityPolicyEngine;
+   370→  bandwidth: BandwidthEngine;
+   371→  settlementContracts: SettlementContractEngine;
+   372→  disputes: DisputeEngine;
+   373→  // M-ECO-31: Adaptive Liquidity Intelligence (the economic brain).
+   374→  intelligence: EcoIntelligenceEngine;
+   375→  // M-ECO-32: Settlement Orchestrator (durable workflow actors).
+   376→  settlementOrchestrator: SettlementOrchestrator;
+   377→  timerEngine: TimerEngine;
+   378→  // M-ECO-33: Autonomous Treasury Director.
+   379→  treasuryDirector: TreasuryDirector;
+   380→  // M-ECO-34: LP Intelligence & Incentive Engine.
+   381→  lpIntelligence: LPIntelligenceEngine;
+   382→  // M-ECO-34.5: Economic Control Plane (constitution + digital twin + capital allocation).
+   383→  controlPlane: EconomicControlPlane;
+   384→  // M-ECO-35: Canonical Economic Ledger & Solvency Engine.
+   385→  ledger: EconomicLedgerEngine;
+   386→  // M-ECO-36: Global Economic Directorate (strategic planning + autonomous directors).
+   387→  directorate: GlobalEconomicDirectorate;
+   388→  // M-ECO-37: Economic Council (coordinated decision protocol + weighted consensus).
+   389→  council: EconomicCouncil;
+   390→  // M-TRUST: Global Audit & Transparency Layer (audit, proofs, observatory, formal verification).
+   391→  trust: TrustLayer;
+   392→  // M-PLATFORM-38: Platform Experience (simulator, extensions, developer console, UX).
+   393→  platform: PlatformEngine;
+   394→  // M-RT-19: Projection health registry (aggregates health from all projections).
+   395→  health: ProjectionHealthRegistry;
+   396→  // M-RT-19: Migration manager (owns all capability backfills).
+   397→  migrations: MigrationManager;
+   398→  // M-RT-20: Invariant Engine (verifies economic invariants before every append).
+   399→  invariants: InvariantEngine;
+   400→  // M-RT-21: Runtime Dispatcher (the ONLY way to mutate financial state).
+   401→  dispatcher: RuntimeDispatcher;
+   402→  // M-RT-21: Command Registry (holds all command handlers).
+   403→  commands: CommandRegistry;
+   404→
+   405→  /** Dispatch a raw merchant intent through the full pipeline. */
+   406→  dispatch(raw: MerchantIntent, ctx: RequestContext): Promise<ExecutionResult>;
+   407→
+   408→  /** Register an execution-stage handler (M-RT-2+ uses this). */
+   409→  registerStage(stage: PipelineStageId, handler: StageHandler): void;
+   410→
+   411→  /** Register intent hooks for a kind (M-RT-2+ uses this). */
+   412→  registerIntent(kind: string, hooks: import('./intent').IntentHooks): void;
+   413→}
+   414→
+   415→export interface CreateRuntimeOptions {
+   416→  environment?: Environment;
+   417→  /** Use a virtual clock (sandbox/twin). Default: live clock. */
+   418→  virtualClock?: { origin?: number; speed?: number };
+   419→  /** Provide a custom EventStore (e.g. Prisma-backed in M-RT-2). */
+   420→  eventStore?: EventStore;
+   421→}
+   422→
+   423→/** Create a Runtime instance. */
+   424→export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
+   425→  const clock: RuntimeClock = opts.virtualClock
+   426→    ? new VirtualClock(opts.virtualClock)
+   427→    : new LiveClock();
+   428→  // R3 FIX: Use PostgresEventStore as the authoritative event store.
+   429→  // The database is the source of truth — events are written to Postgres
+   430→  // BEFORE the API returns. The in-memory cache is disposable.
+   431→  // Falls back to InMemoryEventStore if DATABASE_URL is not set (for tests).
+   432→  const eventStore: EventStore = opts.eventStore
+   433→    ?? (process.env.DATABASE_URL
+   434→      ? new PostgresEventStore()
+   435→      : new InMemoryEventStore());
+   436→
+   437→  // R3/R2/R5: Hydrate the PostgresEventStore cache from the DB on startup.
+   438→  // This loads all persisted events into the in-memory cache for fast reads.
+   439→  // The DB is authoritative; the cache is disposable.
+   440→  if (eventStore instanceof PostgresEventStore) {
+   441→    eventStore.hydrate().catch((err) => {
+   442→      console.error('[runtime] PostgresEventStore hydration failed:', err);
+   443→    });
+   444→  }
+   445→  const intentEngine = new IntentEngine(clock);
+   446→  const policyEngine = new DefaultPolicyEngine();
+   447→  const pipeline = new Pipeline(clock, intentEngine, eventStore, policyEngine);
+   448→  const projectionRunner = new ProjectionRunner();
+   449→  projectionRunner.start(eventStore);
+   450→
+   451→  // Amendment 1 engines — interface-only implementations for M-RT-1.
+   452→  // TODO(HARDEN): 9 NoOp stub engines below never got real implementations
+   453→  // (NoOpEconomicHealthDashboard, NoOpMultiHopRouter, NoOpCapabilityDiscoveryEngine,
+   454→  // NoOpCorridorDiscoveryEngine, NoOpReserveDiscoveryEngine, NoOpLPGrowthEngine,
+   455→  // NoOpTreasuryGrowthEngine, NoOpEconomicScoreEngine, NoOpCounterfactualEngine).
+   456→  // Either implement or explicitly mark as "deferred — interface only" with a
+   457→  // tracking issue. The 4 NoOps with real replacements (NoOpOpportunityDiscoveryEngine,
+   458→  // NoOpLiquidityIntelligenceEngine, NoOpFinancialCompiler, NoOpFinancialKnowledgeGraph)
+   459→  // can be deleted once callers are migrated to v2/eco-intelligence/RealFinancialCompiler.
+   460→  // Tracked by HARDEN-1 audit (priority fix #5).
+   461→  const reserveMarketState = new InMemoryReserveMarket();
+   462→  const liquidityStrategyMarketplace = new InMemoryLiquidityStrategyMarketplace();
+   463→  const liquidityIntelligence = new NoOpLiquidityIntelligenceEngine();
+   464→  const opportunityDiscovery = new NoOpOpportunityDiscoveryEngine();
+   465→  const recommendationStore = new InMemoryRecommendationStore();
+   466→  const liquidityGraph = new InMemoryLiquidityGraph();
+   467→  // Amendment 2 engines — interface-only (NoOp) implementations for M-RT-1.
+   468→  const economicHealth = new NoOpEconomicHealthDashboard();
+   469→  const multiHopRouter = new NoOpMultiHopRouter();
+   470→  // Final Amendment engines + graphs — interface-only (NoOp/In-memory) for M-RT-1.
+   471→  const capabilityGraph = new InMemoryCapabilityGraph();
+   472→  // M-RT-2: Capability Graph as a compiled projection (compiler + projection).
+   473→  const capabilityCompiler = new CapabilityCompiler();
+   474→  const capabilityProjection = new CapabilityGraphProjection(
+   475→    capabilityGraph,
+   476→    capabilityCompiler,
+   477→    clock,
+   478→    // getInput: returns the current source-of-truth inputs.
+   479→    // M-RT-2 transitional: reads from kernel LP data. M-RT-3+ reads from LP Profile store.
+   480→    () => compilerInputFromKernel([]),  // empty by default; seed via API
+   481→  );
+   482→  const routeGraph = new InMemoryRouteGraph();
+   483→  // M-RT-3: Reserve Ledger (event-derived projection; the only writer).
+   484→  const reserveLedger = new ReserveLedgerService(eventStore, clock);
+   485→  // M-RT-4: Reserve Market (pure read model — no persistent state; derived from ledger).
+   486→  const reserveMarket = new ReserveMarketEngine(reserveLedger, clock);
+   487→  // M-RT-5: Liquidity Marketplace (offer events → order book projection; deterministic matching).
+   488→  const liquidityMarketplace = new LiquidityMarketplaceService(eventStore, clock);
+   489→  // M-RT-6: Route Graph (compiled from Capability Graph) + Reserve-Aware Routing (pure scoring).
+   490→  const routeCompiler = new RouteCompiler();
+   491→  const routeScoringEngine = new RouteScoringEngine({
+   492→    routeGraph: routeCompiler.rebuild(capabilityGraph, clock.now()),
+   493→    capabilityGraph,
+   494→    reserveMarket,
+   495→    liquidityMarketplace,
+   496→    clock,
+   497→  });
+   498→  // M-RT-7: The real Financial Compiler (pure, deterministic, reads-only).
+   499→  const realCompiler = new RealFinancialCompiler();
+   500→  // M-RT-9: Opportunity Discovery (pure, deterministic network analysis → Recommendations).
+   501→  const opportunityDiscoveryV2 = new OpportunityDiscoveryEngine({
+   502→    capabilityGraph,
+   503→    reserveLedger,
+   504→    reserveMarket,
+   505→    liquidityMarketplace,
+   506→    routeCompiler,
+   507→    clock,
+   508→  });
+   509→  // M-RT-10: Recommendation Lifecycle (event-driven state management; the only writer).
+   510→  const recLifecycle = new RecommendationLifecycleService(eventStore, clock);
+   511→  // M-RT-11: Digital Twin (pure simulation — no state, no events, no mutations).
+   512→  const digitalTwin = new DigitalTwinEngine({
+   513→    capabilityGraph,
+   514→    reserveLedger,
+   515→    reserveMarket,
+   516→    liquidityMarketplace,
+   517→    routeCompiler,
+   518→    clock,
+   519→  });
+   520→  // M-RT-12: Execution Pipeline (side-effect-owning executor; owns all mutations).
+   521→  const executionPipeline = new ExecutionPipeline({
+   522→    eventStore,
+   523→    clock,
+   524→    reserveLedger,
+   525→    liquidityMarketplace,
+   526→  });
+   527→  // M-RT-13: Simulator (sim = prod; same runtime, different context).
+   528→  const simulator = new SimulatorEngine({
+   529→    clock,
+   530→    capabilityGraph,
+   531→    reserveLedger,
+   532→    reserveMarket,
+   533→    liquidityMarketplace,
+   534→    routeCompiler,
+   535→    realCompiler,
+   536→    executionPipeline,
+   537→  });
+   538→  // M-RT-14: Inspector (read-only visualization, explanation, provenance).
+   539→  const inspector = new InspectorService({
+   540→    eventStore,
+   541→    clock,
+   542→    capabilityGraph,
+   543→    reserveLedger,
+   544→    reserveMarket,
+   545→    liquidityMarketplace,
+   546→    routeCompiler,
+   547→    opportunityDiscovery: opportunityDiscoveryV2,
+   548→    recLifecycle,
+   549→  });
+   550→  // M-RT-15: API Gateway (single ingress; auth, validation, idempotency, rate limiting, tracing).
+   551→  const apiGateway = new APIGateway(clock);
+   552→  // M-RT-15: Scheduling Engine (clock-driven, deterministic, retry, dead-letter).
+   553→  const schedulingEngine = new SchedulingEngine(clock);
+   554→  const capabilityDiscovery = new NoOpCapabilityDiscoveryEngine();
+   555→  const corridorDiscovery = new NoOpCorridorDiscoveryEngine();
+   556→  const reserveDiscovery = new NoOpReserveDiscoveryEngine();
+   557→  const lpGrowth = new NoOpLPGrowthEngine();
+   558→  const treasuryGrowth = new NoOpTreasuryGrowthEngine();
+   559→  const economicScore = new NoOpEconomicScoreEngine();
+   560→  const counterfactual = new NoOpCounterfactualEngine();
+   561→  const recommendationLifecycle = new InMemoryRecommendationLifecycle();
+   562→  // v1.4 True Final Freeze — Financial Compiler + Knowledge Graph (NoOp for M-RT-1).
+   563→  const compiler = new NoOpFinancialCompiler();
+   564→  const knowledgeGraph = new NoOpFinancialKnowledgeGraph();
+   565→
+   566→  // ── M-RT-16: Liquidity Composer (multi-hop + split routing) ─────────────
+   567→  const composer = new LiquidityComposer();
+   568→
+   569→  // ── M-RT-18: Payments capability (Events → Projection → Read Model → View) ─
+   570→  const payments = new PaymentsService({ eventStore, clock });
+   571→  projectionRunner.register(payments.projection);
+   572→  const paymentBackfill = new PaymentBackfillService({
+   573→    paymentsService: payments,
+   574→    environment: opts.environment ?? 'live',
+   575→    actorId: 'system:backfill',
+   576→    correlationPrefix: 'backfill:payment',
+   577→  });
+   578→
+   579→  // ── M-RT-19: Refunds capability (uses BackfillEngine<T>) ────────────────
+   580→  const refunds = new RefundsService({ eventStore, clock });
+   581→  projectionRunner.register(refunds.projection);
+   582→  const refundBackfill = new RefundBackfillService({
+   583→    refundsService: refunds,
+   584→    environment: opts.environment ?? 'live',
+   585→    correlationPrefix: 'backfill:refund',
+   586→  });
+   587→
+   588→  // ── M-RT-23: Wallets capability (stateful aggregate — derived balances) ─
+   589→  const wallets = new WalletsService({ eventStore, clock });
+   590→  projectionRunner.register(wallets.projection);
+   591→  const walletBackfill = new WalletBackfillService({
+   592→    walletsService: wallets,
+   593→    environment: opts.environment ?? 'live',
+   594→    correlationPrefix: 'backfill:wallet',
+   595→  });
+   596→
+   597→  // ── M-RT-24: Treasury Kernel (financial source of truth) ────────────────
+   598→  const treasury = new TreasuryService({ eventStore, clock });
+   599→  projectionRunner.register(treasury.projection);
+   600→  const treasuryBackfill = new TreasuryBackfillService({
+   601→    treasuryService: treasury,
+   602→    environment: opts.environment ?? 'live',
+   603→    correlationPrefix: 'backfill:treasury',
+   604→  });
+   605→
+   606→  // ── M-RT-25: Economic Kernel (Twin Tokens + LP Runtime + Marketplace) ───
+   607→  const twinTokens = new TwinTokenProjection();
+   608→  const lpRuntime = new LPRuntimeProjection();
+   609→  const marketplace = new EconomicMarketplace(lpRuntime);
+   610→  const economicCompiler = new EconomicCompiler(marketplace);
+   611→  // M-RT-29 fix: register LP + twin token projections with the ProjectionRunner
+   612→  // so they receive live events from the EventStore.
+   613→  projectionRunner.register(lpRuntime as unknown as import('./read-models').Projection);
+   614→  projectionRunner.register(twinTokens as unknown as import('./read-models').Projection);
+   615→
+   616→  // ── M-RT-19: Migration Manager (owns all capability backfills) ──────────
+   617→  const migrations = new MigrationManager();
+   618→  migrations.register('payments', 1, () => paymentBackfill.run(), () => paymentBackfill.status(), () => paymentBackfill.status().then((s) => payments.health(s.prismaCount)));
+   619→  migrations.register('refunds', 1, () => refundBackfill.run(), () => refundBackfill.status(), () => refundBackfill.status().then((s) => refunds.health(s.prismaCount)));
+   620→  migrations.register('wallets', 1, () => walletBackfill.run(), () => walletBackfill.status(), () => walletBackfill.status().then((s) => wallets.health(s.prismaCount)));
+   621→  migrations.register('treasury', 1, () => treasuryBackfill.run(), () => treasuryBackfill.status(), () => treasuryBackfill.status().then((s) => treasury.health(s.prismaCount)));
+   622→  migrations.triggerAll();
+   623→
+   624→  // ── M-RT-19: Projection health registry ─────────────────────────────────
+   625→  const health = new ProjectionHealthRegistry();
+   626→  health.register('payments', async () => { const s = await paymentBackfill.status(); return payments.health(s.prismaCount); });
+   627→  health.register('refunds', async () => { const s = await refundBackfill.status(); return refunds.health(s.prismaCount); });
+   628→  health.register('wallets', async () => { const s = await walletBackfill.status(); return wallets.health(s.prismaCount); });
+   629→  health.register('treasury', async () => { const s = await treasuryBackfill.status(); return treasury.health(s.prismaCount); });
+   630→
+   631→  // ── M-RT-20: Invariant Engine (economic integrity hardening) ────────────
+   632→  const invariants = new InvariantEngine();
+   633→  for (const inv of BUILTIN_INVARIANTS) {
+   634→    invariants.register(inv);
+   635→  }
+   636→
+   637→  // ── M-RT-21: Runtime Dispatcher (the only way to mutate financial state) ─
+   638→  const commands = new CommandRegistry();
+   639→  for (const handler of BUILTIN_HANDLERS) {
+   640→    commands.register(handler);
+   641→  }
+   642→  const dispatcher = new RuntimeDispatcher({ eventStore, clock, invariants, registry: commands });
+   643→
+   644→  // ── M-RT-26: Transaction Coordinator + Settlement Adapters ──────────────
+   645→  const coordinator = new TransactionCoordinator({ eventStore, clock, invariants, registry: commands });
+   646→  const settlements = createDefaultAdapters();
+   647→
+   648→  // ── M-RT-27: Event Evolution (Schema Registry + Upcasters) ──────────────
+   649→  const schema = new SchemaRegistry();
+   650→  registerAllEventTypes(schema);
+   651→
+   652→  // ── M-RT-28: Runtime Recovery (Recovery Manager) ────────────────────────
+   653→  const recovery = new RecoveryManager({ eventStore, schema });
+   654→  // Register all projections with the recovery manager.
+   655→  recovery.register(payments.projection, () => payments.projection.totalAll(), () => payments.projection.eventsApplied());
+   656→  recovery.register(refunds.projection, () => refunds.projection.totalAll(), () => refunds.projection.eventsApplied());
+   657→  recovery.register(wallets.projection, () => wallets.projection.count(), () => wallets.projection.eventsApplied());
+   658→  recovery.register(treasury.projection, () => treasury.projection.count(), () => treasury.projection.eventsApplied());
+   659→
+   660→  // ── M-RT-30: Liquidity Intelligence & Settlement Kernel ─────────────────
+   661→  const bandwidth = new BandwidthEngine();
+   662→  const settlementContracts = new SettlementContractEngine();
+   663→  const disputes = new DisputeEngine();
+   664→  const liquidityPolicy = new LiquidityPolicyEngine();
+   665→
+   666→  // ── M-ECO-31: Adaptive Liquidity Intelligence ───────────────────────────
+   667→  const intelligence = new EcoIntelligenceEngine({
+   668→    getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
+   669→      id: a.id, kind: a.kind, ownerId: a.ownerId, currency: a.currency,
+   670→      availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
+   671→    })),
+   672→    getBandwidthPositions: () => bandwidth.listAll().map((b) => ({
+   673→      owner: b.lpId, country: b.country, assetType: b.assetType,
+   674→      capacity: b.capacity, reserved: b.reserved, used: b.used, available: b.available,
+   675→      escrow: b.escrow, bond: b.bond, status: b.status,
+   676→    })),
+   677→    getLPs: () => lpRuntime.listLPs().map((lp) => ({
+   678→      lpId: lp.lpId, name: lp.name, confidence: lp.confidence, riskScore: lp.riskScore,
+   679→      totalCapacity: lp.totalCapacity,
+   680→      supportedCorridors: lp.supportedCorridors.map((c) => ({ from: c.from, to: c.to, capacity: c.capacity, spreadBps: c.spreadBps, latencyMs: c.latencyMs })),
+   681→    })),
+   682→    getLPOffers: () => lpRuntime.listOffers().map((o) => ({
+   683→      offerId: o.offerId, lpId: o.lpId, from: o.from, to: o.to,
+   684→      capacity: o.capacity, spreadBps: o.spreadBps, latencyMs: o.latencyMs,
+   685→      confidence: o.confidence, riskScore: o.riskScore,
+   686→    })),
+   687→    getEventCount: () => eventStore.size(),
+   688→  });
+   689→
+   690→  // ── M-ECO-32: Settlement Orchestrator (durable workflow actors) ─────────
+   691→  const settlementOrchestrator = new SettlementOrchestrator();
+   692→  const timerEngine = new TimerEngine();
+   693→  projectionRunner.register(settlementOrchestrator as unknown as import('./read-models').Projection);
+   694→
+   695→  // ── M-ECO-33: Autonomous Treasury Director ─────────────────────────────
+   696→  const treasuryDirector = new TreasuryDirector(
+   697→    () => {
+   698→      const dashboard = intelligence.getDashboard();
+   699→      return {
+   700→        reserveRecommendations: dashboard.reserveRecommendations,
+   701→        treasuryDecisions: dashboard.treasuryDecisions,
+   702→      };
+   703→    },
+   704→    () => ({
+   705→      accounts: treasury.projection.list({ take: 10000 }).map((a) => ({
+   706→        kind: a.kind, currency: a.currency,
+   707→        availableBalance: a.availableBalance, reference: a.reference,
+   708→      })),
+   709→    }),
+   710→  );
+   711→
+   712→  // ── M-ECO-34: LP Intelligence & Incentive Engine ───────────────────────
+   713→  const lpIntelligence = new LPIntelligenceEngine();
+   714→
+   715→  // ── M-ECO-34.5: Economic Control Plane ─────────────────────────────────
+   716→  const controlPlane = new EconomicControlPlane({
+   717→    getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
+   718→      id: a.id, kind: a.kind, ownerId: a.ownerId, currency: a.currency,
+   719→      availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
+   720→    })),
+   721→    getBandwidthPositions: () => bandwidth.listAll().map((b) => ({
+   722→      owner: b.lpId, country: b.country, assetType: b.assetType,
+   723→      capacity: b.capacity, available: b.available, status: b.status,
+   724→    })),
+   725→    getLPs: () => lpRuntime.listLPs().map((lp) => ({
+   726→      lpId: lp.lpId, confidence: lp.confidence, riskScore: lp.riskScore, totalCapacity: lp.totalCapacity,
+   727→    })),
+   728→    getTwinTokenPositions: () => twinTokens.list().map((t) => ({
+   729→      accountId: t.accountId, tokenType: t.tokenType, currency: t.currency, balance: t.balance,
+   730→    })),
+   731→    getIntelligenceDashboard: () => intelligence.getDashboard(),
+   732→  });
+   733→
+   734→  // ── M-ECO-35: Canonical Economic Ledger & Solvency Engine ──────────────
+   735→  const ledger = new EconomicLedgerEngine({
+   736→    getTreasuryAccounts: () => treasury.projection.list({ take: 10000 }).map((a) => ({
+   737→      id: a.id, kind: a.kind, currency: a.currency,
+   738→      availableBalance: a.availableBalance, reservedBalance: a.reservedBalance, reference: a.reference,
+   739→    })),
+   740→    getTwinTokenPositions: () => twinTokens.list().map((t) => ({
+   741→      accountId: t.accountId, tokenType: t.tokenType, currency: t.currency, balance: t.balance,
+   742→    })),
+   743→    getBandwidthPositions: () => bandwidth.listAll().map((b) => ({
+   744→      owner: b.lpId, country: b.country, capacity: b.capacity,
+   745→      available: b.available, escrow: b.escrow, bond: b.bond, used: b.used,
+   746→    })),
+   747→    getSettlementContracts: () => settlementContracts.list().map((c) => ({
+   748→      contractId: c.id, amount: c.amount, currency: c.toCurrency,
+   749→      status: c.status, escrowLocked: Boolean(c.escrowAmount > 0),
+   750→    })),
+   751→    getEventCount: () => eventStore.size(),
+   752→  });
+   753→
+   754→  // ── M-ECO-36: Global Economic Directorate ───────────────────────────────
+   755→  const directorate = new GlobalEconomicDirectorate({
+   756→    getDigitalTwin: () => controlPlane.buildDigitalTwin(),
+   757→    getControlPlaneReport: () => controlPlane.getReport(),
+   758→    getBalanceSheet: () => ledger.getBalanceSheet(),
+   759→  });
+   760→
+   761→  // ── M-ECO-37: Economic Council ─────────────────────────────────────────
+   762→  const council = new EconomicCouncil({
+   763→    getDirectorRecommendations: () => {
+   764→      const plan = directorate.globalPlan();
+   765→      return plan.recommendations.map((r) => ({
+   766→        director: r.director,
+   767→        action: r.action,
+   768→        description: r.description,
+   769→        targetCountries: r.targetCountries,
+   770→        amount: r.amount,
+   771→        currency: r.currency,
+   772→        expectedROI: r.expectedROI,
+   773→        expectedRisk: r.expectedRisk,
+   774→        confidence: r.confidence,
+   775→        rationale: r.rationale,
+   776→      }));
+   777→    },
+   778→    validateConstitution: (ctx) => controlPlane.validateConstitution({
+   779→      twinTokenSupply: ledger.getBalanceSheet().liabilities.twinTokensOutstanding,
+   780→      totalReserves: ledger.getBalanceSheet().assets.totalAssets,
+   781→      fiatReserves: ledger.getBalanceSheet().assets.fiatReserves,
+   782→      stablecoinReserves: ledger.getBalanceSheet().assets.stablecoinReserves,
+   783→      reserveCoverage: 0.5,
+   784→      lpExposure: 0,
+   785→      countryExposure: {},
+   786→      stablecoinExposure: ledger.getBalanceSheet().assets.stablecoinReserves,
+   787→      escrowLocked: true,
+   788→      recipientConfirmed: true,
+   789→      settlementRailSupported: true,
+   790→      viaTransactionCoordinator: true,
+   791→      viaSettlementContract: true,
+   792→    }),
+   793→  });
+   794→
+   795→  // ── M-TRUST: Global Audit & Transparency Layer ─────────────────────────
+   796→  const trust = new TrustLayer({
+   797→    getEventCount: () => eventStore.size(),
+   798→    getEvents: (from, limit) => eventStore.readAll(from, limit),
+   799→    getBalanceSheet: () => {
+   800→      const bs = ledger.getBalanceSheet();
+   801→      return {
+   802→        assets: { totalAssets: bs.assets.totalAssets, fiatReserves: bs.assets.fiatReserves, stablecoinReserves: bs.assets.stablecoinReserves },
+   803→        liabilities: { twinTokensOutstanding: bs.liabilities.twinTokensOutstanding, pendingSettlements: bs.liabilities.pendingSettlements },
+   804→        equity: { totalEquity: bs.equity.totalEquity },
+   805→        isBalanced: bs.isBalanced,
+   806→      };
+   807→    },
+   808→    getSolvencyReport: () => {
+   809→      const s = ledger.getSolvencyReport();
+   810→      return { reserveCoverage: s.reserveCoverage, twinCoverage: s.twinCoverage, solvencyRatio: s.solvencyRatio, networkSolvent: s.networkSolvent };
+   811→    },
+   812→    getProofOfReserves: () => {
+   813→      const p = ledger.getProofOfReserves();
+   814→      return { totalReserves: p.totalReserves, totalFiat: p.totalFiat, totalStablecoins: p.totalStablecoins };
+   815→    },
+   816→    getProofOfTwinTokens: () => {
+   817→      const p = ledger.getProofOfTwinTokens();
+   818→      return { totalSupply: p.totalSupply, totalBacking: p.totalBacking, backingRatio: p.backingRatio, isFullyBacked: p.isFullyBacked };
+   819→    },
+   820→    getCouncilDecisions: () => council.getDecisions(),
+   821→    getSettlementAdapters: () => settlements.networks(),
+   822→    getIntelligenceDashboard: () => intelligence.getDashboard(),
+   823→  });
+   824→
+   825→  // ── M-PLATFORM-38: Platform Experience (wired after runtime creation) ──
+   826→  // Platform needs a reference to the runtime, so we create a placeholder
+   827→  // and wire it after the runtime object is constructed.
+   828→  const platform = new PlatformEngine({ runtime: null as never });
+   829→
+   830→  const runtime: Runtime = {
+   831→    clock,
+   832→    eventStore,
+   833→    intentEngine,
+   834→    pipeline,
+   835→    policyEngine,
+   836→    projectionRunner,
+   837→    reserveMarketState,
+   838→    liquidityStrategyMarketplace,
+   839→    liquidityIntelligence,
+   840→    opportunityDiscovery,
+   841→    recommendationStore,
+   842→    liquidityGraph,
+   843→    economicHealth,
+   844→    multiHopRouter,
+   845→    capabilityGraph,
+   846→    routeGraph,
+   847→    capabilityDiscovery,
+   848→    corridorDiscovery,
+   849→    reserveDiscovery,
+   850→    lpGrowth,
+   851→    treasuryGrowth,
+   852→    economicScore,
+   853→    counterfactual,
+   854→    recommendationLifecycle,
+   855→    compiler,
+   856→    knowledgeGraph,
+   857→    capabilityCompiler,
+   858→    capabilityProjection,
+   859→    reserveLedger,
+   860→    reserveMarket,
+   861→    liquidityMarketplace,
+   862→    routeCompiler,
+   863→    routeScoringEngine,
+   864→    realCompiler,
+   865→    opportunityDiscoveryV2,
+   866→    recLifecycle,
+   867→    digitalTwin,
+   868→    executionPipeline,
+   869→    simulator,
+   870→    inspector,
+   871→    apiGateway,
+   872→    schedulingEngine,
+   873→    composer,
+   874→    payments,
+   875→    paymentBackfill,
+   876→    refunds,
+   877→    refundBackfill,
+   878→    wallets,
+   879→    walletBackfill,
+   880→    treasury,
+   881→    treasuryBackfill,
+   882→    twinTokens,
+   883→    lpRuntime,
+   884→    marketplace,
+   885→    economicCompiler,
+   886→    coordinator,
+   887→    settlements,
+   888→    schema,
+   889→    recovery,
+   890→    liquidityPolicy,
+   891→    bandwidth,
+   892→    settlementContracts,
+   893→    disputes,
+   894→    intelligence,
+   895→    settlementOrchestrator,
+   896→    timerEngine,
+   897→    treasuryDirector,
+   898→    lpIntelligence,
+   899→    controlPlane,
+   900→    ledger,
+   901→    directorate,
+   902→    council,
+   903→    trust,
+   904→    platform,
+   905→    health,
+   906→    migrations,
+   907→    invariants,
+   908→    dispatcher,
+   909→    commands,
+   910→    dispatch: (raw, ctx) => pipeline.dispatch(raw, ctx),
+   911→    registerStage: (stage, handler) => pipeline.register(stage, handler),
+   912→    registerIntent: (kind, hooks) => intentEngine.register(kind, hooks),
+   913→  };
+   914→
+   915→  // M-PLATFORM-38: Wire the runtime reference back to the platform engine.
+   916→  (platform as unknown as { inputs: { runtime: Runtime } }).inputs.runtime = runtime;
+   917→
+   918→  return runtime;
+   919→}
+   920→
+   921→/**
+   922→ * The default Runtime singleton (live environment, in-memory store).
+   923→ *
+   924→ * Uses globalThis so Next.js dev-mode module re-instantiation doesn't
+   925→ * create duplicate runtimes (same pattern as the existing eventBus/db).
+   926→ */
+   927→const globalForRuntime = globalThis as unknown as { __PAYSWAP_RUNTIME__?: Runtime };
+   928→export const runtime: Runtime =
+   929→  globalForRuntime.__PAYSWAP_RUNTIME__ ?? createRuntime();
+   930→if (!globalForRuntime.__PAYSWAP_RUNTIME__) {
+   931→  globalForRuntime.__PAYSWAP_RUNTIME__ = runtime;
+   932→}
+   933→
+   934→/**
+   935→ * Convenience: dispatch a raw intent on the default runtime.
+   936→ *
+   937→ * @example
+   938→ *   const result = await dispatch(
+   939→ *     { kind: 'payment', raw: { customer: 'Alice', amount: 120, currency: 'USD' } },
+   940→ *     { actor: { id: 'usr_1', role: 'merchant' }, environment: 'sandbox', source: 'dashboard' },
+   941→ *   );
+   942→ */
+   943→export function dispatch(
+   944→  raw: MerchantIntent,
+   945→  ctx: {
+   946→    actor: Actor;
+   947→    environment: Environment;
+   948→    source: IntentSource;
+   949→    correlationId?: string;
+   950→    causationId?: string;
+   951→  },
+   952→): Promise<ExecutionResult> {
+   953→  return runtime.dispatch(raw, requestContext(ctx));
+   954→}
+   955→
+   956→/** Re-export key types for callers. */
+   957→export type { MerchantIntent, TypedIntent, ExecutionResult, RuntimeClock, EventStore, PolicyEngine };
+   958→
+   959→/**
+   960→ * M-RT-29: The global RuntimeHost singleton (Sandbox + Live).
+   961→ *
+   962→ * Owns two completely independent runtime instances. Use `runtimeHost.get('sandbox')`
+   963→ * or `runtimeHost.get('live')` to access a specific runtime.
+   964→ *
+   965→ * Uses globalThis so Next.js dev-mode doesn't create duplicate hosts.
+   966→ */
+   967→const globalForHost = globalThis as unknown as { __PAYSWAP_RUNTIME_HOST__?: RuntimeHost };
+   968→export const runtimeHost: RuntimeHost =
+   969→  globalForHost.__PAYSWAP_RUNTIME_HOST__ ?? new RuntimeHost();
+   970→if (!globalForHost.__PAYSWAP_RUNTIME_HOST__) {
+   971→  globalForHost.__PAYSWAP_RUNTIME_HOST__ = runtimeHost;
+   972→}
+   973→

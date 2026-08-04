@@ -17,6 +17,8 @@ import {
   parcelExtService, parcelProviderAdapters,
 } from '@/extensions/parcel-delivery/extended-store';
 import { parcelService } from '@/extensions/parcel-delivery/store';
+// Live connectors are imported lazily inside the action handlers to keep the
+// initial bundle small (stellar-sdk pulls sodium-native which is heavy).
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -425,7 +427,53 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute)' }, { status: 400 });
+    // ── Live PSP + Stellar + Maps tests (real API calls) ──
+    // Each action calls a real sandbox/test API with the configured keys.
+    // Imports are lazy so stellar-sdk (heavy) only loads when needed.
+
+    if (action === 'liveStripe') {
+      const { stripeLive } = await import('@/live');
+      const result = await stripeLive.runStripeTest();
+      return NextResponse.json({ ok: true, provider: 'Stripe', result, message: result.paymentIntent.success ? `✓ Stripe test mode: PaymentIntent ${result.paymentIntent.data?.id} created.` : `✗ Stripe test failed: ${result.paymentIntent.error}` });
+    }
+
+    if (action === 'livePaystack') {
+      const { paystackLive } = await import('@/live');
+      const result = await paystackLive.runPaystackTest();
+      return NextResponse.json({ ok: true, provider: 'Paystack', result, message: result.init.success ? `✓ Paystack test mode: transaction ${result.init.data?.reference} initialized.` : `✗ Paystack test failed: ${result.init.error}` });
+    }
+
+    if (action === 'liveFlutterwave') {
+      const { flutterwaveLive } = await import('@/live');
+      const result = await flutterwaveLive.runFlutterwaveTest();
+      return NextResponse.json({ ok: true, provider: 'Flutterwave', result, message: result.payment.success ? `✓ Flutterwave test mode: payment ${result.payment.data?.tx_ref} initiated.` : `✗ Flutterwave test failed: ${result.payment.error}` });
+    }
+
+    if (action === 'liveStellar') {
+      const stellarMod = await import('@/live/stellar');
+      const result = await stellarMod.runStellarTest();
+      return NextResponse.json({ ok: true, provider: 'Stellar', result, message: result.payment.success ? `✓ Stellar testnet: tx ${result.payment.data?.txHash.slice(0, 12)}… submitted on ledger ${result.payment.data?.ledger}.` : `✗ Stellar test failed: ${result.payment.error}` });
+    }
+
+    if (action === 'liveStellarPath') {
+      const stellarMod = await import('@/live/stellar');
+      // Quote a cross-border path: XLM → USDC (GHS→USDC→KES pattern)
+      const usdcTestnetIssuer = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NATPQDWVRZULE';
+      const result = await stellarMod.pathPaymentQuote({
+        sourceAsset: 'XLM',
+        destAsset: `USDC:${usdcTestnetIssuer}`,
+        destAmount: '1',
+      });
+      return NextResponse.json({ ok: true, provider: 'Stellar', result, message: result.success ? `✓ Path quote: ${result.data?.sourceAmount ?? '—'} XLM → 1 USDC.` : `✗ Path quote failed: ${result.error}` });
+    }
+
+    if (action === 'liveMaps') {
+      const { mapsLive } = await import('@/live');
+      const result = await mapsLive.runMapsTest();
+      return NextResponse.json({ ok: true, provider: 'Google Maps', result, message: result.distance.success ? `✓ Google Maps: ${result.distance.data?.rows[0]?.elements[0]?.distance?.text} driving distance.` : `✗ Maps test failed: ${result.distance.error}` });
+    }
+
+    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps)' }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },

@@ -166,6 +166,28 @@ export interface PlanRouteResult {
   message: string;
 }
 
+// ── Live test results ──
+export interface LiveTestResult<T = Record<string, unknown>> {
+  provider: string;
+  operation: string;
+  success: boolean;
+  status: number;
+  latencyMs: number;
+  environment: string;
+  timestamp: string;
+  data?: T;
+  summary: string;
+  error?: string;
+  rawResponse?: unknown;
+  requestPreview?: Record<string, unknown>;
+}
+export interface LiveProviderResult {
+  ok: boolean;
+  provider: string;
+  message: string;
+  result: Record<string, LiveTestResult>;
+}
+
 // ── Hooks ──
 export function useShowcase() {
   const [data, setData] = useState<ShowcaseData | null>(null);
