@@ -49,7 +49,7 @@ import {
   PERMISSION_LABELS,
   type PublicPlugin,
   type PluginReview,
-} from '@/marketplace';
+} from '@/marketplace/types';
 
 interface Props {
   plugin: PublicPlugin;

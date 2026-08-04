@@ -19,7 +19,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import type { PublicPlugin } from '@/marketplace';
+import type { PublicPlugin } from '@/marketplace/types';
 
 interface Props {
   plugins: PublicPlugin[];

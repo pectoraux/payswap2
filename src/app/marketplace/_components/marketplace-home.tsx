@@ -31,7 +31,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import type { PublicPlugin, CategoryMeta } from '@/marketplace';
+import type { PublicPlugin, CategoryMeta } from '@/marketplace/types';
 
 const ICONS: Record<string, LucideIcon> = {
   Globe2,

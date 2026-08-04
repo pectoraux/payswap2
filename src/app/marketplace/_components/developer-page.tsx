@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import type { PublicPlugin, DeveloperProfile } from '@/marketplace';
+import type { PublicPlugin, DeveloperProfile } from '@/marketplace/types';
 
 interface Props {
   profile: DeveloperProfile;

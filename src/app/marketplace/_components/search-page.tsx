@@ -27,7 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { CATEGORY_META, type PublicPlugin } from '@/marketplace';
+import { CATEGORY_META, type PublicPlugin } from '@/marketplace/types';
 
 interface Props {
   initialPlugins: PublicPlugin[];
