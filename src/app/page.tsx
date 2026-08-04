@@ -9,6 +9,7 @@ import {
   Layers, ArrowRight, ShieldCheck, CreditCard, ArrowDownToLine, QrCode,
   BarChart3, Lock, Code2, CheckCircle2, Globe2, Zap,
 } from 'lucide-react';
+import { ThemeToggle } from '@/components/showcase/theme-toggle';
 
 const features = [
   {
@@ -84,6 +85,7 @@ export default function MarketingPage() {
             <a href="#footer" className="hover:text-foreground">Resources</a>
           </nav>
           <div className="flex items-center gap-2">
+            <ThemeToggle />
             <Button asChild variant="ghost" size="sm">
               <Link href="/login">Sign in</Link>
             </Button>

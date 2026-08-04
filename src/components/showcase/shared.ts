@@ -236,6 +236,7 @@ export interface ScenarioResult {
   expectedStrategy: string; actualStrategy: string;
   settled: boolean; expectedSettled: boolean;
   passed: boolean;
+  knownGap?: string;
   metrics?: {
     costPercent: number; settlementTimeMs: number; settlementTimeLabel: string;
     riskScore: number; riskLabel: string; confidence: number; twinTokensMinted: number;

@@ -483,6 +483,11 @@ export function LiveTab() {
                         {r.ledgerEntries !== undefined && <span>ledger: <span className="font-medium text-foreground tabular-nums">{r.ledgerEntries}</span></span>}
                       </div>
                       {r.error && <p className="mt-1 text-[10px] text-rose-500">↳ {r.error.slice(0, 150)}</p>}
+                      {r.knownGap && !r.passed && (
+                        <p className="mt-1 rounded bg-amber-500/5 px-2 py-1 text-[10px] leading-snug text-amber-600 dark:text-amber-400">
+                          ⚠ {r.knownGap}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
