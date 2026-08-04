@@ -9,8 +9,18 @@ export async function POST(req: NextRequest) {
   let body: Record<string, unknown> = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }); }
   try {
+    const customerId = body.customerId as string;
+    // Auto-register if customer doesn't exist
+    const existing = loyaltyService.getBalance(customerId);
+    if (!existing) {
+      loyaltyService.registerCustomer({
+        id: customerId,
+        name: (body.customerName as string) ?? `Customer ${customerId.slice(-4)}`,
+        email: (body.customerEmail as string) ?? `${customerId}@payswap.dev`,
+      });
+    }
     const result = loyaltyService.awardPoints({
-      customerId: body.customerId as string,
+      customerId,
       points: body.points as number,
       reason: (body.reason as string) ?? 'manual',
       referenceId: body.referenceId as string | undefined,
