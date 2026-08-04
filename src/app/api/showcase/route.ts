@@ -647,17 +647,36 @@ export async function POST(req: NextRequest) {
         // 12: Wallet transfer — domestic
         { id: 12, name: 'Wallet Transfer (customer→customer)', category: 'WALLET_TRANSFER', expectSettled: true,
           overrides: { transaction: { type: 'domestic', buyer: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, merchant: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, amount: 500, currency: 'GHS', merchantType: 'Local merchant', customerType: 'Retail buyer', priority: 'cheapest' }, liquidityProviders: [] } },
-        // 13: Insufficient funds — amount exceeds all liquidity
+        // 13: Insufficient funds — amount exceeds all liquidity (now enforced)
         { id: 13, name: 'Insufficient Funds (rejected)', category: 'INSUFFICIENT_FUNDS', expectSettled: false,
-          knownGap: 'GAP: The kernel PlanExecutor does not enforce capacity limits — it processes the amount without checking if total available liquidity (LP bandwidth + stablecoin + reserves) is sufficient. A 999M KES payment with only ~50K available still settles. This is a real enforcement gap: hard capacity rejection is not implemented.',
           overrides: { transaction: { type: 'cross_border', buyer: { country: 'Kenya', currency: 'KES', method: 'M-Pesa', foId: 'fo-mpesa-ke' }, merchant: { country: 'Nigeria', currency: 'NGN', method: 'Bank Transfer', foId: 'fo-bank-gh' }, amount: 999999999, currency: 'KES', merchantType: 'Export merchant', customerType: 'Retail buyer', priority: 'cheapest' }, treasury: { originReserve: { country: 'Kenya', currency: 'KES', available: 0, minThreshold: 0 }, destinationReserve: { country: 'Nigeria', currency: 'NGN', available: 0, minThreshold: 0 }, stablecoinBalance: 50000 } } },
-        // 14: Emergency freeze — strict policy, no stablecoin, no emergency treasury
+        // 14: Emergency freeze — buyer country (Kenya) is frozen
         { id: 14, name: 'Treasury Emergency Freeze (Kenya)', category: 'EMERGENCY_FREEZE', expectSettled: false,
-          knownGap: 'GAP: The kernel does not implement country-level emergency freeze as a hard block. reservePolicy:"strict" is advisory (affects treasury recommendations) but does not prevent settlement. The payment settles because the destination (Ghana) has reserves. Emergency freeze enforcement is not implemented in the PlanExecutor.',
-          overrides: { transaction: { type: 'cross_border', buyer: { country: 'Kenya', currency: 'KES', method: 'M-Pesa', foId: 'fo-mpesa-ke' }, merchant: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, amount: 500, currency: 'KES', merchantType: 'Export merchant', customerType: 'Retail buyer', priority: 'cheapest' }, treasury: { originReserve: { country: 'Kenya', currency: 'KES', available: 0, minThreshold: 0 }, destinationReserve: { country: 'Ghana', currency: 'GHS', available: 5000000, minThreshold: 500000 }, stablecoinBalance: 0, emergencyTreasury: 0, reservePolicy: 'strict' }, policies: { maxRiskScore: 0.05 }, liquidityProviders: [] } },
+          overrides: { transaction: { type: 'cross_border', buyer: { country: 'Kenya', currency: 'KES', method: 'M-Pesa', foId: 'fo-mpesa-ke' }, merchant: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, amount: 500, currency: 'KES', merchantType: 'Export merchant', customerType: 'Retail buyer', priority: 'cheapest' }, treasury: { originReserve: { country: 'Kenya', currency: 'KES', available: 0, minThreshold: 0 }, destinationReserve: { country: 'Ghana', currency: 'GHS', available: 5000000, minThreshold: 500000 }, stablecoinBalance: 0, emergencyTreasury: 0, reservePolicy: 'strict' }, policies: { maxRiskScore: 0.05 }, liquidityProviders: [], frozenCountries: ['Kenya'] } },
         // 15: Claims/voting — disputed scenario with compliance hold
         { id: 15, name: 'Claims/Evidence/Voting (dispute)', category: 'CLAIMS', expectSettled: true,
           overrides: { transaction: { type: 'cross_border', buyer: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, merchant: { country: 'Togo', currency: 'XOF', method: 'Bank Transfer', foId: 'fo-bank-gh' }, amount: 1000, currency: 'GHS', merchantType: 'Export merchant', customerType: 'Retail buyer', priority: 'cheapest' }, treasury: { originReserve: { country: 'Ghana', currency: 'GHS', available: 5000000, minThreshold: 500000 }, destinationReserve: { country: 'Togo', currency: 'XOF', available: 3000000, minThreshold: 300000 } }, policies: { requireInsurance: true }, failures: [{ id: 'fail_s15', type: 'insurance_claim', label: 'Merchant dispute — LP failed to settle', atFrame: 1 }] } },
+        // ── EDGE CASES (beyond the catalog) ──
+        // E1: Freeze the merchant country (not the buyer) — should also block
+        { id: 101, name: 'Edge: Freeze merchant country', category: 'EDGE_FREEZE_MERCHANT', expectSettled: false,
+          overrides: { transaction: { type: 'cross_border', buyer: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, merchant: { country: 'Nigeria', currency: 'NGN', method: 'Bank Transfer', foId: 'fo-bank-gh' }, amount: 500, currency: 'GHS', merchantType: 'Export merchant', customerType: 'Retail buyer', priority: 'cheapest' }, treasury: { originReserve: { country: 'Ghana', currency: 'GHS', available: 5000000, minThreshold: 500000 }, destinationReserve: { country: 'Nigeria', currency: 'NGN', available: 0, minThreshold: 0 }, stablecoinBalance: 50000 }, frozenCountries: ['Nigeria'] } },
+        // E2: Freeze a country NOT involved in the payment — should still settle
+        { id: 102, name: 'Edge: Freeze unrelated country', category: 'EDGE_FREEZE_UNRELATED', expectSettled: true,
+          overrides: { transaction: { type: 'domestic', buyer: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, merchant: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, amount: 500, currency: 'GHS', merchantType: 'Local merchant', customerType: 'Retail buyer', priority: 'cheapest' }, treasury: { originReserve: { country: 'Ghana', currency: 'GHS', available: 5000000, minThreshold: 500000 }, destinationReserve: { country: 'Ghana', currency: 'GHS', available: 5000000, minThreshold: 500000 } }, liquidityProviders: [], frozenCountries: ['Kenya'] } },
+        // E3: Amount exactly equals available capacity — should settle (boundary)
+        //     No LPs, no reserves — capacity = stablecoin (50000) + emergency (20000) = 70000
+        { id: 103, name: 'Edge: Amount equals capacity (boundary)', category: 'EDGE_EXACT_CAPACITY', expectSettled: true,
+          overrides: { transaction: { type: 'cross_border', buyer: { country: 'Kenya', currency: 'KES', method: 'M-Pesa', foId: 'fo-mpesa-ke' }, merchant: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, amount: 70000, currency: 'KES', merchantType: 'Export merchant', customerType: 'Retail buyer', priority: 'cheapest' }, treasury: { originReserve: { country: 'Kenya', currency: 'KES', available: 0, minThreshold: 0 }, destinationReserve: { country: 'Ghana', currency: 'GHS', available: 0, minThreshold: 0 }, stablecoinBalance: 50000, emergencyTreasury: 20000 }, liquidityProviders: [] } },
+        // E4: Amount just exceeds capacity by 1 — should block (boundary)
+        //     No LPs, no reserves — capacity = 70000, amount = 70001
+        { id: 104, name: 'Edge: Amount exceeds capacity by 1', category: 'EDGE_OVER_CAPACITY', expectSettled: false,
+          overrides: { transaction: { type: 'cross_border', buyer: { country: 'Kenya', currency: 'KES', method: 'M-Pesa', foId: 'fo-mpesa-ke' }, merchant: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, amount: 70001, currency: 'KES', merchantType: 'Export merchant', customerType: 'Retail buyer', priority: 'cheapest' }, treasury: { originReserve: { country: 'Kenya', currency: 'KES', available: 0, minThreshold: 0 }, destinationReserve: { country: 'Ghana', currency: 'GHS', available: 0, minThreshold: 0 }, stablecoinBalance: 50000, emergencyTreasury: 20000 }, liquidityProviders: [] } },
+        // E5: Zero amount — should settle (no-op, but valid)
+        { id: 105, name: 'Edge: Zero amount', category: 'EDGE_ZERO', expectSettled: true,
+          overrides: { transaction: { type: 'domestic', buyer: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, merchant: { country: 'Ghana', currency: 'GHS', method: 'Bank Transfer', foId: 'fo-bank-gh' }, amount: 0, currency: 'GHS', merchantType: 'Local merchant', customerType: 'Retail buyer', priority: 'cheapest' }, treasury: { originReserve: { country: 'Ghana', currency: 'GHS', available: 5000000, minThreshold: 500000 }, destinationReserve: { country: 'Ghana', currency: 'GHS', available: 5000000, minThreshold: 500000 } }, liquidityProviders: [] } },
+        // E6: Both countries frozen — should block
+        { id: 106, name: 'Edge: Both countries frozen', category: 'EDGE_BOTH_FROZEN', expectSettled: false,
+          overrides: { transaction: { type: 'cross_border', buyer: { country: 'Kenya', currency: 'KES', method: 'M-Pesa', foId: 'fo-mpesa-ke' }, merchant: { country: 'Nigeria', currency: 'NGN', method: 'Bank Transfer', foId: 'fo-bank-gh' }, amount: 500, currency: 'KES', merchantType: 'Export merchant', customerType: 'Retail buyer', priority: 'cheapest' }, treasury: { originReserve: { country: 'Kenya', currency: 'KES', available: 0, minThreshold: 0 }, destinationReserve: { country: 'Nigeria', currency: 'NGN', available: 0, minThreshold: 0 }, stablecoinBalance: 50000 }, frozenCountries: ['Kenya', 'Nigeria'] } },
       ];
 
       const results = scenarios.map((s) => {
@@ -666,6 +685,9 @@ export async function POST(req: NextRequest) {
           const result = simulationEngine.run(scenario);
           const actualStrategy = (result.plan.reasoning as { strategy?: string }).strategy ?? 'UNKNOWN';
           const eventTypes = result.events.map((e: { type?: string }) => e.type ?? 'unknown');
+          // Extract block reason from the execution.blocked event (if present).
+          const blockEvent = result.events.find((e: { type?: string }) => e.type === 'execution.blocked');
+          const blockReason = (blockEvent as { payload?: { reason?: string } } | undefined)?.payload?.reason ?? null;
           // Pass criteria: the scenario ran without error AND the settled status
           // matches the expectation. The kernel's reasoning.strategy is the
           // optimization objective (cost/risk/latency-minimizing), which is a
@@ -681,6 +703,7 @@ export async function POST(req: NextRequest) {
             expectedSettled: s.expectSettled,
             passed,
             knownGap: s.knownGap,
+            blockReason,
             metrics: {
               costPercent: result.plan.metrics.costPercent,
               settlementTimeMs: result.plan.metrics.settlementTimeMs,

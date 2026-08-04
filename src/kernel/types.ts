@@ -673,6 +673,13 @@ export interface SimulationScenario {
   };
   failures: FailureInjection[];
   aiWeights: OptimizationWeights;
+  /**
+   * Optional list of countries under an emergency freeze. Any payment that
+   * involves a frozen country (as buyer OR merchant) is hard-blocked before
+   * execution — settled=false, no ledger entries, no treasury movements.
+   * Default: empty (no freezes).
+   */
+  frozenCountries?: string[];
 }
 
 /* ========================================================================== */

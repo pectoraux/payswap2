@@ -79,6 +79,28 @@ export class PlanExecutor {
     const cur = this.scenario.transaction.merchant.currency;
     const amount = this.scenario.transaction.amount;
 
+    // ── PRE-FLIGHT ENFORCEMENT CHECKS ──
+    // Hard-block payments that violate constraints BEFORE any ledger entry
+    // is posted. This enforces:
+    //   1. Country-level emergency freeze (scenario.frozenCountries)
+    //   2. Capacity limits (total available liquidity must cover the amount)
+    // When blocked, settled=false and NO ledger entries / treasury movements
+    // are produced — value preservation is absolute.
+    const blockReason = this.checkEnforcement(amount, cur);
+    if (blockReason) {
+      eventEngine.emit('execution.blocked', { reason: blockReason, amount, currency: cur }, 0);
+      return {
+        ledger: [],
+        events: eventEngine.read(),
+        twinTokens: [],
+        amendments: [],
+        workflows: [],
+        insuranceClaims: [],
+        settled: false,
+        txId,
+      };
+    }
+
     this.setupAccounts(cur, amount);
 
     let settled = true;
@@ -135,6 +157,60 @@ export class PlanExecutor {
       this.ledger.ensureAccount(`lp:${lp.id}`, `${lp.name}`, cur, 'liability', 0);
     }
     treasuryEngine.init(cur, s.treasury.stablecoinBalance, s.treasury.emergencyTreasury, 0);
+  }
+
+  /* ----------------------------------------------------------------------- */
+  /* Pre-flight enforcement                                                  */
+  /* ----------------------------------------------------------------------- */
+
+  /**
+   * Check hard constraints before any state mutation. Returns a block reason
+   * string if the payment must be rejected, or null if it may proceed.
+   *
+   * 1. Emergency freeze: if either the buyer's or merchant's country is in
+   *    scenario.frozenCountries, the payment is hard-blocked.
+   * 2. Capacity: the total available liquidity (LP trading capacity +
+   *    destination reserve + stablecoin treasury + emergency treasury)
+   *    must cover the payment amount. If not, INSUFFICIENT_FUNDS.
+   */
+  private checkEnforcement(amount: number, _cur: CurrencyCode): string | null {
+    const s = this.scenario;
+
+    // 1. Country-level emergency freeze.
+    const frozen = s.frozenCountries ?? [];
+    if (frozen.length > 0) {
+      const buyerCountry = s.transaction.buyer.country;
+      const merchantCountry = s.transaction.merchant.country;
+      if (frozen.includes(buyerCountry)) {
+        return `EMERGENCY_FREEZE: buyer country "${buyerCountry}" is frozen — payments blocked`;
+      }
+      if (frozen.includes(merchantCountry)) {
+        return `EMERGENCY_FREEZE: merchant country "${merchantCountry}" is frozen — payments blocked`;
+      }
+    }
+
+    // 2. Capacity check — total available liquidity must cover the amount.
+    //    Sum: LP trading capacity (online, in the buyer's country) +
+    //         destination reserve available +
+    //         stablecoin treasury balance +
+    //         emergency treasury balance.
+    //    If the sum < amount, the payment cannot be satisfied.
+    const lpCapacity = this.world.liquidityProviders
+      .filter((lp) => lp.online)
+      .reduce((sum, lp) => sum + lp.tradingCapacity, 0);
+    const dstReserve = this.world.reserves.find(
+      (r) => r.country === s.transaction.merchant.country,
+    );
+    const dstReserveAvail = dstReserve?.available ?? 0;
+    const stablecoin = s.treasury.stablecoinBalance;
+    const emergency = s.treasury.emergencyTreasury;
+    const totalAvailable = lpCapacity + dstReserveAvail + stablecoin + emergency;
+
+    if (totalAvailable < amount) {
+      return `INSUFFICIENT_FUNDS: required ${amount} ${_cur} but only ${totalAvailable} available (LP ${lpCapacity} + reserve ${dstReserveAvail} + stablecoin ${stablecoin} + emergency ${emergency})`;
+    }
+
+    return null;
   }
 
   /* ----------------------------------------------------------------------- */
