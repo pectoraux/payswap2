@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import {
   Loader2, Play, CheckCircle2, XCircle, AlertTriangle, ArrowRight,
-  Building2, Users, Banknote, Coins, FileContract, Zap, Inbox,
+  Building2, Users, Banknote, Coins, ScrollText, Zap, Inbox,
   TrendingUp, Globe2,
 } from 'lucide-react';
 import { postShowcase } from './shared';
@@ -50,7 +50,7 @@ const STEP_ICONS: Record<string, React.ElementType> = {
   strategy: Zap,
   reserve: Building2,
   bandwidth: Banknote,
-  contract: FileContract,
+  contract: ScrollText,
   pipeline: Globe2,
   checkmark: CheckCircle2,
 };
@@ -137,7 +137,7 @@ function WorldStatePanel({ world }: { world: WorldState }) {
       <Card className="border-violet-500/20">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-xs">
-            <FileContract className="h-3.5 w-3.5 text-violet-500" /> LP marketplace
+            <ScrollText className="h-3.5 w-3.5 text-violet-500" /> LP marketplace
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-1.5">
@@ -345,7 +345,7 @@ export function PaymentFlowVisualizer() {
                 className="rounded-lg border border-violet-500/20 bg-violet-500/5 p-3"
               >
                 <div className="mb-1.5 flex items-center gap-2">
-                  <FileContract className="h-3.5 w-3.5 text-violet-500" />
+                  <ScrollText className="h-3.5 w-3.5 text-violet-500" />
                   <span className="text-xs font-semibold">Settlement contract lifecycle</span>
                   <Badge variant="outline" className="border-violet-500/30 px-1 py-0 text-[9px] text-violet-600">{result.contract.contractPath}</Badge>
                 </div>

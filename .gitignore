@@ -61,3 +61,4 @@ agent-ctx/
 screenshots/
 tool-results/
 .zscripts/dev.pid
+.env*
