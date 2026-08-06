@@ -767,7 +767,18 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps | planRouteLive | liveReport | testScenarios | multiYearSim | edgeCaseProbe)' }, { status: 400 });
+    // ── settlementSim: simulate all 5 settlement strategies + bandwidth + contracts ──
+    if (action === 'settlementSim') {
+      const { runSettlementSimulation } = await import('@/kernel/settlement-simulator');
+      const report = runSettlementSimulation((body.seed as number) ?? 42);
+      return NextResponse.json({
+        ok: true,
+        ...report,
+        message: `✓ Settlement sim: ${report.totalScenarios} scenarios across ${Object.keys(report.byStrategy).length} strategies, ${report.contractSummary.totalCreated} contracts, ${report.bandwidthSummary.fiat.totalConsumed + report.bandwidthSummary.stablecoin.totalConsumed + report.bandwidthSummary.twin_token.totalConsumed} bandwidth consumed.`,
+      });
+    }
+
+    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps | planRouteLive | liveReport | testScenarios | multiYearSim | edgeCaseProbe | settlementSim)' }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },
