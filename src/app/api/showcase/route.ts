@@ -791,7 +791,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps | planRouteLive | liveReport | testScenarios | multiYearSim | edgeCaseProbe | settlementSim | unifiedPipelineTest)' }, { status: 400 });
+    // ── livePipelineTest: real PSP + Stellar calls through the unified pipeline ──
+    if (action === 'livePipelineTest') {
+      const { runLivePipelineTest } = await import('@/kernel/live-pipeline-test');
+      const report = await runLivePipelineTest();
+      return NextResponse.json({
+        ok: true,
+        ...report,
+        message: report.combinedSuccesses === report.totalTests
+          ? `✓ Live pipeline: ${report.combinedSuccesses}/${report.totalTests} tests passed (API + pipeline combined).`
+          : `${report.combinedSuccesses}/${report.totalTests} combined successes — see findings.`,
+      });
+    }
+
+    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps | planRouteLive | liveReport | testScenarios | multiYearSim | edgeCaseProbe | settlementSim | unifiedPipelineTest | livePipelineTest)' }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },
