@@ -5842,3 +5842,43 @@ Stage Summary:
 - Test scenarios accessible via: POST /api/showcase {action: 'testScenarios'} or the "Run all 15 scenarios" button in the Live Testing tab (admin console).
 - Pushed to GitHub (commit 58e9db0 on main).
 - tsc: 0 | lint: 0 errors (337 pre-existing warnings) | browser-verified: ✅ | git: pushed ✅
+
+---
+Task ID: SIM-VERIFICATION-1
+Agent: showcase-agent
+Task: Re-verify all simulations after the 5 edge-case fixes + confirm 0 invariant violations across all horizons.
+
+Work Log:
+- Re-ran all 3 simulation horizons (1y/2y/3y) after the NaN/negative/Infinity validation + mid-execution ledger rollback fixes.
+
+Final results (all confirmed):
+- 1y: 1,095 tx, 95.5% settled, 4.5% blocked, vol 11.7M, fees 97.9K, **0 violations** (was 22)
+- 2y: 2,190 tx, 95.6% settled, 4.4% blocked, vol 24.9M, fees 210K, **0 violations** (was 43)
+- 3y: 3,285 tx, 95.6% settled, 4.4% blocked, vol 36.4M, fees 310.6K, **0 violations** (was 64)
+- Edge case probe: **69/69 passed (100%)** — "All edge cases handled as expected — no issues found."
+
+Block reasons now fully instrumented (no more "unknown_block"):
+- EXECUTION_BLOCKED: compliance block at frame X (mid-execution, ledger rolled back)
+- EXECUTION_BLOCKED: fraud alert at frame X (mid-execution, ledger rolled back)
+- EMERGENCY_FREEZE: buyer/merchant country "X" is frozen (pre-flight, 0 entries)
+- INSUFFICIENT_FUNDS: required X but only Y available (pre-flight, 0 entries)
+- INVALID_AMOUNT: NaN/negative/Infinity (pre-flight, 0 entries)
+
+Liquidity recommendations (for production planning):
+- 1y: recommended reserve buffer 749K, stablecoin buffer 250K
+- 2y: recommended reserve buffer 1.4M, stablecoin buffer 466K
+- 3y: recommended reserve buffer 1.4M, stablecoin buffer 466K (peak demand plateaus at 932K/day around day 705)
+
+Verification:
+- tsc: 0 errors. lint: 0 errors, 337 warnings (all pre-existing).
+- Homepage: marketing page renders ("Cross-border payments, settled.").
+- /admin/console: redirects to login (auth guard working). After admin login, the Platform Console renders with 7 tabs including the new Simulation tab.
+- Edge case probe via API: 69/69 passed, 0 errors, "All edge cases handled as expected."
+- Multi-year sim via API: all 3 horizons return 0 invariant violations.
+- 0 non-Prisma errors in browser.
+
+Stage Summary:
+- The kernel is now fully hardened: input validation (NaN/negative/Infinity), capacity enforcement, emergency freeze, and mid-execution ledger rollback all work correctly.
+- 0 invariant violations across 1/2/3-year simulations (6,570 total transactions).
+- 69/69 edge cases pass (100%).
+- The simulation engine is accessible via the admin console (Simulation tab) or API (multiYearSim, edgeCaseProbe).
