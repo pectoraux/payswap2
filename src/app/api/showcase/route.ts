@@ -804,7 +804,30 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps | planRouteLive | liveReport | testScenarios | multiYearSim | edgeCaseProbe | settlementSim | unifiedPipelineTest | livePipelineTest)' }, { status: 400 });
+    // ── economicSim: comprehensive Monte Carlo economic simulation ──
+    if (action === 'economicSim') {
+      const { runEconomicSimulation } = await import('@/kernel/economic-simulation');
+      const horizon = (body.horizon as '1y' | '2y' | '3y') ?? '1y';
+      const result = runEconomicSimulation(horizon, (body.seed as number) ?? 42);
+      return NextResponse.json({
+        ok: true,
+        ...result,
+        message: `✓ ${horizon} economic sim: ${result.totalPayments} payments, $${result.payswapTotalRevenue} PaySwap revenue, $${result.lpTotalRevenue} LP revenue, ${result.savingsPercent}% cheaper than competitors.`,
+      });
+    }
+
+    // ── competitorComparison: fee comparison vs alternatives ──
+    if (action === 'competitorComparison') {
+      const { getCompetitorComparison } = await import('@/kernel/economic-simulation');
+      const fees = getCompetitorComparison();
+      return NextResponse.json({
+        ok: true,
+        competitors: fees,
+        message: 'PaySwap: 80bps local / 120bps cross-border vs Paystack 150/390, Flutterwave 140/380, Stripe 290/340.',
+      });
+    }
+
+    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps | planRouteLive | liveReport | testScenarios | multiYearSim | edgeCaseProbe | settlementSim | unifiedPipelineTest | livePipelineTest | economicSim | competitorComparison)' }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },
