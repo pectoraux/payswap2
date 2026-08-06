@@ -985,17 +985,38 @@ export async function POST(req: NextRequest) {
         { id: 1, label: 'Strategy selected', detail: `${strategy} — ${fees.bps}bps fee (${fees.lpPct}% LP / ${fees.psPct}% PaySwap)`, icon: 'strategy', status: 'done' },
         { id: 2, label: 'Reserve check', detail: fromState.hasReserve ? `${fromCountry} has $${fromState.fiatReserve.toLocaleString()} fiat + $${fromState.stablecoinReserve.toLocaleString()} stablecoin` : `${fromCountry} has NO reserve — relying on PaySwap treasury + LPs`, icon: 'reserve', status: fromState.hasReserve ? 'done' : 'warning' },
       ];
-      // Show liquidity sources in priority order (PaySwap reserves first, then LPs)
-      for (const liq of liquidityNeeded) {
-        const sourceLabel = liq.source === 'payswap_reserve' ? 'PaySwap treasury' : liq.source === 'lp_bandwidth' ? 'LP bandwidth' : 'Marketplace';
-        const icon = liq.source === 'payswap_reserve' ? 'reserve' : 'bandwidth';
-        flowSteps.push({
-          id: flowSteps.length,
-          label: `Liquidity: ${sourceLabel} (${liq.assetType})`,
-          detail: `Priority ${liq.priority} — need ${liq.amount.toLocaleString()}, available ${liq.available.toLocaleString()}, using ${liq.used.toLocaleString()} — ${liq.sufficient ? '✓ sufficient' : '✗ insufficient, trying next source'}`,
-          icon,
-          status: liq.sufficient ? 'done' : 'warning',
-        });
+
+      // Extract the liquidity.resolved event from the ACTUAL pipeline dispatch
+      // (this proves the unified pipeline implements the priority, not just the simulation)
+      const pipelineLiquidityEvent = pipelineResult.events.find((e: { type: string }) => e.type === 'liquidity.resolved');
+      if (pipelineLiquidityEvent) {
+        const liqPayload = (pipelineLiquidityEvent as { payload?: { liquidityPlan?: Array<{ source: string; amount: number; priority: number; feeBps: number }> } }).payload;
+        if (liqPayload?.liquidityPlan) {
+          for (const step of liqPayload.liquidityPlan) {
+            if (step.amount > 0) {
+              flowSteps.push({
+                id: flowSteps.length,
+                label: `Pipeline liquidity: ${step.source === 'payswap_treasury' ? 'PaySwap treasury' : 'LP bandwidth'}`,
+                detail: `Priority ${step.priority} — ${step.amount.toLocaleString()} from ${step.source} (fee: ${step.feeBps}bps) — emitted by PaymentCommandHandler in the unified pipeline`,
+                icon: step.source === 'payswap_treasury' ? 'reserve' : 'bandwidth',
+                status: 'done',
+              });
+            }
+          }
+        }
+      } else {
+        // Fallback: show the pre-calculated liquidity (for strategies without the event)
+        for (const liq of liquidityNeeded) {
+          const sourceLabel = liq.source === 'payswap_reserve' ? 'PaySwap treasury' : liq.source === 'lp_bandwidth' ? 'LP bandwidth' : 'Marketplace';
+          const icon = liq.source === 'payswap_reserve' ? 'reserve' : 'bandwidth';
+          flowSteps.push({
+            id: flowSteps.length,
+            label: `Liquidity: ${sourceLabel} (${liq.assetType})`,
+            detail: `Priority ${liq.priority} — need ${liq.amount.toLocaleString()}, available ${liq.available.toLocaleString()}, using ${liq.used.toLocaleString()} — ${liq.sufficient ? '✓ sufficient' : '✗ insufficient, trying next source'}`,
+            icon,
+            status: liq.sufficient ? 'done' : 'warning',
+          });
+        }
       }
       if (needsContract) {
         flowSteps.push({

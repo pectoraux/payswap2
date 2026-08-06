@@ -340,7 +340,8 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
             } as unknown as Record<string, unknown>,
           });
         } else if (senderHasReserve && !receiverHasReserve) {
-          // RESERVE_TO_MARKET: credit reserve A, obtain stablecoins, lock escrow
+          // RESERVE_TO_MARKET: credit reserve A, then resolve stablecoin liquidity
+          // PRIORITY: PaySwap treasury first (no LP fee), then LP bandwidth (LP fee)
           events.push({
             type: 'treasury.account.credited',
             streamId: treasuryStreamId,
@@ -353,6 +354,31 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
               reason: `RESERVE_TO_MARKET: Credit sender reserve for ${paymentId}`,
               counterparty: payload.merchantId,
               creditedAt: now,
+            } as unknown as Record<string, unknown>,
+          });
+
+          // ── Liquidity resolution: PaySwap treasury first, then LP bandwidth ──
+          // PaySwap's stablecoin treasury is used first (cheaper — no LP fee).
+          // If insufficient, LP stablecoin bandwidth covers the remainder (LP fee applies).
+          const payswapTreasuryAvail = 20_000; // PaySwap's own stablecoin reserve
+          const fromTreasury = Math.min(netAmount, payswapTreasuryAvail);
+          const fromLP = Math.max(0, netAmount - fromTreasury);
+          events.push({
+            type: 'liquidity.resolved',
+            streamId: `${env}:liquidity:${paymentId}`,
+            streamType: 'liquidity',
+            kind: 'domain',
+            payload: {
+              paymentId,
+              strategy: 'RESERVE_TO_MARKET',
+              liquidityPlan: [
+                { source: 'payswap_treasury', assetType: 'stablecoin', amount: fromTreasury, priority: 1, feeBps: 0 },
+                { source: 'lp_bandwidth', assetType: 'stablecoin', amount: fromLP, priority: 2, feeBps: fromLP > 0 ? 80 : 0 },
+              ],
+              totalFromTreasury: fromTreasury,
+              totalFromLP: fromLP,
+              reason: `PaySwap treasury covered ${fromTreasury}, LP bandwidth covered ${fromLP}`,
+              resolvedAt: now,
             } as unknown as Record<string, unknown>,
           });
 
@@ -385,7 +411,7 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
             } as unknown as Record<string, unknown>,
           });
         } else if (!senderHasReserve && receiverHasReserve) {
-          // MARKET_TO_RESERVE: obtain stablecoins, mint twin tokens B
+          // MARKET_TO_RESERVE: obtain stablecoins (PaySwap treasury first, then LPs), mint twin tokens B
           events.push({
             type: 'treasury.account.credited',
             streamId: treasuryStreamId,
@@ -398,6 +424,29 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
               reason: `MARKET_TO_RESERVE: Credit stablecoin reserve for ${paymentId}`,
               counterparty: lpId,
               creditedAt: now,
+            } as unknown as Record<string, unknown>,
+          });
+
+          // ── Liquidity resolution: PaySwap treasury first, then LP bandwidth ──
+          const payswapTreasuryAvailMTR = 20_000;
+          const fromTreasuryMTR = Math.min(netAmount, payswapTreasuryAvailMTR);
+          const fromLPMTR = Math.max(0, netAmount - fromTreasuryMTR);
+          events.push({
+            type: 'liquidity.resolved',
+            streamId: `${env}:liquidity:${paymentId}`,
+            streamType: 'liquidity',
+            kind: 'domain',
+            payload: {
+              paymentId,
+              strategy: 'MARKET_TO_RESERVE',
+              liquidityPlan: [
+                { source: 'payswap_treasury', assetType: 'stablecoin', amount: fromTreasuryMTR, priority: 1, feeBps: 0 },
+                { source: 'lp_bandwidth', assetType: 'stablecoin', amount: fromLPMTR, priority: 2, feeBps: fromLPMTR > 0 ? 60 : 0 },
+              ],
+              totalFromTreasury: fromTreasuryMTR,
+              totalFromLP: fromLPMTR,
+              reason: `PaySwap treasury covered ${fromTreasuryMTR}, LP bandwidth covered ${fromLPMTR}`,
+              resolvedAt: now,
             } as unknown as Record<string, unknown>,
           });
 
@@ -430,7 +479,7 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
             } as unknown as Record<string, unknown>,
           });
         } else {
-          // MARKET_TO_MARKET: obtain stablecoins, lock escrow
+          // MARKET_TO_MARKET: obtain stablecoins (PaySwap treasury first, then LPs), lock escrow
           events.push({
             type: 'treasury.account.credited',
             streamId: treasuryStreamId,
@@ -443,6 +492,29 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
               reason: `MARKET_TO_MARKET: Credit stablecoin reserve for ${paymentId}`,
               counterparty: lpId,
               creditedAt: now,
+            } as unknown as Record<string, unknown>,
+          });
+
+          // ── Liquidity resolution: PaySwap treasury first, then LP bandwidth ──
+          const payswapTreasuryAvailMM = 20_000;
+          const fromTreasuryMM = Math.min(netAmount, payswapTreasuryAvailMM);
+          const fromLPMM = Math.max(0, netAmount - fromTreasuryMM);
+          events.push({
+            type: 'liquidity.resolved',
+            streamId: `${env}:liquidity:${paymentId}`,
+            streamType: 'liquidity',
+            kind: 'domain',
+            payload: {
+              paymentId,
+              strategy: 'MARKET_TO_MARKET',
+              liquidityPlan: [
+                { source: 'payswap_treasury', assetType: 'stablecoin', amount: fromTreasuryMM, priority: 1, feeBps: 0 },
+                { source: 'lp_bandwidth', assetType: 'stablecoin', amount: fromLPMM, priority: 2, feeBps: fromLPMM > 0 ? 90 : 0 },
+              ],
+              totalFromTreasury: fromTreasuryMM,
+              totalFromLP: fromLPMM,
+              reason: `PaySwap treasury covered ${fromTreasuryMM}, LP bandwidth covered ${fromLPMM}`,
+              resolvedAt: now,
             } as unknown as Record<string, unknown>,
           });
 
