@@ -736,14 +736,38 @@ export async function POST(req: NextRequest) {
         ok: true,
         reportId: `TSR-${Date.now().toString(36).toUpperCase()}`,
         generatedAt: new Date().toISOString(),
-        source: 'TEST-SCENARIOS.md (15 scenarios)',
+        source: 'TEST-SCENARIOS.md (15 scenarios + 6 edge cases)',
         summary: { total: results.length, passed, failed, passRate: Math.round((passed / results.length) * 100) },
         results,
         message: `✓ Test scenarios: ${passed}/${results.length} passed (${failed} failed).`,
       });
     }
 
-    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps | planRouteLive | liveReport | testScenarios)' }, { status: 400 });
+    // ── multiYearSim: run a 1/2/3-year Monte Carlo simulation ──
+    if (action === 'multiYearSim') {
+      const horizon = (body.horizon as '1y' | '2y' | '3y') ?? '1y';
+      const seed = (body.seed as number) ?? 42;
+      const { runMultiYearSimulation } = await import('@/kernel/simulation-engine-extended');
+      const result = runMultiYearSimulation(horizon, seed);
+      return NextResponse.json({
+        ok: true,
+        ...result,
+        message: `✓ ${horizon} simulation: ${result.summary.totalTransactions} tx over ${result.summary.totalDays} days, ${result.summary.settlementRate}% settled, peak daily volume ${result.summary.peakDailyVolume}.`,
+      });
+    }
+
+    // ── edgeCaseProbe: systematic edge-case probing (60+ cases) ──
+    if (action === 'edgeCaseProbe') {
+      const { runEdgeCaseProbe } = await import('@/kernel/simulation-engine-extended');
+      const report = runEdgeCaseProbe();
+      return NextResponse.json({
+        ok: true,
+        ...report,
+        message: `✓ Edge case probe: ${report.passed}/${report.totalCases} passed (${report.passRate}%), ${report.findings.length} finding(s).`,
+      });
+    }
+
+    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps | planRouteLive | liveReport | testScenarios | multiYearSim | edgeCaseProbe)' }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },

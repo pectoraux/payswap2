@@ -17,6 +17,7 @@ import { ExtensionsTab, ExtensionsTabSkeleton } from '@/components/showcase/exte
 import { CertificationTab } from '@/components/showcase/certification-tab';
 import { ParcelTab } from '@/components/showcase/parcel-tab';
 import { LiveTab } from '@/components/showcase/live-tab';
+import { SimulationTab } from '@/components/showcase/simulation-tab';
 import { ThemeToggle } from '@/components/showcase/theme-toggle';
 
 /**
@@ -121,6 +122,9 @@ export function PlatformConsole() {
             <TabsTrigger value="live" className="gap-1.5 text-xs">
               <Zap className="h-3.5 w-3.5" /> Live Testing
             </TabsTrigger>
+            <TabsTrigger value="sim" className="gap-1.5 text-xs">
+              <Activity className="h-3.5 w-3.5" /> Simulation
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-4 focus-visible:outline-none">
@@ -140,6 +144,9 @@ export function PlatformConsole() {
           </TabsContent>
           <TabsContent value="live" className="mt-4 focus-visible:outline-none">
             <LiveTab />
+          </TabsContent>
+          <TabsContent value="sim" className="mt-4 focus-visible:outline-none">
+            <SimulationTab />
           </TabsContent>
         </Tabs>
       )}
