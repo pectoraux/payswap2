@@ -82,6 +82,7 @@ export class PlanExecutor {
     // ── PRE-FLIGHT ENFORCEMENT CHECKS ──
     // Hard-block payments that violate constraints BEFORE any ledger entry
     // is posted. This enforces:
+    //   0. Input validation (amount must be a finite, non-negative number)
     //   1. Country-level emergency freeze (scenario.frozenCountries)
     //   2. Capacity limits (total available liquidity must cover the amount)
     // When blocked, settled=false and NO ledger entries / treasury movements
@@ -105,6 +106,7 @@ export class PlanExecutor {
 
     let settled = true;
     let blocked = false;
+    let midBlockReason: string | null = null;
 
     for (const step of plan.steps) {
       // Apply any failures scheduled at this frame.
@@ -114,6 +116,7 @@ export class PlanExecutor {
         if (amendment) this.amendments.push(amendment);
         if (f.type === 'fraud_alert' || f.type === 'compliance_block') {
           blocked = true;
+          midBlockReason = `EXECUTION_BLOCKED: ${f.type.replace(/_/g, ' ')} at frame ${step.frame}`;
         }
       }
       if (blocked) {
@@ -123,8 +126,23 @@ export class PlanExecutor {
       this.executeStep(step, txId, cur, amount, plan);
     }
 
-    if (!settled && !blocked) {
-      // rollback already handled; nothing to do
+    // ── MID-EXECUTION BLOCK: roll back ALL ledger entries ──
+    // When a failure (fraud_alert/compliance_block) fires mid-execution, some
+    // ledger entries may have been posted for steps before the failure. To
+    // preserve the value-preservation invariant (blocked → 0 ledger entries),
+    // we roll back the entire ledger and emit an execution.blocked event.
+    if (blocked && midBlockReason) {
+      eventEngine.emit('execution.blocked', { reason: midBlockReason, amount, currency: cur, frame: plan.steps[plan.steps.length - 1]?.frame ?? 0 }, 0);
+      return {
+        ledger: [],  // rolled back — no entries survive a block
+        events: eventEngine.read(),
+        twinTokens: [],  // twin tokens minted before the block are also rolled back
+        amendments: this.amendments,
+        workflows: this.workflows,
+        insuranceClaims: insuranceEngine.all(),
+        settled: false,
+        txId,
+      };
     }
 
     return {
@@ -175,6 +193,17 @@ export class PlanExecutor {
    */
   private checkEnforcement(amount: number, _cur: CurrencyCode): string | null {
     const s = this.scenario;
+
+    // 0. Input validation — amount must be a finite, non-negative number.
+    //    NaN, Infinity, and negative values are hard-rejected before any
+    //    state mutation. This prevents unhandled exceptions downstream and
+    //    ensures value preservation (a negative amount could create money).
+    if (!Number.isFinite(amount)) {
+      return `INVALID_AMOUNT: amount is ${amount} (not a finite number) — payment rejected`;
+    }
+    if (amount < 0) {
+      return `INVALID_AMOUNT: amount is negative (${amount}) — payment rejected`;
+    }
 
     // 1. Country-level emergency freeze.
     const frozen = s.frozenCountries ?? [];
