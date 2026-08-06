@@ -38,6 +38,11 @@ interface PaymentFlowResult {
     fromCountry: string; toCountry: string; amount: number; fromCurrency: string; toCurrency: string; isCrossBorder: boolean;
   };
   bandwidth: Array<{ assetType: string; country: string; amount: number; available: number; sufficient: boolean }>;
+  liquidity: Array<{
+    source: 'payswap_reserve' | 'lp_bandwidth' | 'marketplace';
+    assetType: string; country: string; amount: number; available: number; used: number;
+    sufficient: boolean; priority: number;
+  }>;
   contract: { needsContract: boolean; contractPath: string; contractSteps: string[] };
   pipeline: { dispatched: boolean; events: Array<{ type: string }>; ledgerEntries: number; latencyMs: number; error?: string };
   flowSteps: FlowStep[];
@@ -367,29 +372,56 @@ export function PaymentFlowVisualizer() {
               </motion.div>
             )}
 
-            {/* Bandwidth consumed */}
-            {result.bandwidth.length > 0 && (
+            {/* Liquidity priority flow (PaySwap reserves → LP bandwidth → marketplace) */}
+            {result.liquidity && result.liquidity.length > 0 && (
               <div>
-                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Bandwidth consumed</div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {result.bandwidth.map((bw, i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.3 + i * 0.1 }}
-                      className={`rounded-md border px-2.5 py-1.5 ${bw.sufficient ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-mono text-[11px] font-medium">{bw.assetType}</span>
-                        {bw.sufficient ? <CheckCircle2 className="h-3 w-3 text-emerald-500" /> : <AlertTriangle className="h-3 w-3 text-amber-500" />}
-                      </div>
-                      <div className="text-[10px] text-muted-foreground">
-                        Need {bw.amount.toLocaleString()} in {bw.country} — {bw.available.toLocaleString()} available
-                      </div>
-                      {!bw.sufficient && <div className="text-[10px] text-amber-600">→ Falls back to marketplace path</div>}
-                    </motion.div>
-                  ))}
+                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Liquidity priority — PaySwap reserves used first, then LP bandwidth
+                </div>
+                <div className="space-y-1.5">
+                  {result.liquidity.map((liq, i) => {
+                    const isPaySwap = liq.source === 'payswap_reserve';
+                    const isLP = liq.source === 'lp_bandwidth';
+                    const borderColor = isPaySwap ? 'border-emerald-500/40' : isLP ? 'border-sky-500/30' : 'border-amber-500/30';
+                    const bgColor = isPaySwap ? 'bg-emerald-500/5' : isLP ? 'bg-sky-500/5' : 'bg-amber-500/5';
+                    const sourceIcon = isPaySwap ? <Building2 className="h-3.5 w-3.5 text-emerald-500" /> : isLP ? <Users className="h-3.5 w-3.5 text-sky-500" /> : <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />;
+                    return (
+                      <motion.div
+                        key={i}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: 0.3 + i * 0.15 }}
+                        className={`rounded-md border px-3 py-2 ${borderColor} ${bgColor}`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            {sourceIcon}
+                            <span className="text-xs font-semibold">
+                              {isPaySwap ? 'PaySwap treasury' : isLP ? 'LP bandwidth' : 'Marketplace'}
+                            </span>
+                            <Badge variant="outline" className={`px-1 py-0 text-[8px] ${isPaySwap ? 'border-emerald-500/30 text-emerald-600' : isLP ? 'border-sky-500/30 text-sky-600' : 'border-amber-500/30 text-amber-600'}`}>
+                              priority {liq.priority}
+                            </Badge>
+                          </div>
+                          {liq.sufficient ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
+                        </div>
+                        <div className="mt-1 flex items-center gap-3 text-[10px] text-muted-foreground">
+                          <span>type: <span className="font-medium text-foreground">{liq.assetType}</span></span>
+                          <span>location: <span className="font-medium text-foreground">{liq.country}</span></span>
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-3 text-[10px]">
+                          <span className="text-muted-foreground">need: <span className="font-bold text-foreground tabular-nums">{liq.amount.toLocaleString()}</span></span>
+                          <span className="text-muted-foreground">available: <span className="font-bold text-foreground tabular-nums">{liq.available.toLocaleString()}</span></span>
+                          <span className="text-muted-foreground">used: <span className="font-bold text-emerald-600 tabular-nums">{liq.used.toLocaleString()}</span></span>
+                        </div>
+                        {!liq.sufficient && (
+                          <div className="mt-1 text-[10px] text-amber-600">
+                            → Insufficient — falling back to next priority source
+                          </div>
+                        )}
+                      </motion.div>
+                    );
+                  })}
                 </div>
               </div>
             )}

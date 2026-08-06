@@ -854,23 +854,87 @@ export async function POST(req: NextRequest) {
       const payswapRevenue = Math.round((feeAmount * fees.psPct) / 100);
       const lpRevenue = Math.round((feeAmount * fees.lpPct) / 100);
 
-      // ── 3. Determine what bandwidth is needed ──
-      const bandwidthNeeded: Array<{ assetType: string; country: string; amount: number; available: number; sufficient: boolean }> = [];
-      if (strategy === 'RESERVE_TO_MARKET' || strategy === 'MARKET_TO_MARKET') {
-        // Needs stablecoin bandwidth in sender country
-        const senderLps = lps.filter((l) => l.country === fromCountry && l.hasBandwidth);
-        const stablecoinAvail = senderLps.reduce((s, l) => s + l.stablecoinBw, 0);
-        bandwidthNeeded.push({ assetType: 'stablecoin', country: fromCountry, amount, available: stablecoinAvail, sufficient: stablecoinAvail >= amount });
-        // Needs fiat bandwidth in receiver country (for auto-settlement)
+      // ── 3. Determine what liquidity is needed (PaySwap reserves FIRST, then LP bandwidth) ──
+      // Priority order: PaySwap's own stablecoin treasury → LP stablecoin bandwidth → marketplace
+      // This ensures we use our own capital first (cheaper — no LP fee) before tapping LPs.
+      const liquidityNeeded: Array<{
+        source: 'payswap_reserve' | 'lp_bandwidth' | 'marketplace';
+        assetType: string;
+        country: string;
+        amount: number;
+        available: number;
+        used: number;
+        sufficient: boolean;
+        priority: number;
+      }> = [];
+
+      // PaySwap's own stablecoin treasury (global, not country-specific)
+      const payswapStablecoinTotal = countries.reduce((s, c) => s + c.stablecoinReserve, 0);
+      const payswapFiatReserve = fromState.fiatReserve;
+
+      if (strategy === 'LOCAL_RAIL' || strategy === 'RESERVE_TO_RESERVE') {
+        // These strategies are fully backed by reserves — no LP bandwidth needed
+        liquidityNeeded.push({
+          source: 'payswap_reserve', assetType: 'fiat', country: fromCountry,
+          amount, available: payswapFiatReserve, used: Math.min(amount, payswapFiatReserve),
+          sufficient: payswapFiatReserve >= amount, priority: 1,
+        });
+      } else if (strategy === 'RESERVE_TO_MARKET' || strategy === 'MARKET_TO_MARKET') {
+        // Need stablecoin liquidity — PaySwap treasury first, then LPs
+        // 1. PaySwap's own stablecoin reserve
+        const payswapStablecoinUsed = Math.min(amount, payswapStablecoinTotal);
+        liquidityNeeded.push({
+          source: 'payswap_reserve', assetType: 'stablecoin', country: 'PaySwap Treasury',
+          amount, available: payswapStablecoinTotal, used: payswapStablecoinUsed,
+          sufficient: payswapStablecoinTotal >= amount, priority: 1,
+        });
+        // 2. If PaySwap reserve isn't enough, tap LP stablecoin bandwidth
+        const remainingAfterReserve = Math.max(0, amount - payswapStablecoinUsed);
+        if (remainingAfterReserve > 0) {
+          const senderLps = lps.filter((l) => l.country === fromCountry && l.hasBandwidth);
+          const lpStablecoinAvail = senderLps.reduce((s, l) => s + l.stablecoinBw, 0);
+          liquidityNeeded.push({
+            source: 'lp_bandwidth', assetType: 'stablecoin', country: fromCountry,
+            amount: remainingAfterReserve, available: lpStablecoinAvail,
+            used: Math.min(remainingAfterReserve, lpStablecoinAvail),
+            sufficient: lpStablecoinAvail >= remainingAfterReserve, priority: 2,
+          });
+        }
+        // 3. Need fiat bandwidth in receiver country (for auto-settlement)
         const receiverLps = lps.filter((l) => l.country === toCountry && l.hasBandwidth);
         const fiatAvail = receiverLps.reduce((s, l) => s + l.fiatBw, 0);
-        bandwidthNeeded.push({ assetType: 'fiat', country: toCountry, amount, available: fiatAvail, sufficient: fiatAvail >= amount });
+        liquidityNeeded.push({
+          source: 'lp_bandwidth', assetType: 'fiat', country: toCountry,
+          amount, available: fiatAvail, used: Math.min(amount, fiatAvail),
+          sufficient: fiatAvail >= amount, priority: 3,
+        });
+      } else if (strategy === 'MARKET_TO_RESERVE') {
+        // Sender has no reserve — need stablecoin from LPs (PaySwap treasury can also bridge)
+        const payswapStablecoinUsed = Math.min(amount, payswapStablecoinTotal);
+        if (payswapStablecoinUsed > 0) {
+          liquidityNeeded.push({
+            source: 'payswap_reserve', assetType: 'stablecoin', country: 'PaySwap Treasury',
+            amount, available: payswapStablecoinTotal, used: payswapStablecoinUsed,
+            sufficient: payswapStablecoinTotal >= amount, priority: 1,
+          });
+        }
+        const remainingAfterReserve = Math.max(0, amount - payswapStablecoinUsed);
+        if (remainingAfterReserve > 0) {
+          const senderLps = lps.filter((l) => l.country === fromCountry && l.hasBandwidth);
+          const lpStablecoinAvail = senderLps.reduce((s, l) => s + l.stablecoinBw, 0);
+          liquidityNeeded.push({
+            source: 'lp_bandwidth', assetType: 'stablecoin', country: fromCountry,
+            amount: remainingAfterReserve, available: lpStablecoinAvail,
+            used: Math.min(remainingAfterReserve, lpStablecoinAvail),
+            sufficient: lpStablecoinAvail >= remainingAfterReserve, priority: 2,
+          });
+        }
       }
-      if (strategy === 'MARKET_TO_RESERVE') {
-        const senderLps = lps.filter((l) => l.country === fromCountry && l.hasBandwidth);
-        const stablecoinAvail = senderLps.reduce((s, l) => s + l.stablecoinBw, 0);
-        bandwidthNeeded.push({ assetType: 'stablecoin', country: fromCountry, amount, available: stablecoinAvail, sufficient: stablecoinAvail >= amount });
-      }
+
+      // Backward-compatible bandwidth array (for the old UI field)
+      const bandwidthNeeded = liquidityNeeded.map((l) => ({
+        assetType: l.assetType, country: l.country, amount: l.amount, available: l.available, sufficient: l.sufficient,
+      }));
 
       // ── 4. Determine settlement contract path ──
       const needsContract = strategy !== 'LOCAL_RAIL' && strategy !== 'RESERVE_TO_RESERVE';
@@ -919,18 +983,19 @@ export async function POST(req: NextRequest) {
       const flowSteps = [
         { id: 0, label: 'Payment received', detail: `${amount} ${currencyFor(fromCountry)} from ${fromCountry} to ${toCountry}`, icon: 'inbox', status: 'done' },
         { id: 1, label: 'Strategy selected', detail: `${strategy} — ${fees.bps}bps fee (${fees.lpPct}% LP / ${fees.psPct}% PaySwap)`, icon: 'strategy', status: 'done' },
-        { id: 2, label: 'Reserve check', detail: fromState.hasReserve ? `${fromCountry} has $${fromState.fiatReserve.toLocaleString()} reserve` : `${fromCountry} has NO reserve — relying on LPs`, icon: 'reserve', status: fromState.hasReserve ? 'done' : 'warning' },
+        { id: 2, label: 'Reserve check', detail: fromState.hasReserve ? `${fromCountry} has $${fromState.fiatReserve.toLocaleString()} fiat + $${fromState.stablecoinReserve.toLocaleString()} stablecoin` : `${fromCountry} has NO reserve — relying on PaySwap treasury + LPs`, icon: 'reserve', status: fromState.hasReserve ? 'done' : 'warning' },
       ];
-      if (bandwidthNeeded.length > 0) {
-        for (const bw of bandwidthNeeded) {
-          flowSteps.push({
-            id: flowSteps.length,
-            label: `Bandwidth check: ${bw.assetType}`,
-            detail: `Need ${bw.amount.toLocaleString()} in ${bw.country} — ${bw.sufficient ? `✓ ${bw.available.toLocaleString()} available` : `✗ only ${bw.available.toLocaleString()} available (marketplace path)`}`,
-            icon: 'bandwidth',
-            status: bw.sufficient ? 'done' : 'warning',
-          });
-        }
+      // Show liquidity sources in priority order (PaySwap reserves first, then LPs)
+      for (const liq of liquidityNeeded) {
+        const sourceLabel = liq.source === 'payswap_reserve' ? 'PaySwap treasury' : liq.source === 'lp_bandwidth' ? 'LP bandwidth' : 'Marketplace';
+        const icon = liq.source === 'payswap_reserve' ? 'reserve' : 'bandwidth';
+        flowSteps.push({
+          id: flowSteps.length,
+          label: `Liquidity: ${sourceLabel} (${liq.assetType})`,
+          detail: `Priority ${liq.priority} — need ${liq.amount.toLocaleString()}, available ${liq.available.toLocaleString()}, using ${liq.used.toLocaleString()} — ${liq.sufficient ? '✓ sufficient' : '✗ insufficient, trying next source'}`,
+          icon,
+          status: liq.sufficient ? 'done' : 'warning',
+        });
       }
       if (needsContract) {
         flowSteps.push({
@@ -977,6 +1042,7 @@ export async function POST(req: NextRequest) {
           isCrossBorder,
         },
         bandwidth: bandwidthNeeded,
+        liquidity: liquidityNeeded,
         contract: { needsContract, contractPath, contractSteps },
         pipeline: pipelineResult,
         flowSteps,
