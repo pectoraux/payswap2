@@ -12,7 +12,7 @@ import {
   FlaskConical, Calendar, DollarSign, Zap,
 } from 'lucide-react';
 import { postShowcase } from './shared';
-import { RouteVisualizer } from './route-visualizer';
+import { PaymentFlowVisualizer } from './payment-flow-visualizer';
 
 // ── Types (mirror the backend shapes) ──
 interface SimSummary {
@@ -315,8 +315,8 @@ export function SimulationTab() {
 
   return (
     <div className="space-y-5">
-      {/* Visual payment routing — shows 5 candidates, 8 objectives, execution flow */}
-      <RouteVisualizer />
+      {/* Visual payment flow — world state + animated routing through unified pipeline */}
+      <PaymentFlowVisualizer />
 
       <Card className="border-emerald-500/20 bg-gradient-to-br from-emerald-500/5 to-teal-500/5">
         <CardContent className="p-4">
