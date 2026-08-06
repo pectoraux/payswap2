@@ -778,7 +778,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps | planRouteLive | liveReport | testScenarios | multiYearSim | edgeCaseProbe | settlementSim)' }, { status: 400 });
+    // ── unifiedPipelineTest: prove demo + real data use the same pipeline, isolated ──
+    if (action === 'unifiedPipelineTest') {
+      const { runUnifiedPipelineTest } = await import('@/kernel/unified-pipeline-test');
+      const report = await runUnifiedPipelineTest();
+      return NextResponse.json({
+        ok: true,
+        ...report,
+        message: report.summary.pipelineUnified
+          ? `✓ Unified pipeline: ${report.summary.sandboxPayments} sandbox + ${report.summary.livePayments} live payments, ${report.summary.isolationPassed}/${report.summary.isolationChecks} isolation checks passed.`
+          : `✗ Pipeline issues detected — see findings.`,
+      });
+    }
+
+    return NextResponse.json({ error: 'Unknown action (use prove | certify | verifyBadge | planRoute | liveStripe | livePaystack | liveFlutterwave | liveStellar | liveStellarPath | liveMaps | planRouteLive | liveReport | testScenarios | multiYearSim | edgeCaseProbe | settlementSim | unifiedPipelineTest)' }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },

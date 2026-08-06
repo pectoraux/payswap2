@@ -425,18 +425,24 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const clock: RuntimeClock = opts.virtualClock
     ? new VirtualClock(opts.virtualClock)
     : new LiveClock();
-  // R3 FIX: Use PostgresEventStore as the authoritative event store.
-  // The database is the source of truth — events are written to Postgres
-  // BEFORE the API returns. The in-memory cache is disposable.
-  // Falls back to InMemoryEventStore if DATABASE_URL is not set (for tests).
+  // ── EventStore selection ──
+  // Use PostgresEventStore ONLY when DATABASE_URL is a real PostgreSQL URL
+  // (starts with 'postgresql://' or 'postgres://'). If the URL is a SQLite
+  // file path (file:...) or missing, use InMemoryEventStore — this enables
+  // demo/sandbox mode without a working database.
+  //
+  // This ensures demo data and real data both flow through the SAME pipeline
+  // (RuntimeDispatcher → InvariantEngine → EventStore → Projections), just
+  // with different storage backends. Demo data in InMemoryEventStore can
+  // NEVER infect production Postgres data, and vice versa.
+  const dbUrl = process.env.DATABASE_URL ?? '';
+  const isPostgresUrl = dbUrl.startsWith('postgresql://') || dbUrl.startsWith('postgres://');
   const eventStore: EventStore = opts.eventStore
-    ?? (process.env.DATABASE_URL
+    ?? (isPostgresUrl
       ? new PostgresEventStore()
       : new InMemoryEventStore());
 
-  // R3/R2/R5: Hydrate the PostgresEventStore cache from the DB on startup.
-  // This loads all persisted events into the in-memory cache for fast reads.
-  // The DB is authoritative; the cache is disposable.
+  // Hydrate the PostgresEventStore cache from the DB on startup (production).
   if (eventStore instanceof PostgresEventStore) {
     eventStore.hydrate().catch((err) => {
       console.error('[runtime] PostgresEventStore hydration failed:', err);
