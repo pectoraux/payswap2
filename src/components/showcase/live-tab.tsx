@@ -85,7 +85,7 @@ function TestRow({ result }: { result: LiveTestResult }) {
       {result.rawResponse && (
         <details className="mt-1.5">
           <summary className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground">raw response</summary>
-          <pre className="mt-1 max-h-32 overflow-auto rounded bg-background/60 p-2 text-[9px] leading-tight">
+          <pre className="mt-1 max-h-32 overflow-auto overflow-x-auto whitespace-pre-wrap break-all rounded bg-background/60 p-2 text-[9px] leading-tight">
 {JSON.stringify(result.rawResponse, null, 2).slice(0, 600)}
           </pre>
         </details>
@@ -144,7 +144,7 @@ function ProviderCard({ config, result, loading, onRun }: {
           </div>
         )}
         {result && (
-          <ScrollArea className="max-h-80 pr-2">
+          <ScrollArea className="max-h-64 pr-2">
             <div className="space-y-1.5">
               {Object.values(result.result).map((r, i) => (
                 <TestRow key={i} result={r} />
@@ -339,7 +339,7 @@ export function LiveTab() {
               </div>
               <details>
                 <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">View raw JSON report</summary>
-                <pre className="mt-2 max-h-64 overflow-auto rounded bg-background/60 p-3 text-[9px] leading-tight">
+                <pre className="mt-2 max-h-48 overflow-auto overflow-x-auto whitespace-pre-wrap break-all rounded bg-background/60 p-3 text-[9px] leading-tight">
 {JSON.stringify(report, null, 2).slice(0, 2000)}
                 </pre>
               </details>
@@ -462,7 +462,7 @@ export function LiveTab() {
                 <Badge variant="outline" className="border-emerald-500/30 text-emerald-600">{scenarios.reportId}</Badge>
                 <span>{scenarios.source}</span>
               </div>
-              <ScrollArea className="max-h-96 pr-2">
+              <ScrollArea className="max-h-80 pr-2">
                 <div className="space-y-1.5">
                   {scenarios.results.map((r) => (
                     <div key={r.id} className={`rounded-md border px-3 py-2 ${r.passed ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-rose-500/30 bg-rose-500/5'}`}>
@@ -499,7 +499,7 @@ export function LiveTab() {
               </ScrollArea>
               <details>
                 <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">View raw JSON report</summary>
-                <pre className="mt-2 max-h-64 overflow-auto rounded bg-background/60 p-3 text-[9px] leading-tight">
+                <pre className="mt-2 max-h-48 overflow-auto overflow-x-auto whitespace-pre-wrap break-all rounded bg-background/60 p-3 text-[9px] leading-tight">
 {JSON.stringify(scenarios, null, 2).slice(0, 2500)}
                 </pre>
               </details>

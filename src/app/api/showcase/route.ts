@@ -804,6 +804,79 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ── visualizeRoute: show how a payment is routed (5 candidates, 8 objectives, execution flow) ──
+    if (action === 'visualizeRoute') {
+      const fromCountry = (body.fromCountry as string) ?? 'Ghana';
+      const toCountry = (body.toCountry as string) ?? 'Kenya';
+      const amount = (body.amount as number) ?? 5000;
+      const kernel = await import('@/kernel');
+      const base = kernel.defaultScenario();
+      // Override the scenario for the requested corridor
+      const scenario: typeof base = {
+        ...base,
+        name: `${fromCountry}→${toCountry} ${amount}`,
+        transaction: {
+          ...base.transaction,
+          type: fromCountry === toCountry ? 'domestic' : 'cross_border',
+          buyer: { country: fromCountry, currency: (fromCountry === 'Kenya' ? 'KES' : fromCountry === 'Nigeria' ? 'NGN' : fromCountry === 'Togo' ? 'XOF' : 'GHS') as never, method: 'Bank Transfer', foId: 'fo-bank-gh' },
+          merchant: { country: toCountry, currency: (toCountry === 'Kenya' ? 'KES' : toCountry === 'Nigeria' ? 'NGN' : toCountry === 'Togo' ? 'XOF' : 'GHS') as never, method: 'Bank Transfer', foId: 'fo-bank-gh' },
+          amount,
+          currency: (toCountry === 'Kenya' ? 'KES' : toCountry === 'Nigeria' ? 'NGN' : toCountry === 'Togo' ? 'XOF' : 'GHS') as never,
+          priority: 'cheapest',
+        },
+        treasury: {
+          ...base.treasury,
+          originReserve: { country: fromCountry, currency: (fromCountry === 'Kenya' ? 'KES' : fromCountry === 'Nigeria' ? 'NGN' : fromCountry === 'Togo' ? 'XOF' : 'GHS') as never, available: fromCountry === 'Ghana' || fromCountry === 'Togo' ? 5_000_000 : 0, minThreshold: 500_000 },
+          destinationReserve: { country: toCountry, currency: (toCountry === 'Kenya' ? 'KES' : toCountry === 'Nigeria' ? 'NGN' : toCountry === 'Togo' ? 'XOF' : 'GHS') as never, available: toCountry === 'Ghana' || toCountry === 'Togo' ? 5_000_000 : 0, minThreshold: 500_000 },
+        },
+      };
+      const result = kernel.simulationEngine.run(scenario);
+      // Extract candidate plans with scores
+      const candidates = result.candidatePlans.map((cp: { label: string; strategy: string; weightedScore: number; objectiveScores: Array<{ objective: string; score: number; raw: number; rationale: string }>; notes: string; }) => ({
+        label: cp.label,
+        strategy: cp.strategy,
+        weightedScore: cp.weightedScore,
+        objectiveScores: cp.objectiveScores,
+        notes: cp.notes ?? '',
+        isWinner: cp.label === result.plan.reasoning.strategy || cp.weightedScore === result.plan.reasoning.weightedScore,
+      }));
+      // Mark the actual winner
+      if (candidates.length > 0) {
+        const maxScore = Math.max(...candidates.map((c: { weightedScore: number }) => c.weightedScore));
+        candidates.forEach((c: { isWinner: boolean; weightedScore: number }) => { c.isWinner = c.weightedScore === maxScore; });
+      }
+      // Extract execution steps
+      const steps = result.plan.steps.map((s: { frame: number; type: string; title: string; description: string; amount?: number; currency?: string }) => ({
+        frame: s.frame, type: s.type, title: s.title, description: s.description,
+        amount: s.amount, currency: s.currency,
+      }));
+      return NextResponse.json({
+        ok: true,
+        strategy: result.plan.reasoning.strategy,
+        candidates,
+        winner: candidates.find((c: { isWinner: boolean }) => c.isWinner) ?? candidates[0],
+        steps,
+        metrics: {
+          costPercent: result.plan.metrics.costPercent,
+          settlementTimeMs: result.plan.metrics.settlementTimeMs,
+          settlementTimeLabel: result.plan.metrics.settlementTimeLabel,
+          riskScore: result.plan.metrics.riskScore,
+          riskLabel: result.plan.metrics.riskLabel,
+          confidence: result.plan.metrics.confidence,
+          twinTokensMinted: result.plan.metrics.twinTokensMinted,
+        },
+        feeModel: {
+          totalFeeBps: 100, // approximated from strategy
+          lpSharePercent: result.plan.reasoning.strategy.includes('MARKET') ? 80 : 0,
+          payswapSharePercent: result.plan.reasoning.strategy.includes('MARKET') ? 20 : 100,
+        },
+        requiredBandwidth: [], // populated from the plan if available
+        stablecoinUsage: { required: false, amount: 0, source: 'treasury' },
+        settlementActions: result.plan.steps.filter((s: { type: string }) => s.type.includes('contract') || s.type.includes('stablecoin')).map((s: { type: string; description: string }) => ({ type: s.type, reason: s.description })),
+        message: `✓ Routed ${amount} ${fromCountry}→${toCountry}: ${result.plan.reasoning.strategy} (score ${result.plan.reasoning.weightedScore}).`,
+      });
+    }
+
     // ── economicSim: comprehensive Monte Carlo economic simulation ──
     if (action === 'economicSim') {
       const { runEconomicSimulation } = await import('@/kernel/economic-simulation');

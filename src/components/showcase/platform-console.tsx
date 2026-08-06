@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
-  Layers, Network, Cpu, Package, Award, Truck, Activity, RefreshCw, Loader2, Zap,
+  Layers, Network, Cpu, Package, Award, Truck, Activity, RefreshCw, Loader2, Zap, DollarSign,
 } from 'lucide-react';
 import { useShowcase, usePublicState } from '@/components/showcase/shared';
 import { OverviewTab } from '@/components/showcase/overview-tab';
@@ -18,6 +18,7 @@ import { CertificationTab } from '@/components/showcase/certification-tab';
 import { ParcelTab } from '@/components/showcase/parcel-tab';
 import { LiveTab } from '@/components/showcase/live-tab';
 import { SimulationTab } from '@/components/showcase/simulation-tab';
+import { FinancialModelTab } from '@/components/showcase/financial-model-tab';
 import { ThemeToggle } from '@/components/showcase/theme-toggle';
 
 /**
@@ -125,6 +126,9 @@ export function PlatformConsole() {
             <TabsTrigger value="sim" className="gap-1.5 text-xs">
               <Activity className="h-3.5 w-3.5" /> Simulation
             </TabsTrigger>
+            <TabsTrigger value="finance" className="gap-1.5 text-xs">
+              <DollarSign className="h-3.5 w-3.5" /> Financial Model
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-4 focus-visible:outline-none">
@@ -147,6 +151,9 @@ export function PlatformConsole() {
           </TabsContent>
           <TabsContent value="sim" className="mt-4 focus-visible:outline-none">
             <SimulationTab />
+          </TabsContent>
+          <TabsContent value="finance" className="mt-4 focus-visible:outline-none">
+            <FinancialModelTab />
           </TabsContent>
         </Tabs>
       )}
