@@ -1,233 +1,175 @@
-# PaySwap Roadmap — the two-reserve model (adapted to actual codebase)
+# PaySwap Roadmap — wiring the two-reserve model into the money path
 
-> **The whole system in two lines:**
+> **The model, in two lines:**
 > ```
 > Local payments  → FIAT reserves
 > Cross-border    → crypto reserves
 > ```
 > LPs extend reserve capacity when PaySwap's own reserves are insufficient.
-> Twin tokens mirror FIAT reserves 1:1. Stablecoins are the bridge until FIAT reserves grow.
+> Twin tokens mirror FIAT reserves 1:1. Stablecoins bridge until FIAT reserves grow.
 
-This roadmap is adapted to the ACTUAL codebase structure:
-- `src/runtime/` — the main runtime (dispatcher, handlers, liquidity, events, invariants)
-- `src/protocol/` — protocol-level primitives (twin-token, settlement, stellar, providers)
-- `src/kernel/` — simulation engine (to be simplified/removed where duplicated)
-- `src/services/` — application services (payment-service, payout-service, etc.)
-- `src/live/` — real PSP + Stellar connectors
+**This is not a build roadmap. It is a wiring roadmap.**
 
-## Current state mapping
+The components exist. They are not connected. Nearly every ticket connects something
+that already exists rather than building something new.
 
-| Roadmap concept | Actual file location |
-|----------------|---------------------|
-| Reserve orchestration | `src/runtime/dispatcher/handlers.ts` (hardcoded RESERVE_STATES) |
-| Routing/scoring | `src/runtime/liquidity/policy-engine.ts` (5-strategy model) |
-| Twin token engine | `src/protocol/twin-token/engine.ts` (Stellar-backed, unused) |
-| Bandwidth engine | `src/runtime/liquidity/bandwidth-engine.ts` (LP bandwidth) |
-| Settlement contracts | `src/runtime/liquidity/settlement-contract-engine.ts` |
-| Auction engine | `src/protocol/settlement/auctions.ts` (unused in pipeline) |
-| Escrow | `src/protocol/settlement/escrow.ts` (unused in pipeline) |
-| Stellar adapter | `src/protocol/chains/stellar/adapter.ts` (real, unused) |
-| Live connectors | `src/live/` (Stripe, Paystack, FLW, Stellar — all working) |
-| Payment handler | `src/runtime/dispatcher/handlers.ts` (emits events, no execution) |
+The waterfall and the 5-strategy matrix are **the same rule at two scopes**:
+- The waterfall answers: *for one leg of a payment, whose liquidity pays?*
+- Tiers 1–2 = RESERVE. Tiers 3–5 = MARKET.
+- The strategy names are labels on the pair of leg results.
 
----
+**Keep the two-layer framing for how you describe PaySwap. Keep the matrix for how
+you implement it. They are the same thing.**
 
-## R1 — Simplify to 2-layer waterfall
+## What's already right — do not disturb
+- **The planner is pure.** `LiquidityPolicyEngine.compile()` — same input → same plan.
+- **Fallbacks are compiled in.** `buildFallbackGraph()` attaches fallback branches.
+- **Execution is a crash-safe saga.** `SettlementOrchestrator` rebuilds from events.
+- **Fees follow the economics.** Reserve strategies = 100% PaySwap; market = LP split.
 
-### R1-1 · Replace 5-strategy policy engine with 2-layer waterfall — TODO
-- **Files:** `src/runtime/liquidity/policy-engine.ts`, `src/runtime/dispatcher/handlers.ts`
-- Replace `LOCAL_RAIL | RESERVE_TO_RESERVE | RESERVE_TO_MARKET | MARKET_TO_RESERVE | MARKET_TO_MARKET`
-  with `LOCAL (FIAT waterfall) | CROSS_BORDER (Crypto waterfall)`
-- The waterfall is 5 tiers in priority order:
-  1. PaySwap FIAT reserves
-  2. LP FIAT bandwidth
-  3. PaySwap crypto reserves (twin token if FIAT exists, stablecoin if not)
-  4. LP crypto bandwidth
-  5. Marketplace auction
-- Local payments use tiers 1, 2, 5. Cross-border uses 3, 4, 5.
-- **Acceptance:** `selectSettlementSource()` returns `{ tier, source, skipped[], explanation }`
-
-### R1-2 · Simplify PaymentCommandHandler to use the waterfall — TODO · **Depends:** R1-1
-- **Files:** `src/runtime/dispatcher/handlers.ts`
-- Remove the 5-strategy switch (lines 226-579)
-- Replace with: `if (isLocal) { fiatWaterfall() } else { cryptoWaterfall() }`
-- Each tier tries the next if insufficient
-- Emit `routing.decision` with the waterfall tier selected + skipped tiers
-
-### R1-3 · Delete dead code and parallel implementations — TODO
-- **Files to delete:**
-  - `src/runtime/settlement/adapters.ts` (stub returning fake txHashes)
-  - `src/kernel/twin-token.ts` (duplicate of `protocol/twin-token/engine.ts`)
-  - `src/kernel/treasury.ts` + `src/kernel/treasury-ai.ts` (simulation-only)
-  - `src/protocol/treasury.ts` (old v1)
-  - `src/protocol/contracts/index.ts` (unused SmartContract interfaces)
-  - `src/kernel/liquidity-planner.ts` (superseded by policy engine)
-  - `src/runtime/economic/marketplace.ts` (duplicate of auction engine)
-  - `src/runtime/engines/liquidity-marketplace/service.ts` (read-only duplicate)
-  - 13 NoOp engine stubs in `src/runtime/engines/*/types.ts`
+## What's broken
+- Netting engine: only called by the simulator, not the settlement path
+- Corridor balancer: called by nothing
+- Backing verifier: called by nothing
+- FX module: not in the settlement path
+- Rebalance endpoint: returns `{ rebalanced: true }` without rebalancing
 
 ---
 
-## R2 — FIAT presence + isLocal()
+## W — Wiring (do this first, all of it)
 
-### R2-1 · FIAT presence per country — TODO · **Depends:** R1-1
-- **Files:** `src/runtime/dispatcher/handlers.ts` (where RESERVE_STATES is hardcoded)
-- Replace hardcoded `RESERVE_STATES` with a real lookup
-- `getFiatPresence(country)` → `{ hasFiatReserves, totalAvailable, currency }`
-- Derived from the event store (treasury.account.credited events per country)
-- **Acceptance:** Ghana has FIAT reserve → `hasFiatReserves: true`; Kenya doesn't → `false`
+### W1 · Backing verifier in front of every mint — IN PROGRESS
+- **Files:** `src/protocol/treasury-v2/backing.ts`, `src/runtime/dispatcher/handlers.ts`
+- `backing.ts` implements the 1:1 `TWIN<CCY>` ≥ `<CCY>` reserve invariant as a
+  `preMintHook` gate. Nothing calls it. The handler emits `twin.minted` with no check.
+- Route every `twin.minted` event through the verifier's hooks.
+- **Acceptance:** a mint against insufficient reserves is rejected with the shortfall named.
 
-### R2-2 · isLocal() — TODO · **Depends:** R2-1
-- **Files:** new `src/runtime/liquidity/locality.ts`
-- `isLocal({ originCountry, destinationCountry, sourceCurrency, destinationCurrency })`
-- Same country AND same currency → local. Anything else → cross-border.
-- **Acceptance:** GH→GH/GHS = local; GH→NG = cross-border; GH/GHS→GH/USD = cross-border
+### W2 · Netting in the settlement path — TODO · **Depends:** W1
+- **Files:** `src/protocol/settlement/net-settlement.ts`, `src/runtime/dispatcher/handlers.ts`
+- Cross-border plans should record corridor obligations and settle net on a cycle,
+  not gross per payment. This is the largest cost lever in the system.
+- **Acceptance:** balanced corridor (KE→GH 1.2M, GH→KE 1.15M) moves 50k, not 2.35M.
 
----
+### W3 · Persist corridor obligations — TODO · **Depends:** W2
+- **Files:** `src/protocol/settlement/net-settlement.ts`
+- `NetSettlementEngine` is an in-memory `Map`. Unsettled obligations are money owed.
+- **Acceptance:** kill process mid-cycle; obligations reconstruct from event log.
 
-## R3 — Wire real execution to the waterfall
+### W4 · Fix `netVolume()` dedupe key — TODO · **Depends:** W3
+- **Files:** `src/protocol/settlement/net-settlement.ts:86-95`
+- Key omits currency — multi-currency corridors collapse to one key.
+- **Acceptance:** GH↔NG in GHS and USD reports two nets, not one.
 
-### R3-1 · Real twin token mint/burn on Stellar — TODO · **Depends:** R1-2
-- **Files:** `src/runtime/dispatcher/handlers.ts`, `src/protocol/twin-token/engine.ts`
-- When handler emits `twin.minted`, also call `twinTokenEngine.mint()` on Stellar
-- Twin token naming: `tGHS` for GHS, `tNGN` for NGN, `tKES` for KES, `tXOF` for XOF
-- Configure `twinTokenEngine` with Stellar testnet credentials from `.env`
-- **Acceptance:** a local payment in Ghana mints `tGHS` on Stellar testnet
-
-### R3-2 · Real escrow lifecycle — TODO · **Depends:** R1-2
-- **Files:** `src/runtime/dispatcher/handlers.ts`, `src/protocol/settlement/escrow.ts`
-- For cross-border (tiers 3-5): `settlementEscrow.freeze()` when stablecoin is locked
-- Release escrow when LP confirms settlement
-- Slash escrow on dispute/fraud
-- **Acceptance:** a cross-border payment freezes escrow, then releases on confirmation
-
-### R3-3 · Real LP auction (tier 5) — TODO · **Depends:** R1-2
-- **Files:** `src/runtime/dispatcher/handlers.ts`, `src/protocol/settlement/auctions.ts`
-- When waterfall reaches tier 5: `auctionEngine.open()`
-- LPs submit bids via new `/api/lp/bid` endpoint
-- `auctionEngine.close()` selects winner(s) by greedy cheapest-first
-- Multi-LP partial fills for coverage optimization
-- **Acceptance:** a payment that can't be served by tiers 1-4 opens an auction
-
-### R3-4 · Real local rail disbursement — TODO · **Depends:** R1-2
-- **Files:** `src/runtime/dispatcher/handlers.ts`, `src/protocol/providers/registry.ts`
-- For LOCAL_RAIL tier 1: call provider adapter to disburse
-- Use `providerRegistry.getByType('mobile_money')` or `('bank_account')`
-- On provider confirmation → settlement confirmed
-- **Acceptance:** a local payment triggers a real (or simulated) MTN MoMo disbursement
-
-### R3-5 · Replace stub Stellar adapter — TODO
-- **Files:** `src/runtime/settlement/adapters.ts` (delete), import from `src/protocol/chains/stellar/adapter.ts`
-- Remove the stub that returns `stellar_${Date.now()}` fake txHashes
-- Import and use the real `stellarChainAdapter` with sim/live mode
-- **Acceptance:** Stellar transactions return real tx hashes
+### W5 · Make rebalance endpoint actually rebalance — TODO · **Depends:** W2
+- **Files:** `src/app/api/treasury/rebalance/route.ts`, `src/protocol/treasury-v2/balancing.ts`
+- Either invoke `CorridorBalancer` or stop returning `{ rebalanced: true }`.
+- **Acceptance:** response reports amount moved + donor corridor, or `{ rebalanced: false, reason }`.
 
 ---
 
-## R4 — LP bandwidth system
+## F — FX (the gap the two-layer framing hides)
 
-### R4-1 · LP FIAT bandwidth (tier 2) — TODO · **Depends:** R3-1
-- **Files:** `src/runtime/liquidity/bandwidth-engine.ts`, `src/runtime/dispatcher/handlers.ts`
-- LPs register FIAT bandwidth: country, currency, bank authorization, capacity
-- When tier 1 is insufficient, tier 2 queries `bandwidthEngine.findAvailable(country, 'fiat', currency, amount)`
-- LP is auto-debited and compensated with fee share
-- **Acceptance:** LP with FIAT bandwidth in Kenya serves a local payment when PaySwap's FIAT is insufficient
+### F1 · Give the intent two currencies — TODO
+- **Files:** `src/runtime/liquidity/types.ts`, `src/runtime/liquidity/settlement-waterfall.ts`
+- Split `currency` into `sourceCurrency`/`destinationCurrency`; add `convert_fx` action.
+- **Acceptance:** GHS→NGN intent compiles with explicit FX action + quoted rate.
 
-### R4-2 · LP crypto bandwidth (tier 4) — TODO · **Depends:** R4-1
-- **Files:** `src/runtime/liquidity/bandwidth-engine.ts`, `src/runtime/dispatcher/handlers.ts`
-- LPs register crypto bandwidth: USDC capacity on Stellar
-- When tier 3 is insufficient, tier 4 queries `bandwidthEngine.findAvailable(country, 'stablecoin', 'USDC', amount)`
-- LP is compensated with fee share
-- **Acceptance:** LP with crypto bandwidth serves a cross-border payment when PaySwap's crypto is insufficient
+### F2 · Wire FX modules into the planner — TODO · **Depends:** F1
+- **Files:** `src/kernel/fx.ts`, `src/protocol/connectors-v2/fx-rate.ts`, `src/runtime/liquidity/settlement-waterfall.ts`
+- Pass the quote in via inputs (keep planner pure — same quote → same plan).
+- **Acceptance:** `compile()` stays deterministic with FX.
 
-### R4-3 · Bandwidth compensation — TODO · **Depends:** R4-1, R4-2
-- **Files:** `src/runtime/dispatcher/handlers.ts`
-- When LP bandwidth is used (tiers 2, 4), LP earns fee share
-- Tier 2 (LP FIAT): 40% LP, 60% PaySwap
-- Tier 4 (LP crypto): 80% LP, 20% PaySwap
-- Tier 5 (auction): 90% LP, 10% PaySwap (market rate)
-- **Acceptance:** a settlement at tier 2 books an LP fee; tier 1 books none
+### F3 · FX risk owner — TODO · **Depends:** F2
+- **Files:** `src/protocol/treasury-v2/limits.ts`, `src/protocol/treasury-v2/stress-test.ts`
+- Decide: PaySwap wears it (limit + hedge), LP wears it (priced in fee), or sender wears it (re-quote on expiry).
+- **Acceptance:** open FX exposure per corridor is a number with a limit.
 
 ---
 
-## R5 — Enforce the twin-token invariant
+## S — The waterfall as the per-leg resolver
 
-### R5-1 · Mint/burn = FIAT movement, atomically — TODO · **Depends:** R3-1
-- **Files:** `src/runtime/dispatcher/handlers.ts`, `src/protocol/twin-token/engine.ts`
-- FIAT deposited → mint twin token on Stellar (same transaction)
-- FIAT withdrawn → burn twin token on Stellar (same transaction)
-- Any failure rolls back both
-- **Acceptance:** `circulatingSupply(tGHS) == fiatReserveBalance(GHS)` always
+### S1 · Add FIAT as an asset type — TODO
+- **Files:** `src/runtime/liquidity/types.ts:49-56` (`LiquidityAction`)
+- `assetType` is `'twin_token' | 'stablecoin'`. There is no FIAT. Tier 2 is unrepresentable.
+- Add `'fiat'` + action semantics (external debit against LP-held account, mandate, limits, reversal).
+- **Acceptance:** a plan can express "debit LP X's Ghanaian bank account for 50,000 GHS."
 
-### R5-2 · No FIAT reserve ⇒ no mint — TODO · **Depends:** R5-1, R2-1
-- **Files:** `src/runtime/dispatcher/handlers.ts`
-- Reject twin token mint for a country with no FIAT reserve
-- Use stablecoin (USDC) instead
-- **Acceptance:** deposit into Kenya (no FIAT reserve) → uses USDC, not tKES
+### S2 · Tier 2 needs a mandate — TODO · **Depends:** S1
+- **Files:** new LP mandate model, `src/protocol/lp-lifecycle-manager.ts`
+- Debiting external bank accounts requires standing authorisation + reversal reserve.
+- **Acceptance:** LP without active mandate never appears at tier 2.
 
-### R5-3 · Continuous invariant check — TODO · **Depends:** R5-1
-- **Files:** new `src/runtime/reconciliation/invariant-service.ts`
-- Per currency: `circulatingSupply(twin) − fiatReserveBalance` must be 0
-- Publish breach event if drift detected
-- Surface on admin dashboard
-- **Acceptance:** corrupted reserve balance is flagged within one check cycle
+### S3 · Derive strategy from per-leg waterfall — TODO · **Depends:** S1, F1
+- **Files:** `src/runtime/liquidity/settlement-waterfall.ts`, `src/runtime/dispatcher/handlers.ts`
+- Replace pre-decided booleans with `resolveLeg(country, currency, amount) → { tier, source }`.
+- Strategy name = label on pair of leg results. Record skipped tiers + reasons.
+- **Acceptance:** five strategy names still produced, same inputs, no hand-written branch.
 
----
+### S4 · Resolve LP at compile time — TODO · **Depends:** S3
+- **Files:** `src/runtime/liquidity/policy-engine.ts:168,176,184,188`
+- Every bandwidth action carries `lpId: 'auto_select'`. Select LP in the planner.
+- **Acceptance:** identical inputs → identical `lpId`s.
 
-## R6 — Marketplace auction (tier 5)
-
-### R6-1 · Auction models + API — TODO · **Depends:** R3-3
-- **Files:** new `src/app/api/lp/bid/route.ts`, `src/protocol/settlement/auctions.ts`
-- LPs submit bids: amount, fee rate, settlement window
-- Auction closes after timeout or full coverage
-- **Acceptance:** open auction with two competing LP bids
-
-### R6-2 · Waterfall tier 5 integration — TODO · **Depends:** R6-1
-- **Files:** `src/runtime/dispatcher/handlers.ts`
-- Tier 5 is asynchronous — settlement parks in `PENDING_LIQUIDITY` state
-- Resumes or fails on auction close
-- **Acceptance:** settlement reaching tier 5 enters pending state, resumes on bid
+### S5 · Wire tier 5 (marketplace auction) — TODO · **Depends:** S3
+- **Files:** `src/protocol/settlement/auctions.ts`, `src/protocol/liquidity/marketplace.ts`
+- Tier 5 is async — parks in `marketplace` state, resumes on fill, refunds on timeout.
+- Consider committed facilities (pre-agreed size/price) as tier 4.5.
+- **Acceptance:** settlement reaching tier 5 parks, resumes, or refunds — never hangs.
 
 ---
 
-## R7 — Stablecoin → twin token migration
+## I — The invariant, per location
 
-### R7-1 · Reserve composition metric — TODO · **Depends:** R1-1
-- **Files:** `src/runtime/dispatcher/handlers.ts`, `src/app/api/showcase/route.ts`
-- Report per currency: `% stablecoin` vs `% twin token` of crypto-tier capacity
-- Surface on financial model dashboard
-- **Acceptance:** dashboard shows the ratio and trend
+### I1 · Should RESERVE_TO_RESERVE balance in-plan? — TODO · **Depends:** W2, W5
+- **Files:** `src/runtime/liquidity/policy-engine.ts:122-126`
+- Plan credits sender reserve + mints twin at destination, no debit on destination.
+- Choose: settle location in-plan (simpler, more movement) or accumulate + rebalance (less movement, requires W2+W5 loop).
+- **Acceptance:** per-country reserve drift is a monitored number with an alarm threshold.
 
-### R7-2 · Rebalancer — TODO · **Depends:** R7-1, R5-1
-- **Files:** new `src/runtime/treasury/rebalance-service.ts`
-- When FIAT reserves cross threshold, propose converting stablecoin → twin token
-- Propose, don't execute (human approval needed)
-- **Acceptance:** opening NGN FIAT reserve produces proposal to shift GH→NG from USDC to tNGN
+### I2 · What do twin tokens do on LOCAL_RAIL? — TODO
+- **Files:** `src/runtime/liquidity/policy-engine.ts:116-120`
+- GHS→GHS mints tGHS — what does tGHS do locally that a ledger entry doesn't?
+- Decide: mint-on-deposit (simple invariant, off payment path) vs mint-on-corridor-entry (supply tied to utility).
+- **Acceptance:** written decision + if minting stays, one sentence naming tGHS's local job.
 
 ---
 
-## R8 — Docs + dashboard
+## D — The long-term direction
 
-### R8-1 · Rewrite architecture docs — TODO · **Depends:** R1-1
-- **Files:** `ARCHITECTURE-AUDIT.md`, `docs/architecture/` (if exists)
-- Lead with two-reserve rule + waterfall
-- Drop reserve-category taxonomy, stablecoin-vs-twin philosophy split
-- **Acceptance:** no doc describes a reserve type that isn't `tier × ownership × assetKind`
+### D1 · Measure stablecoin→twin shift — TODO · **Depends:** W1
+- **Files:** `src/protocol/treasury-v2/backing.ts`, `src/runtime/liquidity/types.ts:209-215`
+- Surface % stablecoin vs % twin of crypto-tier capacity, per corridor.
+- **Acceptance:** treasury dashboard shows the ratio + trend per corridor.
 
-### R8-2 · Dashboard follows the waterfall — TODO · **Depends:** R3-1, R7-1
-- **Files:** `src/components/showcase/payment-flow-visualizer.tsx`, `src/components/showcase/financial-model-tab.tsx`
-- Reserves panel groups by tier 1-5, in waterfall order
-- Settlement detail shows tier served + tiers skipped with reasons
-- **Acceptance:** operator can answer "why did this payment cost that much?" from the UI
+### D2 · Propose migrations, don't execute — TODO · **Depends:** D1, W5
+- **Files:** `src/protocol/treasury-v2/balancing.ts`, `src/runtime/settlement-orchestrator/autonomous.ts`
+- When FIAT reserves cross threshold, propose converting stablecoin → twin for that corridor.
+- **Acceptance:** opening NGN FIAT reserve produces a proposal with corridor, amount, composition.
+
+---
+
+## Ordering
+
+**W1–W5 first.** Small wiring tickets. Until they land, the system reports outcomes
+it doesn't produce — making every later measurement untrustworthy.
+
+**F1–F3 next.** FX changes the shape of `LiquidityIntent` and `TreasuryAction`.
+Every S ticket touches those types. Doing S first means doing it twice.
+
+**S1–S5 then.** Waterfall is a refactor of a working planner, provable by snapshot
+equality against today's plans.
+
+**I and D last.** Decisions, easier once W and F make consequences visible.
 
 ---
 
 ## Fee model (by waterfall tier)
 
-| Tier | Fee | Split |
-|------|-----|-------|
-| 1. PaySwap FIAT | 0.8% (80bps) | 100% PaySwap |
-| 2. LP FIAT | 1.0% (100bps) | 60% PaySwap, 40% LP |
-| 3. PaySwap crypto | 1.2% (120bps) | 100% PaySwap |
-| 4. LP crypto | 1.5% (150bps) | 20% PaySwap, 80% LP |
-| 5. Auction | 2.0%+ (200bps+) | 10% PaySwap, 90% LP |
+| Tier | Fee | Split | Description |
+|------|-----|-------|-------------|
+| 1 | 80bps | 100% PaySwap | PaySwap FIAT reserves |
+| 2 | 100bps | 60% PS, 40% LP | LP FIAT bandwidth |
+| 3 | 120bps | 100% PaySwap | PaySwap crypto (twin token or stablecoin) |
+| 4 | 150bps | 20% PS, 80% LP | LP crypto bandwidth |
+| 5 | 200bps+ | 10% PS, 90% LP | Marketplace auction |

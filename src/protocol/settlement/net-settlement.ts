@@ -86,7 +86,7 @@ export class NetSettlementEngine {
     const pairs = new Set<string>();
     let total = 0;
     for (const c of this.corridors.values()) {
-      const pairKey = [c.fromCountry, c.toCountry].sort().join(':');
+      const pairKey = [c.fromCountry, c.toCountry, c.currency].sort().join(':');
       if (pairs.has(pairKey)) continue;
       pairs.add(pairKey);
       total += this.netSettlement(c.fromCountry, c.toCountry, c.currency).amount;
