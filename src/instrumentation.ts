@@ -98,7 +98,19 @@ export async function register() {
           console.log(`[net-settlement] Rehydrated ${obligationEvents.length} obligation events into ${netSettlementEngine.all().length} corridors`);
         }
       } catch (e) {
-        console.error('[net-settlement] Rehydrate failed:', e);
+        console.error('[net-settlement] Rehydrate from events failed:', e);
+      }
+
+      // SCALE-2: also load corridor obligations from the AuthorityState table
+      // (Postgres). This supplements the event-log rehydration with state
+      // that may have been written by other instances.
+      try {
+        const loaded = await netSettlementEngine.loadFromAuthorityStore();
+        if (loaded > 0) {
+          console.log(`[net-settlement] Loaded ${loaded} corridors from AuthorityState (Postgres)`);
+        }
+      } catch (e) {
+        console.error('[net-settlement] Load from authority store failed:', e);
       }
 
       // W1 FIX: seed the reserve monitor + backing verifier with real

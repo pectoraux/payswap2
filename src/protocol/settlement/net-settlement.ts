@@ -77,6 +77,12 @@ export class NetSettlementEngine {
     }
     corridor.balance += amount;
     corridor.transactionCount++;
+
+    // SCALE-2: persist to Postgres via the authority store so multiple
+    // instances agree on corridor balances. Fire-and-forget (best-effort) —
+    // the in-memory Map is the read path; the DB is the durability path.
+    this.persistToAuthorityStore(k, corridor).catch(() => { /* best-effort */ });
+
     return corridor;
   }
 
@@ -173,6 +179,67 @@ export class NetSettlementEngine {
       total += this.netSettlement(c.fromCountry, c.toCountry, c.currency).amount;
     }
     return round(total, 2);
+  }
+
+  // ── SCALE-2: Postgres-backed authority state ──────────────────────────
+  //
+  // The corridor Map is the in-memory read path (fast). The AuthorityState
+  // table is the durability path (survives restarts, visible to other
+  // instances). This method persists a corridor obligation to Postgres
+  // with optimistic locking so two instances can't diverge.
+  //
+  // Fire-and-forget: the in-memory Map is updated synchronously; the DB
+  // write is best-effort. If the DB is unavailable, the system continues
+  // to work (single-instance mode). If a second instance writes first,
+  // the optimistic lock fails and the in-memory Map may be stale — but
+  // the next rehydrateFromEvents() call will correct it.
+
+  private async persistToAuthorityStore(key: string, corridor: CorridorObligation): Promise<void> {
+    try {
+      const { withOptimisticLock } = await import('@/lib/authority-store');
+      await withOptimisticLock(
+        'netSettlementEngine',
+        key,
+        async (current) => {
+          // Merge: take the max of in-memory and DB balance (the DB may
+          // have obligations from other instances that we haven't seen).
+          const dbState = current as CorridorObligation | null;
+          if (dbState) {
+            return {
+              ...corridor,
+              balance: Math.max(corridor.balance, dbState.balance),
+              transactionCount: Math.max(corridor.transactionCount, dbState.transactionCount),
+            };
+          }
+          return corridor;
+        },
+      );
+    } catch {
+      // DB unavailable — in-memory Map is still correct for this instance.
+    }
+  }
+
+  /**
+   * SCALE-2: Load all corridor obligations from the AuthorityState table.
+   * Called at startup to hydrate the in-memory Map from Postgres so a
+   * new instance sees obligations recorded by other instances.
+   */
+  async loadFromAuthorityStore(): Promise<number> {
+    try {
+      const { loadAuthorityState } = await import('@/lib/authority-store');
+      const state = await loadAuthorityState('netSettlementEngine');
+      let count = 0;
+      for (const [key, { state: data }] of state) {
+        const corridor = data as CorridorObligation;
+        if (corridor && typeof corridor.balance === 'number') {
+          this.corridors.set(key, corridor);
+          count++;
+        }
+      }
+      return count;
+    } catch {
+      return 0;
+    }
   }
 }
 
