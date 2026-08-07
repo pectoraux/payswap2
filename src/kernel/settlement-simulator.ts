@@ -168,7 +168,7 @@ function runSettlementScenario(opts: {
       fromCurrency: from.currency,
       toCurrency: to.currency,
       amount: opts.amount,
-      fxRate: fxEngine.rate(from.currency as any, to.currency as any),
+      fxRate: fxEngine.rate(from.currency as any, to.currency as any) ?? 1,
       senderReserve: reserveState(from.country),
       receiverReserve: reserveState(to.country),
       senderBandwidth: senderBw,

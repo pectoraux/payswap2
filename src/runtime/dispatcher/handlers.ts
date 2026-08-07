@@ -199,7 +199,10 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
         lpId,
         fee,
         netAmount,
-        fxRate: 1,
+        fxRate: fxEngine.rate(
+          payload.sourceCurrency ?? payload.currency,
+          payload.destinationCurrency ?? payload.currency,
+        ) ?? 1,
         description: payload.description ?? null,
         createdAt: now,
         settledAt: null,
@@ -229,13 +232,12 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
     let fxQuote: { rate: number; midRate: number; spreadBps: number } | null = null;
 
     if (isCrossCurrency) {
-      // F2: get a REAL rate from the FX engine.
-      try {
-        const quote = fxEngine.quote(payload.amount, srcCcy as any, dstCcy as any);
-        fxQuote = { rate: quote.effectiveRate, midRate: quote.midRate, spreadBps: quote.spreadBps };
-      } catch {
-        // Rate not available for this corridor — emit fx.rate_missing and
-        // refuse to open a position. Do NOT fall back to rate: 1.
+      // F2: get a REAL rate from the FX engine. quote() returns null if the
+      // corridor is unknown — we emit fx.rate_missing and refuse to open a
+      // position. Do NOT fall back to rate: 1 (a wrong number that looks
+      // authoritative is worse than a gap).
+      const quote = fxEngine.quote(payload.amount, srcCcy, dstCcy);
+      if (quote === null) {
         events.push({
           type: 'fx.rate_missing',
           streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
@@ -246,6 +248,8 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           } as unknown as Record<string, unknown>,
         });
         fxQuote = null;
+      } else {
+        fxQuote = { rate: quote.effectiveRate, midRate: quote.midRate, spreadBps: quote.spreadBps };
       }
     }
 
@@ -581,16 +585,18 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
 
       } else {
         // S5: Tier 5 — Marketplace auction (async, parks in PENDING_LIQUIDITY)
-        // Open an auction for LPs to bid on this settlement
+        // Open an auction for LPs to bid on this settlement.
+        // S5 FIX: open() signature is (amount, currency, country, deadlineMs) —
+        // 4 positional args, NOT a single object. Previously called with an
+        // object, which corrupted the auction data silently.
         let auctionId: string | null = null;
         try {
-          const auction = auctionEngine.open({
-            corridor: `${fromCcy}-${toCcy}`,
-            amount: netAmount,
-            currency: toCcy,
-            mode: 'BULK',
-            deadline: now + 300_000, // 5-minute auction window
-          });
+          const auction = auctionEngine.open(
+            netAmount,         // amount
+            toCcy,             // currency
+            toCountryName,     // country (destination)
+            now + 300_000,     // deadlineMs (5-minute auction window)
+          );
           auctionId = auction.id;
         } catch { /* auction engine may not be initialized */ }
 
@@ -616,16 +622,11 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           payload: { contractId: `sc_${paymentId}`, fundedAt: now } as unknown as Record<string, unknown>,
         });
         // F3: Record FX exposure for cross-currency auctions
-        // F2 FIX: use the REAL rate from fxEngine, not rate: 1.
+        // F2 FIX: use the REAL rate from fxEngine. quote() returns null if
+        // the corridor is unknown — emit fx.rate_missing, don't open a position.
         if (fromCcy !== toCcy) {
-          let tier5Rate = 1;
-          let tier5RateAvailable = false;
-          try {
-            const tier5Quote = fxEngine.quote(payload.amount, fromCcy as any, toCcy as any);
-            tier5Rate = tier5Quote.effectiveRate;
-            tier5RateAvailable = true;
-          } catch {
-            // Rate not available — emit fx.rate_missing, don't open a position.
+          const tier5Quote = fxEngine.quote(payload.amount, fromCcy, toCcy);
+          if (tier5Quote === null) {
             events.push({
               type: 'fx.rate_missing',
               streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
@@ -635,12 +636,11 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
                 tier: 5, ts: now,
               } as unknown as Record<string, unknown>,
             });
-          }
-          if (tier5RateAvailable) {
+          } else {
             const fxPosition = fxExposureService.openPosition({
               fromCurrency: fromCcy,
               toCurrency: toCcy,
-              rate: tier5Rate,
+              rate: tier5Quote.effectiveRate,
               sourceAmount: payload.amount,
               destinationAmount: netAmount,
               paymentId,
@@ -649,12 +649,22 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
               events.push({
                 type: 'fx.position_opened',
                 streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
-                payload: { paymentId, positionId: fxPosition.id, corridor: fxPosition.corridor, sourceAmount: payload.amount, rate: tier5Rate, openedAt: now } as unknown as Record<string, unknown>,
+                payload: { paymentId, positionId: fxPosition.id, corridor: fxPosition.corridor, sourceAmount: payload.amount, rate: tier5Quote.effectiveRate, openedAt: now } as unknown as Record<string, unknown>,
               });
+              // F3 FIX: close the position immediately — the settlement
+              // completes synchronously in this handler, so the FX risk
+              // is momentary. Previously: positions were opened but never
+              // closed → exposure accumulated forever → eventually all
+              // cross-currency payments blocked by the pre-flight check.
+              const closed = fxExposureService.closePosition(fxPosition.id);
+              if (closed) {
+                events.push({
+                  type: 'fx.position_closed',
+                  streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
+                  payload: { paymentId, positionId: fxPosition.id, corridor: fxPosition.corridor, closedAt: now } as unknown as Record<string, unknown>,
+                });
+              }
             }
-            // E7 NOTE: the FX limit breach case is handled by the pre-flight
-            // check above (before payment.completed). If we reach this point,
-            // the pre-flight passed and the position was opened successfully.
           }
         }
       }

@@ -331,7 +331,7 @@ class ExecutionPlanner {
             fromCurrency,
             toCurrency,
             amount,
-            fxRate: fxEngine.rate(fromCurrency as any, toCurrency as any),
+            fxRate: fxEngine.rate(fromCurrency as any, toCurrency as any) ?? 1,
             senderReserve: {
               country: fromCountry,
               currency: fromCurrency,

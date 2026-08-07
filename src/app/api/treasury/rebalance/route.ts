@@ -91,15 +91,34 @@ export async function POST(req: NextRequest) {
   try {
     // Dynamic import to avoid loading treasury-v2 on every request
     const { corridorBalancer } = await import('@/protocol/treasury-v2/balancing');
-    const result = corridorBalancer.rebalance(
-      { from: fromCorridor, to: toCorridor },
-      amount,
-    );
-    rebalanceResult = {
-      rebalanced: result.rebalanced,
-      amountMoved: result.amountMoved,
-      reason: result.reason,
-    };
+    const { reserveMonitor } = await import('@/protocol/treasury-v2');
+    // W5 FIX: corridorBalancer has no .rebalance() method — it has
+    // checkAndRebalance(corridor, liquidityNetwork, reserveMonitor). But the
+    // rebalance endpoint doesn't have a LiquidityNetwork handy. So we use
+    // the simpler approach: directly move reserves between two currencies
+    // via the reserveMonitor (the canonical reserve state owner).
+    // This is an operator-initiated rebalance — not the auto-rebalance loop.
+    const fromReserve = reserveMonitor.getReserve(fromCorridor);
+    const toReserve = reserveMonitor.getReserve(toCorridor);
+    if (!fromReserve || fromReserve.available < amount) {
+      rebalanceResult = {
+        rebalanced: false,
+        reason: `insufficient_available_on_donor: ${fromCorridor} has ${fromReserve?.available ?? 0}, need ${amount}`,
+      };
+    } else {
+      // Move `amount` from donor to recipient.
+      reserveMonitor.setReserve(fromCorridor, fromReserve.balance - amount, fromReserve.reserved);
+      if (toReserve) {
+        reserveMonitor.setReserve(toCorridor, toReserve.balance + amount, toReserve.reserved);
+      } else {
+        reserveMonitor.setReserve(toCorridor, amount, 0);
+      }
+      rebalanceResult = {
+        rebalanced: true,
+        amountMoved: amount,
+        reason: `moved ${amount} from ${fromCorridor} to ${toCorridor}`,
+      };
+    }
   } catch (err) {
     rebalanceResult = {
       rebalanced: false,

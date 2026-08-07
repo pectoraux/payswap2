@@ -957,6 +957,8 @@ export async function POST(req: NextRequest) {
             merchantId: `merch_sandbox`,
             customerId: `cust_sandbox`,
             amount, currency: currencyFor(toCountry),
+            sourceCurrency: currencyFor(fromCountry),
+            destinationCurrency: currencyFor(toCountry),
             method: 'bank', corridor: `${currencyFor(fromCountry)}-${currencyFor(toCountry)}`,
             description: `Simulation: ${fromCountry}→${toCountry} ${amount} ${currencyFor(fromCountry)}`,
             reference: `sim_${Date.now()}`,

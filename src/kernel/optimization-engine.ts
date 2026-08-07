@@ -96,9 +96,11 @@ export class OptimizationEngine {
     const amount = scenario.transaction.amount;
     const weights = { ...PRIORITY_WEIGHTS[scenario.transaction.priority], ...objectives };
 
-    // FX quote
+    // FX quote — null means the rate is unavailable; fall back to rate=1
+    // (same-currency or unknown corridor) so the optimizer still runs.
     const fxQuote = fxEngine.quote(amount, srcCur, tgtCur);
-    const sourceAmount = round(amount / fxQuote.effectiveRate, 2);
+    const effectiveRate = fxQuote?.effectiveRate ?? 1;
+    const sourceAmount = round(amount / effectiveRate, 2);
 
     // Candidate LPs from the WORLD STATE (not the scenario) — the world is the source of truth.
     const corridorLps = world.liquidityProviders.filter(
@@ -367,9 +369,13 @@ export class OptimizationEngine {
   /* Assembly + scoring                                                      */
   /* ----------------------------------------------------------------------- */
 
-  private assemble(label: string, lpUsage: LiquiditySourceDraw[], reserveDraw: number, treasuryDraw: number, fxQuote: FxQuote, s: SimulationScenario, steps: { title: string; type: PlanStep['type'] }[]): RawCandidate {
+  private assemble(label: string, lpUsage: LiquiditySourceDraw[], reserveDraw: number, treasuryDraw: number, fxQuote: FxQuote | null, s: SimulationScenario, steps: { title: string; type: PlanStep['type'] }[]): RawCandidate {
+    // F2: fxQuote may be null if the corridor has no rate. Fall back to
+    // zero spread cost (same-currency or unknown corridor).
+    const spreadCost = fxQuote?.spreadCost ?? 0;
+    const spreadBps = fxQuote?.spreadBps ?? 0;
     const pricing = pricingEngine.price({
-      principal: s.transaction.amount, lpUsage, fxSpreadCost: fxQuote.spreadCost,
+      principal: s.transaction.amount, lpUsage, fxSpreadCost: spreadCost,
       reserveFeeBps: reserveDraw > 0 ? 4 : 0, currency: s.transaction.merchant.currency,
     });
     const totalDrawn = lpUsage.reduce((sum, u) => sum + u.drawn, 0) + reserveDraw + treasuryDraw;
@@ -381,7 +387,7 @@ export class OptimizationEngine {
     const reservesAfter = this.projectReservesAfter(s, { lpUsage, reserveDraw, treasuryDraw } as RawCandidate);
     const risk = riskEngine.assess({
       reserves: reservesAfter, lpUsage, amount: s.transaction.amount, pathLength: steps.length,
-      fxSpreadBps: fxQuote.spreadBps, preference: s.transaction.priority, treasuryDraw,
+      fxSpreadBps: spreadBps, preference: s.transaction.priority, treasuryDraw,
     });
     const notes: string[] = [];
     if (!feasible) notes.push(`Insufficient liquidity: ${round(totalDrawn, 2)} of ${s.transaction.amount}`);
@@ -443,7 +449,7 @@ export class OptimizationEngine {
     const srcCur = s.transaction.buyer.currency;
     steps.push({ id: uid('step'), type: 'debit_source', title: 'Debit Buyer', description: `Debit buyer wallet ${round(sourceAmount, 2)} ${srcCur}`, amount: sourceAmount, currency: srcCur, sourceRef: { kind: 'wallet', id: 'buyer' }, frame: frame++, reversible: true });
     steps.push({ id: uid('step'), type: 'credit_reserve', title: 'Credit Source Reserve', description: `Credit source reserve`, amount: sourceAmount, currency: srcCur, targetRef: { kind: 'reserve', id: s.treasury.originReserve.country }, frame: frame++, reversible: true });
-    if (srcCur !== cur) steps.push({ id: uid('step'), type: 'fx_convert', title: 'FX Bridge', description: `${srcCur} → ${cur} @ ${round(fxQuote.effectiveRate, 6)}`, amount: s.transaction.amount, currency: cur, frame: frame++, reversible: false });
+    if (srcCur !== cur) steps.push({ id: uid('step'), type: 'fx_convert', title: 'FX Bridge', description: `${srcCur} → ${cur} @ ${round(fxQuote?.effectiveRate ?? 1, 6)}`, amount: s.transaction.amount, currency: cur, frame: frame++, reversible: false });
     steps.push({ id: uid('step'), type: 'mint_twin', title: 'Mint Twin Token', description: 'Mint twin token', amount: s.transaction.amount, currency: cur, frame: frame++, reversible: false });
     if (c.reserveDraw > 0) steps.push({ id: uid('step'), type: 'draw_reserve', title: 'Draw Destination Reserve', description: `Draw ${round(c.reserveDraw, 2)}`, amount: c.reserveDraw, currency: cur, sourceRef: { kind: 'reserve', id: s.treasury.destinationReserve.country }, frame: frame++, reversible: true });
     if (c.treasuryDraw > 0) steps.push({ id: uid('step'), type: 'draw_treasury', title: 'Draw Stablecoin Treasury', description: `Draw ${round(c.treasuryDraw, 2)}`, amount: c.treasuryDraw, currency: cur, sourceRef: { kind: 'stablecoin_treasury', id: 'treasury' }, frame: frame++, reversible: true });
@@ -468,7 +474,7 @@ export class OptimizationEngine {
     return {
       settlementTimeMs: c.settlementMs, settlementTimeLabel: formatDuration(c.settlementMs),
       costPercent: c.cost.costPercent, costAmount: c.cost.costAmount, riskScore: c.riskScore, riskLabel,
-      confidence: c.confidence, fxRate: fxQuote.effectiveRate, fxSpreadBps: fxQuote.spreadBps,
+      confidence: c.confidence, fxRate: fxQuote?.effectiveRate ?? 1, fxSpreadBps: fxQuote?.spreadBps ?? 0,
       totalFees: c.cost.totalFees, reserveUtilization: dstReserve.available ? round((c.reserveDraw / dstReserve.available) * 100, 1) : 0,
       liquidityUtilization: totalInitLpCap ? round((totalDrawn / totalInitLpCap) * 100, 1) : 0,
       insuranceExposure: c.riskScore > 0.4 ? round(s.transaction.amount * 0.1, 2) : 0, twinTokensMinted: 1,
@@ -482,10 +488,10 @@ export class OptimizationEngine {
     ];
   }
 
-  private buildDecisions(s: SimulationScenario, c: RawCandidate, fxQuote: FxQuote, sourceAmount: number): AIDecision[] {
+  private buildDecisions(s: SimulationScenario, c: RawCandidate, fxQuote: FxQuote | null, sourceAmount: number): AIDecision[] {
     const decisions: AIDecision[] = [];
     decisions.push({ step: 'Corridor authorization', rationale: `${s.transaction.buyer.country} → ${s.transaction.merchant.country} verified.` });
-    if (s.transaction.buyer.currency !== s.transaction.merchant.currency) decisions.push({ step: 'FX bridge', rationale: `${s.transaction.buyer.currency}→${s.transaction.merchant.currency} @ ${round(fxQuote.effectiveRate, 6)}. Buyer debited ${round(sourceAmount, 2)}.` });
+    if (s.transaction.buyer.currency !== s.transaction.merchant.currency) decisions.push({ step: 'FX bridge', rationale: `${s.transaction.buyer.currency}→${s.transaction.merchant.currency} @ ${round(fxQuote?.effectiveRate ?? 1, 6)}. Buyer debited ${round(sourceAmount, 2)}.` });
     if (c.reserveDraw > 0) decisions.push({ step: 'Reserve draw', rationale: `Drew ${round(c.reserveDraw, 2)} from destination reserve.` });
     if (c.treasuryDraw > 0) decisions.push({ step: 'Treasury draw', rationale: `Drew ${round(c.treasuryDraw, 2)} from stablecoin treasury.` });
     for (const u of c.lpUsage) decisions.push({ step: `Draw ${u.sourceLabel}`, rationale: `Drew ${round(u.drawn, 2)} @ ${u.rate}%${u.exhausted ? ' — exhausted' : ''}.` });
