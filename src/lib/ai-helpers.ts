@@ -60,8 +60,17 @@ export async function callLLM(
     let zai: InstanceType<typeof ZAI>;
     const envApiKey = process.env.ZAI_API_KEY;
     const envBaseUrl = process.env.ZAI_BASE_URL;
+    const envToken = process.env.ZAI_TOKEN;
+    const envChatId = process.env.ZAI_CHAT_ID;
+    const envUserId = process.env.ZAI_USER_ID;
     if (envApiKey && envBaseUrl) {
-      zai = new ZAI({ apiKey: envApiKey, baseUrl: envBaseUrl });
+      zai = new ZAI({
+        apiKey: envApiKey,
+        baseUrl: envBaseUrl,
+        token: envToken,
+        chatId: envChatId,
+        userId: envUserId,
+      });
     } else {
       zai = await ZAI.create();
     }
