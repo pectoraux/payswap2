@@ -6301,3 +6301,31 @@ Stage Summary:
 - Remaining P0: SEC-6 (KMS — secrets out of env).
 - Remaining P1: MON-2 (codecs at boundaries), MON-3a (ledger), MON-3c-e (treasury, waterfall, services).
 - Remaining P3: SCALE-1..4 (horizontal scale — after money types settle).
+
+---
+Task ID: PROD-ROADMAP-MON-2-3 + SEC-6 + OPS-1
+Agent: main (Z.ai Code)
+Task: Continue P1 (MON-2 codecs, MON-3a ledger migration, MON-3c treasury), SEC-6 (KMS documentation), OPS-1 (idempotency infrastructure).
+
+Work Log:
+- MON-2: Created `src/money/codec.ts` — the single boundary between Prisma Decimal, JSON, and the internal Money type. Exports: `decimalToMoney()`, `moneyToDecimalString()`, `fromRequestBody()`, `toResponseBody()`, `fromEventPayload()`, `exponentFor()`. JSON response shape: `{ amount: "1234", currency: "GHS", exponent: 2, major: "12.34" }` — amount is ALWAYS a string (never a number) so no JS client can truncate it. Exported from `@/money` index.
+
+- MON-3a: Migrated `protocol/ledger/entry.ts` to exact integer micro-units. `validateBalancedInner()` previously used `round(x, 6)` + `1e-6` tolerance — now uses `Math.round(x * 1e6)` and exact integer comparison (`diffMicro !== 0`). The `createJournalEntry()` leg construction also uses `Math.round(debit * 1e6) / 1e6` for exact storage. A one-micro-unit discrepancy now fails the balance check.
+
+- SEC-6: Documented the KMS gap in `DECISIONS.md`. Current state: all secrets in `process.env`. Target: KMS (AWS KMS / Vault). Migration plan: 4 phases (NEXTAUTH_SECRET → PSP keys → Stellar keys → DB credentials). Did NOT execute — requires cloud infrastructure not available in this dev environment. The `process.env` pattern is correct for development; KMS is a production deployment concern.
+
+- OPS-1: Created `src/lib/idempotency.ts` — idempotency as infrastructure. `withIdempotency(req, scope, handler)` persists key→requestHash→response to a new `IdempotencyRecord` Prisma model. Same key + same body → cached response (200). Same key + different body → 409 Conflict. No key → pass through. Key expires after 24h. Also kept the `getIdempotencyKey()` compatibility export for existing routes. Added `IdempotencyRecord` model to `prisma/schema.prisma`.
+
+Verification:
+- 28 tests pass (17,073 expect() calls).
+- Test scenarios: 21/21 pass (100%).
+- Ledger balanced: True, debit: 1500 === credit: 1500.
+- Homepage: renders.
+- lint: 0 errors, 351 warnings.
+
+Stage Summary:
+- P1 MON-2 DONE: Money codecs at every boundary. Single place for Prisma Decimal ↔ Money, JSON ↔ Money, event ↔ Money. JSON amount is always a string.
+- P1 MON-3a DONE: protocol/ledger entry validation migrated to exact integer micro-units. No tolerance. A one-micro-unit discrepancy fails the check.
+- P0 SEC-6 DOCUMENTED: KMS gap documented with migration plan. Not executed — requires cloud infra.
+- P4 OPS-1 DONE: idempotency infrastructure. `withIdempotency()` persists key→hash→response. 409 on key reuse with different body. `IdempotencyRecord` Prisma model added.
+- Remaining P1: MON-3b (handlers — done), MON-3c-e (treasury, waterfall, services — partially done), MON-3f (API surface).

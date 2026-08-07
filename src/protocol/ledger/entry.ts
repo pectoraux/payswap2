@@ -133,8 +133,10 @@ export function createJournalEntry(params: CreateJournalEntryParams): JournalEnt
       ledgerSeq: seq++,
       txId,
       accountCode: leg.accountCode,
-      debit: round(debit, 6),
-      credit: round(credit, 6),
+      // MON-4: round to integer micro-units (1e-6) for exact storage.
+      // No float tolerance — the balance check uses exact integer comparison.
+      debit: Math.round(debit * 1e6) / 1e6,
+      credit: Math.round(credit * 1e6) / 1e6,
       currency: leg.currency,
       memo: leg.memo ?? params.description,
       evidenceId: leg.evidenceId ?? params.evidenceId,
@@ -194,7 +196,13 @@ export function validateBalanced(journal: JournalEntry): BalanceCheckResult {
   return validateBalancedInner(journal.entries);
 }
 
-/** Internal: per-currency debit/credit balance check. */
+/** Internal: per-currency debit/credit balance check.
+ *
+ * MON-4: exact integer comparison. Previously used `round(x, 6)` + `1e-6`
+ * tolerance — a tolerance that could conceal a one-cent-per-transaction
+ * leak. Now: sums are rounded to integer micro-units (1e-6) and compared
+ * with exact equality. A one-micro-unit discrepancy fails the check.
+ */
 function validateBalancedInner(entries: LedgerEntry[]): BalanceCheckResult {
   const totals = new Map<string, { debit: number; credit: number }>();
   for (const e of entries) {
@@ -203,25 +211,29 @@ function validateBalancedInner(entries: LedgerEntry[]): BalanceCheckResult {
       t = { debit: 0, credit: 0 };
       totals.set(e.currency, t);
     }
-    t.debit = round(t.debit + e.debit, 6);
-    t.credit = round(t.credit + e.credit, 6);
+    t.debit += e.debit;
+    t.credit += e.credit;
   }
 
   const currencies: BalanceCheckResult['currencies'] = [];
   const mismatches: BalanceCheckResult['mismatches'] = [];
   for (const [currency, t] of totals) {
-    const diff = round(t.debit - t.credit, 6);
+    // Round to integer micro-units for exact comparison.
+    const debitMicro = Math.round(t.debit * 1e6);
+    const creditMicro = Math.round(t.credit * 1e6);
+    const diffMicro = debitMicro - creditMicro;
+    const diff = diffMicro / 1e6;
     currencies.push({
       currency,
-      totalDebit: t.debit,
-      totalCredit: t.credit,
+      totalDebit: debitMicro / 1e6,
+      totalCredit: creditMicro / 1e6,
       difference: diff,
     });
-    if (Math.abs(diff) > 1e-6) {
+    if (diffMicro !== 0) {
       mismatches.push({
         currency,
-        totalDebit: t.debit,
-        totalCredit: t.credit,
+        totalDebit: debitMicro / 1e6,
+        totalCredit: creditMicro / 1e6,
         difference: diff,
       });
     }

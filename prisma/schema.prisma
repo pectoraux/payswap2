@@ -1000,3 +1000,19 @@ model TraceSpan {
   @@index([parentSpanId])
   @@index([kind])
 }
+
+/// OPS-1: Idempotency as infrastructure. Persists key→request hash→response
+/// so a client retrying 100 times creates exactly one payment.
+model IdempotencyRecord {
+  id             String   @id @default(cuid())
+  key            String   @unique // scope:idempotencyKey
+  scope          String   // e.g., "payments", "payouts"
+  requestHash    String   // SHA-256 of path + body
+  responseStatus Int      // HTTP status code
+  responseBody   String   // JSON-serialized response
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+
+  @@index([scope])
+  @@index([expiresAt])
+}

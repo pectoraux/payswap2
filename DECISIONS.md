@@ -91,3 +91,45 @@ and most banks use). HALF_EVEN (banker's rounding) is better for statistics
 but produces results that surprise users — a 0.5 fee rounds up, not "to the
 nearest even number." Financial systems prioritize predictability over
 statistical unbiasedness.
+
+---
+
+## SEC-6 — Secrets out of env into a KMS
+
+### Current state (honest)
+All long-lived secrets (NEXTAUTH_SECRET, Stellar secret keys, PSP API keys,
+database URLs with credentials) are read from `process.env` at runtime.
+This is the standard Next.js pattern but has two problems:
+1. **Rotation requires a redeploy.** Changing NEXTAUTH_SECRET invalidates
+   all sessions. Changing a PSP key requires a new deploy.
+2. **Secrets are visible to anyone with env access.** In production, env
+   variables are typically visible to every process running on the host.
+
+### Target state
+- All long-lived signing + encryption keys stored in a KMS (AWS KMS,
+  Google Cloud KMS, or HashiCorp Vault).
+- The application fetches keys at startup via the KMS API (not env).
+- Rotation is a runbook: create a new key version in the KMS, update the
+  application's key reference, verify, then deprecate the old version.
+- No long-lived key is readable from `process.env` in production.
+
+### Migration plan (not executed in this environment — requires cloud infra)
+1. **Phase 1:** Move NEXTAUTH_SECRET to KMS. The app fetches it at startup
+   and passes it to `getToken()` / `getServerSession()`.
+2. **Phase 2:** Move PSP API keys (Stripe, Paystack, Flutterwave) to KMS.
+   The `src/live/` connectors fetch them at startup.
+3. **Phase 3:** Move Stellar secret keys to KMS. The Stellar adapter fetches
+   them at startup.
+4. **Phase 4:** Move database credentials to KMS (or use IAM-based auth
+   for Cloud SQL / RDS).
+
+### Acceptance criterion
+No long-lived signing or encryption key is readable from `process.env` in
+production; rotation is a runbook, not a redeploy.
+
+### What was done in this session
+- Documented the gap and the migration plan (this section).
+- Did NOT execute the migration — it requires cloud infrastructure
+  (AWS KMS / Vault) that isn't available in this development environment.
+- The `process.env` pattern is correct for development; the KMS migration
+  is a production deployment concern.
