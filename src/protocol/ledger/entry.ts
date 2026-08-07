@@ -17,24 +17,30 @@
 import { uid, nowTs, round } from '@/kernel/support';
 import { Money } from '@/money/money';
 
-/** Helper: create a debit leg. Uses Money for exact rounding. */
-export function debit(accountCode: string, amount: number, currency: string, memo?: string): {
-  accountCode: string; debit: number; credit: number; currency: string; memo?: string;
+/** Helper: create a debit leg. Returns Money-typed values — no float. */
+export function debit(accountCode: string, amount: number | Money, currency: string, memo?: string): {
+  accountCode: string; debit: Money; credit: Money; currency: string; memo?: string;
 } {
-  // MON-3: round to exact cents via Money to avoid float drift.
-  const exactAmount = Money.fromMajor(amount, currency as any).toNumber();
-  return { accountCode, debit: exactAmount, credit: 0, currency, memo };
+  const money = typeof amount === 'number' ? Money.fromMajor(amount, currency as any) : amount;
+  return { accountCode, debit: money, credit: Money.zero(currency as any), currency, memo };
 }
 
-/** Helper: create a credit leg. Uses Money for exact rounding. */
-export function credit(accountCode: string, amount: number, currency: string, memo?: string): {
-  accountCode: string; debit: number; credit: number; currency: string; memo?: string;
+/** Helper: create a credit leg. Returns Money-typed values — no float. */
+export function credit(accountCode: string, amount: number | Money, currency: string, memo?: string): {
+  accountCode: string; debit: Money; credit: Money; currency: string; memo?: string;
 } {
-  const exactAmount = Money.fromMajor(amount, currency as any).toNumber();
-  return { accountCode, debit: 0, credit: exactAmount, currency, memo };
+  const money = typeof amount === 'number' ? Money.fromMajor(amount, currency as any) : amount;
+  return { accountCode, debit: Money.zero(currency as any), credit: money, currency, memo };
 }
 
-/** A single debit or credit against one account. Exactly one of debit/credit is non-zero. */
+/**
+ * A single debit or credit against one account. Exactly one of debit/credit is non-zero.
+ *
+ * MON-3: `debit` and `credit` are `Money` — integer minor units, never float.
+ * Callers that still pass `number` will get a compile error; use `Money.fromMajor()`
+ * to convert. The `currency` field on the entry must match `debit.currency` /
+ * `credit.currency`.
+ */
 export interface LedgerEntry {
   /** Unique id of this leg. */
   id: string;
@@ -46,10 +52,10 @@ export interface LedgerEntry {
   txId: string;
   /** Fully-qualified account code (see CHART_OF_ACCOUNTS). */
   accountCode: string;
-  /** Debit amount (zero for a credit-only leg). */
-  debit: number;
-  /** Credit amount (zero for a debit-only leg). */
-  credit: number;
+  /** Debit amount (Money.zero for a credit-only leg). */
+  debit: Money;
+  /** Credit amount (Money.zero for a debit-only leg). */
+  credit: Money;
   /** ISO currency code (or asset code for twin-token accounts). */
   currency: string;
   /** Free-form memo describing the leg. */
@@ -83,8 +89,10 @@ export interface JournalEntry {
 /** Input leg for constructing a journal entry. */
 export interface JournalLegInput {
   accountCode: string;
-  debit?: number;
-  credit?: number;
+  /** Debit amount (Money). Use Money.fromMajor(amount, currency) to convert from number. */
+  debit?: Money;
+  /** Credit amount (Money). Use Money.fromMajor(amount, currency) to convert from number. */
+  credit?: Money;
   currency: string;
   memo?: string;
   evidenceId?: string;
@@ -138,15 +146,16 @@ export function createJournalEntry(params: CreateJournalEntryParams): JournalEnt
   }
   const entries: LedgerEntry[] = [];
   for (const leg of legs) {
-    const debit = leg.debit ?? 0;
-    const credit = leg.credit ?? 0;
-    if (debit < 0 || credit < 0) {
-      throw new Error(`ledger leg cannot have negative amounts (debit=${debit}, credit=${credit})`);
+    // MON-3: legs now carry Money. Default to zero if not provided.
+    const debitMoney = leg.debit ?? Money.zero(leg.currency as any);
+    const creditMoney = leg.credit ?? Money.zero(leg.currency as any);
+    if (debitMoney.isNegative() || creditMoney.isNegative()) {
+      throw new Error(`ledger leg cannot have negative amounts (debit=${debitMoney}, credit=${creditMoney})`);
     }
-    if (debit > 0 && credit > 0) {
+    if (debitMoney.isPositive() && creditMoney.isPositive()) {
       throw new Error(`ledger leg cannot be both debit and credit (account=${leg.accountCode})`);
     }
-    if (debit === 0 && credit === 0) {
+    if (debitMoney.isZero() && creditMoney.isZero()) {
       throw new Error(`ledger leg has zero debit and zero credit (account=${leg.accountCode})`);
     }
     if (!leg.currency) {
@@ -156,12 +165,11 @@ export function createJournalEntry(params: CreateJournalEntryParams): JournalEnt
       id: uid('le'),
       ts,
       ledgerSeq: seq++,
-      txId,
+      txId: txId ?? '',
       accountCode: leg.accountCode,
-      // MON-4: round to integer micro-units (1e-6) for exact storage.
-      // No float tolerance — the balance check uses exact integer comparison.
-      debit: Math.round(debit * 1e6) / 1e6,
-      credit: Math.round(credit * 1e6) / 1e6,
+      // MON-3: Money values — integer minor units, no float.
+      debit: debitMoney,
+      credit: creditMoney,
       currency: leg.currency,
       memo: leg.memo ?? params.description,
       evidenceId: leg.evidenceId ?? params.evidenceId,
@@ -185,7 +193,7 @@ export function createJournalEntry(params: CreateJournalEntryParams): JournalEnt
   return {
     id: params.id ?? uid('je'),
     ts,
-    txId,
+    txId: txId ?? '',
     description: params.description,
     entries,
     balanced: true,
@@ -225,42 +233,40 @@ export function validateBalanced(journal: JournalEntry): BalanceCheckResult {
 
 /** Internal: per-currency debit/credit balance check.
  *
- * MON-4: exact integer comparison. Previously used `round(x, 6)` + `1e-6`
- * tolerance — a tolerance that could conceal a one-cent-per-transaction
- * leak. Now: sums are rounded to integer micro-units (1e-6) and compared
- * with exact equality. A one-micro-unit discrepancy fails the check.
+ * MON-3: uses Money arithmetic — sums are BigInt, comparisons are exact.
+ * No float, no tolerance, no rounding. `debit.equals(credit)` is the check.
  */
 function validateBalancedInner(entries: LedgerEntry[]): BalanceCheckResult {
-  const totals = new Map<string, { debit: number; credit: number }>();
+  const totals = new Map<string, { debit: Money; credit: Money }>();
   for (const e of entries) {
     let t = totals.get(e.currency);
     if (!t) {
-      t = { debit: 0, credit: 0 };
+      t = { debit: Money.zero(e.currency as any), credit: Money.zero(e.currency as any) };
       totals.set(e.currency, t);
     }
-    t.debit += e.debit;
-    t.credit += e.credit;
+    t.debit = t.debit.add(e.debit);
+    t.credit = t.credit.add(e.credit);
   }
 
   const currencies: BalanceCheckResult['currencies'] = [];
   const mismatches: BalanceCheckResult['mismatches'] = [];
   for (const [currency, t] of totals) {
-    // Round to integer micro-units for exact comparison.
-    const debitMicro = Math.round(t.debit * 1e6);
-    const creditMicro = Math.round(t.credit * 1e6);
-    const diffMicro = debitMicro - creditMicro;
-    const diff = diffMicro / 1e6;
+    // MON-3: exact comparison via Money.equals(). No tolerance.
+    const balanced = t.debit.equals(t.credit);
+    const debitNum = t.debit.toNumber();
+    const creditNum = t.credit.toNumber();
+    const diff = debitNum - creditNum;
     currencies.push({
       currency,
-      totalDebit: debitMicro / 1e6,
-      totalCredit: creditMicro / 1e6,
+      totalDebit: debitNum,
+      totalCredit: creditNum,
       difference: diff,
     });
-    if (diffMicro !== 0) {
+    if (!balanced) {
       mismatches.push({
         currency,
-        totalDebit: debitMicro / 1e6,
-        totalCredit: creditMicro / 1e6,
+        totalDebit: debitNum,
+        totalCredit: creditNum,
         difference: diff,
       });
     }

@@ -18,6 +18,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { Money } from '@/money/money';
 import {
   ledgerEngine,
   snapshotStore,
@@ -67,8 +68,8 @@ await run('createJournalEntry with balanced debits/credits succeeds', () => {
   });
   assert.equal(entry.balanced, true);
   assert.equal(entry.entries.length, 2);
-  assert.equal(entry.entries[0].debit, 100);
-  assert.equal(entry.entries[1].credit, 100);
+  assert.equal(entry.entries[0].debit.toNumber(), 100);
+  assert.equal(entry.entries[1].credit.toNumber(), 100);
 });
 
 await run('createJournalEntry with unbalanced throws', () => {
@@ -87,8 +88,8 @@ await run('validateBalanced reports imbalance', () => {
   const entry: JournalEntry = {
     id: 'x', ts: 0, txId: 'tx1', description: 'x', balanced: false,
     entries: [
-      { id: 'a', ts: 0, ledgerSeq: 0, txId: 'tx1', accountCode: 'cash:bank:GHS', debit: 100, credit: 0, currency: 'GHS', memo: '' },
-      { id: 'b', ts: 0, ledgerSeq: 0, txId: 'tx1', accountCode: 'user:wallet:w1', debit: 0, credit: 50, currency: 'GHS', memo: '' },
+      { id: 'a', ts: 0, ledgerSeq: 0, txId: 'tx1', accountCode: 'cash:bank:GHS', debit: Money.fromMajor(100, 'GHS'), credit: Money.zero('GHS'), currency: 'GHS', memo: '' },
+      { id: 'b', ts: 0, ledgerSeq: 0, txId: 'tx1', accountCode: 'user:wallet:w1', debit: Money.zero('GHS'), credit: Money.fromMajor(50, 'GHS'), currency: 'GHS', memo: '' },
     ],
   };
   const check = validateBalanced(entry);

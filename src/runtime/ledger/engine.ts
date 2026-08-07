@@ -26,7 +26,6 @@ import type {
   RegulatorExport, EconomicLedgerInputs,
 } from './types';
 import { uid } from '../types';
-import { Money } from '@/money/money';
 
 /**
  * EconomicLedgerEngine — derives the canonical balance sheet from runtime state.

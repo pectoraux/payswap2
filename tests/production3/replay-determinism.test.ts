@@ -138,7 +138,7 @@ await run('rebuild twin-token balances from events twice → identical', () => {
           // For this test we just sum debit-credit per asset.
           const asset = ln.accountCode.split(':')[2];
           out['_aggregate'] = out['_aggregate'] ?? {};
-          out['_aggregate'][asset] = (out['_aggregate'][asset] ?? 0) + (ln.debit - ln.credit);
+          out['_aggregate'][asset] = (out['_aggregate'][asset] ?? 0) + (ln.debit.toNumber() - ln.credit.toNumber());
         }
       }
     }

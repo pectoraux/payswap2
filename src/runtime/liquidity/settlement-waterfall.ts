@@ -93,19 +93,15 @@ export function isLocal(params: {
 // tier by a cent. This helper rounds both sides to integer cents (1e-2) and
 // compares exactly. The routing decision is now deterministic.
 //
-// MON-3: now uses Money internally for the rounding, to ensure consistency
-// with the rest of the money path. The Money class handles the currency-
-// specific exponent (2 for most, 0 for XOF, 6 for USDC).
-
-import { Money } from '@/money/money';
+// MON-3d: exact integer comparison helper.
+//
+// The waterfall's tier selection depends on `available >= amount` comparisons.
+// With floating-point, `0.1 + 0.2 !== 0.3` — a payment could go to the wrong
+// tier by a cent. This helper rounds both sides to integer cents (1e-2) and
+// compares exactly. The routing decision is now deterministic.
 
 function sufficientCents(available: number, needed: number): boolean {
-  // MON-3: use Money for exact rounding. Both values are in major units.
-  // We use USD as the comparison currency (exponent 2) for consistency —
-  // the comparison is about relative magnitude, not currency-specific precision.
-  const availCents = Math.round(available * 100);
-  const needCents = Math.round(needed * 100);
-  return availCents >= needCents;
+  return Math.round(available * 100) >= Math.round(needed * 100);
 }
 
 // ── The waterfall ──

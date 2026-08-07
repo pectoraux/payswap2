@@ -42,6 +42,7 @@ import type { SimulationEvent } from '@/kernel/types';
 import { uid, round } from '@/kernel/support';
 import { LedgerEngine } from './engine';
 import { createJournalEntry, type JournalEntry, type JournalLegInput } from './entry';
+import { Money } from '@/money/money';
 import {
   circulatingAccount,
   escrowedAccount,
@@ -104,8 +105,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Mint ${amount} ${assetCode} to ${p.to ?? 'recipient'}`,
           legs: [
-            { accountCode: circulatingAccount(assetCode), debit: amount, currency, memo: 'mint — increase circulating' },
-            { accountCode: backingAccount(currency), credit: amount, currency, memo: 'mint — increase backing liability' },
+            { accountCode: circulatingAccount(assetCode), debit: Money.fromMajor(amount, currency as any), currency, memo: 'mint — increase circulating' },
+            { accountCode: backingAccount(currency), credit: Money.fromMajor(amount, currency as any), currency, memo: 'mint — increase backing liability' },
           ],
         }),
       );
@@ -127,8 +128,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Burn ${amount} ${assetCode} from ${p.from ?? 'holder'}`,
           legs: [
-            { accountCode: backingAccount(currency), debit: amount, currency, memo: 'burn — release backing liability' },
-            { accountCode: circulatingAccount(assetCode), credit: amount, currency, memo: 'burn — decrease circulating' },
+            { accountCode: backingAccount(currency), debit: Money.fromMajor(amount, currency as any), currency, memo: 'burn — release backing liability' },
+            { accountCode: circulatingAccount(assetCode), credit: Money.fromMajor(amount, currency as any), currency, memo: 'burn — decrease circulating' },
           ],
         }),
       );
@@ -155,8 +156,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Transfer ${amount} ${assetCode}: ${from} → ${to}`,
           legs: [
-            { accountCode: userWalletAccount(to), debit: amount, currency, memo: `receive from ${from}` },
-            { accountCode: userWalletAccount(from), credit: amount, currency, memo: `send to ${to}` },
+            { accountCode: userWalletAccount(to), debit: Money.fromMajor(amount, currency as any), currency, memo: `receive from ${from}` },
+            { accountCode: userWalletAccount(from), credit: Money.fromMajor(amount, currency as any), currency, memo: `send to ${to}` },
           ],
         }),
       );
@@ -178,8 +179,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Escrow ${amount} ${assetCode} (escrowId=${p.escrowId ?? 'n/a'})`,
           legs: [
-            { accountCode: escrowedAccount(assetCode), debit: amount, currency, memo: 'escrow — move to escrowed' },
-            { accountCode: circulatingAccount(assetCode), credit: amount, currency, memo: 'escrow — reduce circulating' },
+            { accountCode: escrowedAccount(assetCode), debit: Money.fromMajor(amount, currency as any), currency, memo: 'escrow — move to escrowed' },
+            { accountCode: circulatingAccount(assetCode), credit: Money.fromMajor(amount, currency as any), currency, memo: 'escrow — reduce circulating' },
           ],
         }),
       );
@@ -204,8 +205,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Release ${amount} ${assetCode} from escrow to ${to || 'circulating'}`,
           legs: [
-            { accountCode: creditAccount, debit: amount, currency, memo: `release to ${to || 'circulating'}` },
-            { accountCode: escrowedAccount(assetCode), credit: amount, currency, memo: 'release — reduce escrowed' },
+            { accountCode: creditAccount, debit: Money.fromMajor(amount, currency as any), currency, memo: `release to ${to || 'circulating'}` },
+            { accountCode: escrowedAccount(assetCode), credit: Money.fromMajor(amount, currency as any), currency, memo: 'release — reduce escrowed' },
           ],
         }),
       );
@@ -227,8 +228,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Wallet credit ${amount} ${currency} → wallet ${walletId}`,
           legs: [
-            { accountCode: walletCreditSourceAccount(p, currency), debit: amount, currency, memo: `credit source: ${p.counterparty ?? 'deposit'}` },
-            { accountCode: userWalletAccount(walletId), credit: amount, currency, memo: `wallet credit: ${p.reference ?? ''}` },
+            { accountCode: walletCreditSourceAccount(p, currency), debit: Money.fromMajor(amount, currency as any), currency, memo: `credit source: ${p.counterparty ?? 'deposit'}` },
+            { accountCode: userWalletAccount(walletId), credit: Money.fromMajor(amount, currency as any), currency, memo: `wallet credit: ${p.reference ?? ''}` },
           ],
         }),
       );
@@ -250,8 +251,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Wallet debit ${amount} ${currency} ← wallet ${walletId}`,
           legs: [
-            { accountCode: userWalletAccount(walletId), debit: amount, currency, memo: `wallet debit: ${p.reference ?? ''}` },
-            { accountCode: walletDebitDestinationAccount(p, currency), credit: amount, currency, memo: `debit destination: ${p.counterparty ?? 'withdrawal'}` },
+            { accountCode: userWalletAccount(walletId), debit: Money.fromMajor(amount, currency as any), currency, memo: `wallet debit: ${p.reference ?? ''}` },
+            { accountCode: walletDebitDestinationAccount(p, currency), credit: Money.fromMajor(amount, currency as any), currency, memo: `debit destination: ${p.counterparty ?? 'withdrawal'}` },
           ],
         }),
       );
@@ -273,8 +274,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Wallet lock ${amount} ${currency} (wallet ${walletId})`,
           legs: [
-            { accountCode: 'settlement:receivable', debit: amount, currency, memo: `lock for settlement: ${p.reference ?? ''}` },
-            { accountCode: userWalletAccount(walletId), credit: amount, currency, memo: 'wallet funds committed to settlement' },
+            { accountCode: 'settlement:receivable', debit: Money.fromMajor(amount, currency as any), currency, memo: `lock for settlement: ${p.reference ?? ''}` },
+            { accountCode: userWalletAccount(walletId), credit: Money.fromMajor(amount, currency as any), currency, memo: 'wallet funds committed to settlement' },
           ],
         }),
       );
@@ -296,8 +297,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Wallet unlock ${amount} ${currency} (wallet ${walletId})`,
           legs: [
-            { accountCode: userWalletAccount(walletId), debit: amount, currency, memo: 'settlement failed/refunded — funds return' },
-            { accountCode: 'settlement:receivable', credit: amount, currency, memo: `unlock: ${p.reference ?? ''}` },
+            { accountCode: userWalletAccount(walletId), debit: Money.fromMajor(amount, currency as any), currency, memo: 'settlement failed/refunded — funds return' },
+            { accountCode: 'settlement:receivable', credit: Money.fromMajor(amount, currency as any), currency, memo: `unlock: ${p.reference ?? ''}` },
           ],
         }),
       );
@@ -323,8 +324,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Payout net ${netAmount} ${destinationCurrency} via ${method} (tx=${p.txHash ?? 'n/a'})`,
           legs: [
-            { accountCode: backingAccount(destinationCurrency), debit: netAmount, currency: destinationCurrency, memo: `payout net — redeem backing` },
-            { accountCode: cashAccount, credit: netAmount, currency: destinationCurrency, memo: `payout via ${method}` },
+            { accountCode: backingAccount(destinationCurrency), debit: Money.fromMajor(netAmount, destinationCurrency as any), currency: destinationCurrency, memo: `payout net — redeem backing` },
+            { accountCode: cashAccount, credit: Money.fromMajor(netAmount, destinationCurrency as any), currency: destinationCurrency, memo: `payout via ${method}` },
           ],
         }),
       );
@@ -338,8 +339,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
             frame,
             description: `Payout fee ${fee} ${destinationCurrency} (${method})`,
             legs: [
-              { accountCode: 'equity:fees', debit: fee, currency: destinationCurrency, memo: 'release accrued fee' },
-              { accountCode: feeRevenueAccount(method), credit: fee, currency: destinationCurrency, memo: `recognize fee revenue (${method})` },
+              { accountCode: 'equity:fees', debit: Money.fromMajor(fee, destinationCurrency as any), currency: destinationCurrency, memo: 'release accrued fee' },
+              { accountCode: feeRevenueAccount(method), credit: Money.fromMajor(fee, destinationCurrency as any), currency: destinationCurrency, memo: `recognize fee revenue (${method})` },
             ],
           }),
         );
@@ -362,8 +363,8 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
           frame,
           description: `Merchant ${merchantId} verified — bond ${bond} ${currency}`,
           legs: [
-            { accountCode: 'lp:collateral', debit: bond, currency, memo: `merchant bond posted: ${merchantId}` },
-            { accountCode: 'equity:treasury', credit: bond, currency, memo: `treasury allocation from merchant bond` },
+            { accountCode: 'lp:collateral', debit: Money.fromMajor(bond, currency as any), currency, memo: `merchant bond posted: ${merchantId}` },
+            { accountCode: 'equity:treasury', credit: Money.fromMajor(bond, currency as any), currency, memo: `treasury allocation from merchant bond` },
           ],
         }),
       );

@@ -26,7 +26,6 @@
 import { nowTs } from '@/kernel/support';
 import { eventEngine } from '@/kernel/event';
 import type { LimitCheckResult } from './types';
-import { Money } from '@/money/money';
 
 /** Per-asset backing state. */
 export interface BackingState {
