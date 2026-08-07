@@ -412,8 +412,22 @@ export function wireNetSettleInputs(inputs: NetSettleInputs): void {
 
 export function startNetSettlementCycle(intervalMs = 5 * 60 * 1000): void {
   if (globalThis.__PAYSWAP_NET_SETTLE_TIMER) return;
-  globalThis.__PAYSWAP_NET_SETTLE_TIMER = setInterval(() => runNetSettlementCycle(), intervalMs);
-  eventEngine.emit('treasury.net_settle_cycle_started', { intervalMs, ts: nowTs() });
+  // SCALE-3: the net settlement cycle uses leader election so only one
+  // instance runs it. Three concurrent settle() calls on one corridor
+  // is a triple settlement — a correctness bug, not a performance one.
+  // The withLeadership import is deferred to avoid circular dependencies.
+  globalThis.__PAYSWAP_NET_SETTLE_TIMER = setInterval(async () => {
+    try {
+      const { withLeadership } = await import('@/lib/leader-election');
+      await withLeadership('net-settlement-cycle', async () => {
+        runNetSettlementCycle();
+      });
+    } catch {
+      // Leader election not available (DB issue) — run without it (single-instance fallback).
+      runNetSettlementCycle();
+    }
+  }, intervalMs);
+  eventEngine.emit('treasury.net_settle_cycle_started', { intervalMs, leaderElected: true, ts: nowTs() });
 }
 
 export function stopNetSettlementCycle(): void {

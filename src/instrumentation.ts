@@ -266,21 +266,26 @@ export async function register() {
       // balances from the reserve monitor. This fires the alarm events
       // that the E1/E2/E3 listeners react to.
       const { reserveDriftMonitor } = await import('@/protocol/treasury-v2/reserve-drift-monitor');
-      const driftTimer = setInterval(() => {
-        try {
-          const reserves = reserveMonitor.allReserves();
-          const balances = new Map<string, number>();
-          for (const r of reserves) balances.set(r.currency, r.balance);
-          // statusAll() fires treasury.reserve_drift_alarm on edge transitions.
-          reserveDriftMonitor.statusAll(balances);
-          // Also scan for low reserves (fires treasury.reserve_low for E2).
-          reserveMonitor.scanForLowReserves();
-        } catch (e) {
-          console.error('[closed-loops] Drift scan failed:', e);
-        }
+      const { withLeadership } = await import('@/lib/leader-election');
+      const driftTimer = setInterval(async () => {
+        // SCALE-3: only the leader instance runs the drift scan.
+        // Without this, 3 instances would fire 3 alarm events per threshold.
+        await withLeadership('drift-scan', async () => {
+          try {
+            const reserves = reserveMonitor.allReserves();
+            const balances = new Map<string, number>();
+            for (const r of reserves) balances.set(r.currency, r.balance);
+            // statusAll() fires treasury.reserve_drift_alarm on edge transitions.
+            reserveDriftMonitor.statusAll(balances);
+            // Also scan for low reserves (fires treasury.reserve_low for E2).
+            reserveMonitor.scanForLowReserves();
+          } catch (e) {
+            console.error('[closed-loops] Drift scan failed:', e);
+          }
+        });
       }, 60_000); // every 60 seconds
       (globalThis as any).__PAYSWAP_DRIFT_TIMER = driftTimer;
-      console.log('[closed-loops] Real-time drift monitor started (60s interval) — E1/E2/E3 alarms now fire without dashboard load');
+      console.log('[closed-loops] Real-time drift monitor started (60s interval, leader-elected) — E1/E2/E3 alarms now fire without dashboard load');
     } catch (e) {
       console.error('[closed-loops] Failed to wire:', e);
     }
