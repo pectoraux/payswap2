@@ -36,6 +36,7 @@ import { lpMandateService } from '../liquidity/lp-mandate-service';
 import { fxExposureService } from '../liquidity/fx-exposure-service';
 import { auctionEngine } from '../../protocol/settlement/auctions';
 import { fxEngine } from '../../kernel/fx';
+import { Money } from '../../money/money';
 import type {
   CreatePaymentCommand,
   CreatePaymentPayload,
@@ -172,14 +173,19 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
     const streamId = `${env}:payment:${paymentId}`;
     const now = payload.timestamp ?? Date.now();
 
-    // Compile financial terms (fee / net) — same formula as the legacy
-    // paymentService so the projected row matches the existing schema.
+    // Compile financial terms (fee / net) using exact Money arithmetic.
+    // MON-3: previously `Math.round(payload.amount * (lpFeeBps / 10000) * 100) / 100`
+    // — IEEE-754 double with rounding at each step. Now: Money.mulBps() uses
+    // integer minor units with HALF_UP rounding. fee + net == gross exactly.
     const lpId = payload.lpId ?? 'lp_simulated';
     const lpFeeBps = payload.lpFeeBps ?? 80;
-    const fee = Math.round(payload.amount * (lpFeeBps / 10000) * 100) / 100;
+    const currency = (payload.destinationCurrency ?? payload.currency) as import('../../money/money').Currency;
+    const grossMoney = Money.fromMajor(payload.amount, currency);
+    const feeMoney = grossMoney.mulBps(lpFeeBps);
+    const fee = feeMoney.toNumber();
     const success = payload.success ?? true;
     const netAmount = success
-      ? Math.round((payload.amount - fee) * 100) / 100
+      ? grossMoney.subtract(feeMoney).toNumber()
       : 0;
     const reference = payload.reference ?? `PAY-${paymentId.slice(-8)}`;
     const corridor = payload.corridor ?? `${payload.currency}-${payload.currency}`;
@@ -964,8 +970,12 @@ export class PayoutCommandHandler implements CommandHandler<CreatePayoutCommand>
 
     const sourceAmount = payload.sourceAmount;
     const feeBps = payload.feeBps ?? 50;
-    const fee = payload.fee ?? Math.round(sourceAmount * (feeBps / 10000) * 100) / 100;
-    const netAmount = payload.netAmount ?? Math.round((sourceAmount - fee) * 100) / 100;
+    // MON-3: exact Money arithmetic for payout fees.
+    const payoutCurrency = (payload.sourceCurrency ?? 'USD') as import('../../money/money').Currency;
+    const payoutGross = Money.fromMajor(sourceAmount, payoutCurrency);
+    const payoutFeeMoney = payoutGross.mulBps(feeBps);
+    const fee = payload.fee ?? payoutFeeMoney.toNumber();
+    const netAmount = payload.netAmount ?? payoutGross.subtract(payoutFeeMoney).toNumber();
     const success = payload.success ?? true;
     const txHash = payload.txHash ?? `sim_tx_${payoutId.slice(-8)}`;
 

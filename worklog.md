@@ -6265,3 +6265,39 @@ Stage Summary:
 - Remaining P1: MON-2 (codecs at every boundary), MON-3 (migrate runtime module by module). These are the invasive parts — the golden routing test (CI-3) protects against behavioral changes.
 - Remaining P0: SEC-5 (rate limiting), SEC-6 (KMS).
 - The money property tests run in CI on every commit — a one-cent leak fails the build.
+
+---
+Task ID: PROD-ROADMAP-P1-MON-3 + SEC-5
+Agent: main (Z.ai Code)
+Task: Continue P1 (migrate runtime to Money) + SEC-5 (rate limiting). MON-3 starts with the money path (handlers.ts fee calculation). SEC-5 adds rate limiting to recovery + all API routes.
+
+Work Log:
+- MON-3b: Migrated `handlers.ts` fee calculation from `Math.round(payload.amount * (lpFeeBps / 10000) * 100) / 100` (IEEE-754 double with per-step rounding) to `Money.fromMajor(amount, currency).mulBps(bps)` (exact integer minor units with HALF_UP rounding). Now `fee + net == gross` exactly. Also migrated the payout handler's fee calculation the same way. The payment.recorded event now carries exact fee/netAmount values derived from integer arithmetic.
+
+- SEC-5: Created `src/lib/rate-limiter.ts` — a sliding-window rate limiter with:
+  • Per-key tracking (IP, identifier, API key)
+  • Configurable window + max requests + optional block duration
+  • `checkRateLimit(name, identifier, max, windowMs, blockMs)` — returns true/false
+  • `rateLimitRemaining()` + `rateLimitResetIn()` for response headers
+  • Pre-configured limits: recovery (5/15min, block 15min), login (10/15min, block 30min), apiKeyCreate (5/hour), apiPerIp (100/min), webhookRetry (5/min)
+  • Periodic cleanup to bound memory
+
+- SEC-5: Wired rate limiting into:
+  • `/api/identity/recovery/initiate` — 5 attempts per 15 min per identifier AND per IP, then block 15 min. Prevents enumeration + abuse of the public recovery endpoint.
+  • `middleware.ts` — all API routes get 100 req/min per IP. Returns 429 with Retry-After header.
+  • Verified: 6th recovery attempt from same IP returns 429.
+
+Verification:
+- 28 tests pass (routing golden 14 + single-rule invariant 3 + money property 11), 17,073 expect() calls.
+- Test scenarios: 21/21 pass (100%).
+- Payment fee calculation: `fee + net == gross` exactly True. Ledger balanced: True.
+- Rate limiting: 6th recovery attempt → HTTP 429.
+- Homepage: renders.
+- lint: 0 errors, 349 warnings.
+
+Stage Summary:
+- P1 MON-3b DONE: handlers.ts fee calculation migrated to Money.mulBps(). The main money path is now exact. Remaining MON-3: migrate ledger engine, treasury-v2, settlement-waterfall, services, API surface (module by module).
+- P0 SEC-5 DONE: rate limiting per IP + per identifier. Recovery endpoint: 5/15min. All API: 100/min. 429 with Retry-After.
+- Remaining P0: SEC-6 (KMS — secrets out of env).
+- Remaining P1: MON-2 (codecs at boundaries), MON-3a (ledger), MON-3c-e (treasury, waterfall, services).
+- Remaining P3: SCALE-1..4 (horizontal scale — after money types settle).

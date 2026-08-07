@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
 import type { NextRequest } from 'next/server';
+import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limiter';
 
 /**
  * SEC-2: Deny-by-default on /api/*.
@@ -66,6 +67,15 @@ export async function middleware(req: NextRequest) {
 
   // ── API routes: deny-by-default ──
   if (path.startsWith('/api/')) {
+    // SEC-5: rate limit all API requests per IP (100/min).
+    const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+    if (!checkRateLimit('api:ip', clientIp, RATE_LIMITS.apiPerIp.maxRequests, RATE_LIMITS.apiPerIp.windowMs)) {
+      return NextResponse.json(
+        { error: 'Too many requests. Please slow down.' },
+        { status: 429, headers: { 'Retry-After': '60' } },
+      );
+    }
+
     if (isPublicRoute(path)) {
       // Public route — let it through. Individual routes handle their own
       // auth (signature verification for webhooks, etc.).
