@@ -249,7 +249,7 @@ export class CircuitBreaker {
 // ============================================================================
 
 /** Construction options for the pre-registered breakers. */
-const DEFAULT_BREAKER_POLICY: Omit<CircuitBreakerOptions, 'name'> = {
+export const DEFAULT_BREAKER_POLICY: Omit<CircuitBreakerOptions, 'name'> = {
   failureThreshold: 5,
   failureWindowMs: 60_000,
   cooldownMs: 30_000,

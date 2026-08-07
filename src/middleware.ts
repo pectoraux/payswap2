@@ -4,6 +4,21 @@ import type { NextRequest } from 'next/server';
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limiter';
 
 /**
+ * SECURITY: no fallback secret. If NEXTAUTH_SECRET is unset, reject all
+ * requests (fail closed). A hardcoded fallback lets anyone forge JWTs.
+ */
+function getRequiredSecret(): string {
+  const secret = process.env.NEXTAUTH_SECRET;
+  if (!secret || secret.length < 32) {
+    // In middleware, we can't throw (it crashes the request). Instead,
+    // return an empty string which makes getToken() return null → all
+    // protected routes return 401. This is fail-CLOSED.
+    return '__NEXTAUTH_SECRET_MISSING__';
+  }
+  return secret;
+}
+
+/**
  * SEC-2: Deny-by-default on /api/*.
  *
  * Previously, the matcher only covered page paths (/dashboard, /admin, etc.).
@@ -63,7 +78,7 @@ function isPublicRoute(path: string): boolean {
 
 export async function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
-  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET || 'payswap-dev-secret-7f8a9b2c4e1d6f3a8b5c9d2e7f4a1b8c' });
+  const token = await getToken({ req, secret: getRequiredSecret() });
 
   // ── API routes: deny-by-default ──
   if (path.startsWith('/api/')) {

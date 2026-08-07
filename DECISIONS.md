@@ -190,3 +190,31 @@ PaySwap currently supports bank transfers, mobile money, and crypto — no
 cards. If cards are added in the future, the PSP's hosted checkout or
 embedded iframe SDK MUST be used. The PaySwap backend must NEVER receive
 a PAN — only a token.
+
+---
+
+## SECURITY RULE: No hardcoded fallback secrets
+
+**Rule:** Never use `process.env.SECRET || 'literal'` for any authentication
+or encryption secret. If the env var is missing, the code MUST throw (fail
+closed) or return a sentinel that causes all auth to fail.
+
+**Why:** A hardcoded fallback secret in a public repo lets anyone forge JWTs
+with `SUPER_ADMIN` roles. The `|| 'literal'` pattern makes a misconfiguration
+fail OPEN — the system continues to work but is completely compromised.
+This is strictly worse than the system failing to start.
+
+**Pattern:**
+```typescript
+// BAD — fail open, anyone can forge JWTs
+const secret = process.env.NEXTAUTH_SECRET || 'payswap-dev-secret-7f8a9b2c4e1d6f3a8b5c9d2e7f4a1b8c';
+
+// GOOD — fail closed, system refuses to start
+const secret = process.env.NEXTAUTH_SECRET;
+if (!secret || secret.length < 32) {
+  throw new Error('NEXTAUTH_SECRET is missing or too short.');
+}
+```
+
+**Audit:** `grep -rn "|| 'fallback'\||| 'payswap-dev\||| 'payswap" src/` must
+return zero results. This was verified after the fix.

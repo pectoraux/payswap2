@@ -70,7 +70,28 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  // Use a stable secret. In production on Vercel, set NEXTAUTH_SECRET in the
-  // Vercel dashboard. The fallback is only for local dev.
-  secret: process.env.NEXTAUTH_SECRET || 'payswap-dev-secret-7f8a9b2c4e1d6f3a8b5c9d2e7f4a1b8c',
+  // SECURITY: no fallback secret. If NEXTAUTH_SECRET is unset, throw at boot.
+  // A hardcoded fallback secret in a public repo lets anyone forge JWTs with
+  // SUPER_ADMIN roles — the entire deny-by-default middleware becomes decorative.
+  secret: requireNextAuthSecret(),
 };
+
+/**
+ * SECURITY: throw on missing NEXTAUTH_SECRET. Never fall back to a literal.
+ * The `|| 'literal'` pattern makes a misconfiguration fail OPEN — anyone
+ * can forge a JWT with the known secret. This function makes it fail CLOSED.
+ *
+ * In development, set NEXTAUTH_SECRET in .env (it's gitignored).
+ * In production, set it in the Vercel/dashboard environment variables.
+ */
+function requireNextAuthSecret(): string {
+  const secret = process.env.NEXTAUTH_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error(
+      'NEXTAUTH_SECRET is missing or too short (min 32 chars). ' +
+      'Set it in .env for development or in the Vercel dashboard for production. ' +
+      'Never commit a fallback secret — it lets anyone forge JWTs.'
+    );
+  }
+  return secret;
+}

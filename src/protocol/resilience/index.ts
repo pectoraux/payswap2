@@ -22,6 +22,7 @@ export {
   CircuitBreakerRegistry,
   CircuitOpenError,
   DEFAULT_BREAKER_NAMES,
+  DEFAULT_BREAKER_POLICY,
   buildDefaultCircuitBreakerRegistry,
   circuitBreakerRegistry,
 } from './circuit-breaker';

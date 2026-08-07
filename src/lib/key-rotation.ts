@@ -36,17 +36,23 @@ class KeyRotationManager {
 
   /**
    * Get the active JWT secret (for signing new tokens).
+   * SECURITY: no fallback. Throws if NEXTAUTH_SECRET is unset.
    */
   getActiveJwtSecret(): string {
     const active = Array.from(this.jwtKeys.values()).find(k => k.status === 'active');
     if (active) return active.key;
-    // Fall back to env var
-    return process.env.NEXTAUTH_SECRET || 'fallback';
+    // Fall back to env var — but never to a hardcoded literal.
+    const secret = process.env.NEXTAUTH_SECRET;
+    if (!secret || secret.length < 32) {
+      throw new Error('NEXTAUTH_SECRET is missing or too short. Never use a fallback secret.');
+    }
+    return secret;
   }
 
   /**
    * Get all valid JWT secrets (for verifying tokens).
    * During rotation, both old and new secrets are valid.
+   * SECURITY: no fallback. Throws if NEXTAUTH_SECRET is unset.
    */
   getValidJwtSecrets(): string[] {
     const now = Date.now();
@@ -56,8 +62,12 @@ class KeyRotationManager {
       return true;
     });
     if (valid.length === 0) {
-      // Fall back to env var
-      return [process.env.NEXTAUTH_SECRET || 'fallback'];
+      // Fall back to env var — but never to a hardcoded literal.
+      const secret = process.env.NEXTAUTH_SECRET;
+      if (!secret || secret.length < 32) {
+        throw new Error('NEXTAUTH_SECRET is missing or too short. Never use a fallback secret.');
+      }
+      return [secret];
     }
     return valid.map(k => k.key);
   }
