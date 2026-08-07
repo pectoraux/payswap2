@@ -197,10 +197,27 @@ export function selectSettlementSource(input: WaterfallInput): WaterfallResult {
   };
 }
 
-// ── Twin token naming convention ──
+// ── Twin token naming convention (currency-based, not country-based) ──
 
+/**
+ * Display symbol for a twin token: tGHS, tNGN, tKES, tXOF.
+ * Used in UI, dashboards, and human-readable contexts.
+ */
 export function twinTokenSymbol(currency: string): string {
   return 't' + currency.toUpperCase();
 }
 
-// Examples: tGHS for GHS, tNGN for NGN, tKES for KES, tXOF for XOF
+/**
+ * Stellar on-chain asset code for a twin token: TWINGHS, TWINNGN, TWINKES.
+ * This is the canonical asset code used on the Stellar network.
+ * Must match src/protocol/chains/stellar/assets.ts:twinTokenCode()
+ */
+export function twinTokenCode(currency: string): string {
+  return 'TWIN' + currency.toUpperCase();
+}
+
+// Examples:
+//   currency = 'GHS' → symbol = 'tGHS', stellarCode = 'TWINGHS'
+//   currency = 'NGN' → symbol = 'tNGN', stellarCode = 'TWINNGN'
+//   currency = 'KES' → symbol = 'tKES', stellarCode = 'TWINKES'
+//   currency = 'XOF' → symbol = 'tXOF', stellarCode = 'TWINXOF'

@@ -80,29 +80,61 @@ export async function POST(req: NextRequest) {
       ? body.reason.trim().slice(0, 500)
       : null;
 
+  // W5: Actually invoke the corridor balancer instead of just logging.
+  // The balancer checks if the donor corridor has excess and the recipient
+  // has a shortfall, then moves liquidity between them.
+  let rebalanceResult: { rebalanced: boolean; amountMoved?: number; reason?: string } = {
+    rebalanced: false,
+    reason: 'balancer_not_invoked',
+  };
+
+  try {
+    // Dynamic import to avoid loading treasury-v2 on every request
+    const { corridorBalancer } = await import('@/protocol/treasury-v2/balancing');
+    const result = corridorBalancer.rebalance(
+      { from: fromCorridor, to: toCorridor },
+      amount,
+    );
+    rebalanceResult = {
+      rebalanced: result.rebalanced,
+      amountMoved: result.amountMoved,
+      reason: result.reason,
+    };
+  } catch (err) {
+    rebalanceResult = {
+      rebalanced: false,
+      reason: `balancer_error: ${err instanceof Error ? err.message : 'unknown'}`,
+    };
+  }
+
   const log = await db.auditLog.create({
     data: {
       userId: userId ?? null,
       action: 'TREASURY.REBALANCE',
       resourceType: 'corridor',
       resourceId: `${fromCorridor}→${toCorridor}`,
-      result: 'SUCCESS',
+      result: rebalanceResult.rebalanced ? 'SUCCESS' : 'SKIPPED',
       details: JSON.stringify({
         fromCorridor,
         toCorridor,
         amount,
         reason,
         actorEmail: actorEmail ?? null,
+        rebalanced: rebalanceResult.rebalanced,
+        amountMoved: rebalanceResult.amountMoved ?? 0,
+        skipReason: rebalanceResult.reason,
       }),
     },
-  });
+  }).catch(() => null); // best-effort audit log
 
   return NextResponse.json({
-    rebalanced: true,
+    rebalanced: rebalanceResult.rebalanced,
     fromCorridor,
     toCorridor,
     amount,
-    auditLogId: log.id,
-    createdAt: log.createdAt,
+    amountMoved: rebalanceResult.amountMoved ?? 0,
+    reason: rebalanceResult.reason,
+    auditLogId: log?.id ?? null,
+    createdAt: log?.createdAt ?? new Date().toISOString(),
   });
 }

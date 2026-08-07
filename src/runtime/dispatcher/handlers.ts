@@ -27,7 +27,7 @@ import type { UncommittedEvent } from '../events';
 import type { RuntimeSnapshot } from '../invariants';
 import type { Environment } from '../types';
 import { uid } from '../types';
-import { selectSettlementSource, isLocal, twinTokenSymbol, type WaterfallInput, type WaterfallResult, type SettlementTier, TIER_FEES, TIER_NAMES } from '../liquidity/settlement-waterfall';
+import { selectSettlementSource, isLocal, twinTokenSymbol, twinTokenCode, type WaterfallInput, type WaterfallResult, type SettlementTier, TIER_FEES, TIER_NAMES } from '../liquidity/settlement-waterfall';
 import { backingVerifier } from '../../protocol/treasury-v2/backing';
 import { netSettlementEngine } from '../../protocol/settlement/net-settlement';
 import type {
@@ -299,7 +299,8 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           toCurrency: toCcy,
           senderHasFiatReserve: senderState.hasFiatReserve,
           receiverHasFiatReserve: receiverState.hasFiatReserve,
-          twinTokenSymbol: twinSymbol,
+          twinTokenSymbol: twinSymbol,         // display: tGHS
+          twinTokenCode: twinTokenCode(toCcy), // Stellar: TWINGHS
           skipped: waterfall.skipped,
           explanation: waterfall.explanation,
           compiledBy: 'SettlementWaterfall',
@@ -315,20 +316,21 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           streamId: treasuryStreamId, streamType: 'treasury', kind: 'domain',
           payload: { accountId: `reserve:${fromCcy}`, amount: payload.amount, currency: fromCcy, reason: `Tier 1: PaySwap FIAT reserve for ${paymentId}`, counterparty: payload.merchantId, creditedAt: now } as unknown as Record<string, unknown>,
         });
-        // W1: Backing verifier check before mint
-        const mintCheck = backingVerifier.onMint(twinSymbol, payload.amount);
+        // W1: Backing verifier check before mint (uses Stellar asset code)
+        const stellarCode = twinTokenCode(fromCcy);
+        const mintCheck = backingVerifier.onMint(stellarCode, payload.amount);
         if (!mintCheck.allowed) {
           events.push({
             type: 'treasury.backing_blocked',
             streamId: `${env}:treasury:${paymentId}`, streamType: 'treasury', kind: 'domain',
-            payload: { paymentId, assetCode: twinSymbol, amount: payload.amount, reason: mintCheck.reason, blockedAt: now } as unknown as Record<string, unknown>,
+            payload: { paymentId, assetCode: stellarCode, displaySymbol: twinSymbol, amount: payload.amount, reason: mintCheck.reason, blockedAt: now } as unknown as Record<string, unknown>,
           });
         } else {
           // Mint twin token (FIAT deposit → twin token mint, core invariant)
           events.push({
             type: 'twin.minted',
             streamId: `${env}:twin:${paymentId}`, streamType: 'twin_token', kind: 'domain',
-            payload: { accountId: `custodial:${payload.customerId ?? payload.merchantId}`, tokenType: 'claim', currency: fromCcy, amount: payload.amount, backed: true, mintedAtFrame: now, memo: `Tier 1: Mint ${twinSymbol} for ${paymentId}` } as unknown as Record<string, unknown>,
+            payload: { accountId: `custodial:${payload.customerId ?? payload.merchantId}`, tokenType: 'claim', currency: fromCcy, amount: payload.amount, backed: true, mintedAtFrame: now, memo: `Tier 1: Mint ${twinSymbol} for ${paymentId}`, assetCode: stellarCode, displaySymbol: twinSymbol } as unknown as Record<string, unknown>,
           });
           events.push({
             type: 'twin.backed',
@@ -355,20 +357,21 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           payload: { accountId: destHasFiat ? `twin:${twinSymbol}` : 'stablecoin:USDC', amount: payload.amount, currency: destHasFiat ? toCcy : 'USDC', reason: `Tier 3: PaySwap ${cryptoAsset} for ${paymentId}`, counterparty: payload.merchantId, creditedAt: now } as unknown as Record<string, unknown>,
         });
         if (destHasFiat) {
-          // W1: Backing verifier check before mint
-          const tier3MintCheck = backingVerifier.onMint(twinSymbol, netAmount);
+          // W1: Backing verifier check before mint (uses Stellar asset code)
+          const tier3StellarCode = twinTokenCode(toCcy);
+          const tier3MintCheck = backingVerifier.onMint(tier3StellarCode, netAmount);
           if (!tier3MintCheck.allowed) {
             events.push({
               type: 'treasury.backing_blocked',
               streamId: `${env}:treasury:${paymentId}`, streamType: 'treasury', kind: 'domain',
-              payload: { paymentId, assetCode: twinSymbol, amount: netAmount, reason: tier3MintCheck.reason, blockedAt: now } as unknown as Record<string, unknown>,
+              payload: { paymentId, assetCode: tier3StellarCode, displaySymbol: twinSymbol, amount: netAmount, reason: tier3MintCheck.reason, blockedAt: now } as unknown as Record<string, unknown>,
             });
           } else {
             // Destination has FIAT reserve → mint twin token (FIAT deposit → mint)
             events.push({
               type: 'twin.minted',
               streamId: `${env}:twin:${paymentId}`, streamType: 'twin_token', kind: 'domain',
-              payload: { accountId: `custodial:${payload.customerId ?? payload.merchantId}`, tokenType: 'claim', currency: toCcy, amount: netAmount, backed: true, mintedAtFrame: now, memo: `Tier 3: Mint ${twinSymbol} for ${paymentId}` } as unknown as Record<string, unknown>,
+              payload: { accountId: `custodial:${payload.customerId ?? payload.merchantId}`, tokenType: 'claim', currency: toCcy, amount: netAmount, backed: true, mintedAtFrame: now, memo: `Tier 3: Mint ${twinSymbol} for ${paymentId}`, assetCode: tier3StellarCode, displaySymbol: twinSymbol } as unknown as Record<string, unknown>,
             });
             events.push({
               type: 'twin.backed',
