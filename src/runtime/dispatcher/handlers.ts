@@ -29,6 +29,7 @@ import type { Environment } from '../types';
 import { uid } from '../types';
 import { selectSettlementSource, isLocal, twinTokenSymbol, twinTokenCode, resolvePayment, type WaterfallInput, type WaterfallResult, type SettlementTier, TIER_FEES, TIER_NAMES } from '../liquidity/settlement-waterfall';
 import { backingVerifier } from '../../protocol/treasury-v2/backing';
+import { reserveDriftMonitor } from '../../protocol/treasury-v2/reserve-drift-monitor';
 import { netSettlementEngine } from '../../protocol/settlement/net-settlement';
 import { lpMandateService } from '../liquidity/lp-mandate-service';
 import { fxExposureService } from '../liquidity/fx-exposure-service';
@@ -336,34 +337,24 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
 
       // ── Tier-specific events (driven by the waterfall) ──
       if (waterfall.tier === 1) {
-        // Tier 1: PaySwap FIAT reserve — credit reserve + mint twin token
+        // I2 DECISION: LOCAL_RAIL (tier 1) does NOT mint twin tokens.
+        // Twin token supply tracks reserve *top-ups* (treasury operations),
+        // not payment flows. A local GHS→GHS payment is a symmetric FIAT
+        // movement (+X in, −X out) → net reserve movement 0 → net twin
+        // movement 0. Minting tGHS here would be wasteful and would
+        // pollute the backing invariant. See DECISIONS.md (I2).
+        //
+        // What LOCAL_RAIL DOES do: credit the FIAT reserve (sender's deposit)
+        // and rely on a separate merchant-disbursement step (or wallet
+        // transfer) to balance the reserve. Twin tokens are minted only on
+        // the cross-border tier-3 path (real sender-side FIAT deposit).
         events.push({
           type: 'treasury.account.credited',
           streamId: treasuryStreamId, streamType: 'treasury', kind: 'domain',
-          payload: { accountId: `reserve:${fromCcy}`, amount: payload.amount, currency: fromCcy, reason: `Tier 1: PaySwap FIAT reserve for ${paymentId}`, counterparty: payload.merchantId, creditedAt: now } as unknown as Record<string, unknown>,
+          payload: { accountId: `reserve:${fromCcy}`, amount: payload.amount, currency: fromCcy, reason: `Tier 1: PaySwap FIAT reserve for ${paymentId} (LOCAL_RAIL — no twin mint)`, counterparty: payload.merchantId, creditedAt: now, twinMintSkipped: true } as unknown as Record<string, unknown>,
         });
-        // W1: Backing verifier check before mint (uses Stellar asset code)
-        const stellarCode = twinTokenCode(fromCcy);
-        const mintCheck = backingVerifier.onMint(stellarCode, payload.amount);
-        if (!mintCheck.allowed) {
-          events.push({
-            type: 'treasury.backing_blocked',
-            streamId: `${env}:treasury:${paymentId}`, streamType: 'treasury', kind: 'domain',
-            payload: { paymentId, assetCode: stellarCode, displaySymbol: twinSymbol, amount: payload.amount, reason: mintCheck.reason, blockedAt: now } as unknown as Record<string, unknown>,
-          });
-        } else {
-          // Mint twin token (FIAT deposit → twin token mint, core invariant)
-          events.push({
-            type: 'twin.minted',
-            streamId: `${env}:twin:${paymentId}`, streamType: 'twin_token', kind: 'domain',
-            payload: { accountId: `custodial:${payload.customerId ?? payload.merchantId}`, tokenType: 'claim', currency: fromCcy, amount: payload.amount, backed: true, mintedAtFrame: now, memo: `Tier 1: Mint ${twinSymbol} for ${paymentId}`, assetCode: stellarCode, displaySymbol: twinSymbol } as unknown as Record<string, unknown>,
-          });
-          events.push({
-            type: 'twin.backed',
-            streamId: `${env}:twin:${paymentId}`, streamType: 'twin_token', kind: 'domain',
-            payload: { settlementAccountId: `reserve:${fromCcy}`, currency: fromCcy, amount: payload.amount, backedAtFrame: now } as unknown as Record<string, unknown>,
-          });
-        }
+        // I1: record the credit into the drift monitor (per-currency net flow).
+        reserveDriftMonitor.recordCredit(fromCcy, payload.amount, 'tier1:local_rail');
 
       } else if (waterfall.tier === 2) {
         // S2: Tier 2 — LP FIAT bandwidth via mandate service
@@ -389,6 +380,9 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
             streamId: `${env}:liquidity:${paymentId}`, streamType: 'liquidity', kind: 'domain',
             payload: { paymentId, tier: 2, country: toCountryName, currency: toCcy, amount: payload.amount, debitedAt: now } as unknown as Record<string, unknown>,
           });
+          // I1: LP FIAT debit shows up as a debit on the destination reserve's
+          // drift (the LP is providing FIAT capacity in the destination country).
+          reserveDriftMonitor.recordDebit(toCcy, payload.amount, 'tier2:lp_fiat');
         }
 
       } else if (waterfall.tier === 3) {
@@ -400,6 +394,9 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           streamId: treasuryStreamId, streamType: 'treasury', kind: 'domain',
           payload: { accountId: destHasFiat ? `twin:${twinSymbol}` : 'stablecoin:USDC', amount: payload.amount, currency: destHasFiat ? toCcy : 'USDC', reason: `Tier 3: PaySwap ${cryptoAsset} for ${paymentId}`, counterparty: payload.merchantId, creditedAt: now } as unknown as Record<string, unknown>,
         });
+        // I1: Tier 3 is a cross-border flow — sender's FIAT reserve is debited
+        // (the sender's FIAT was used to fund the crypto-side settlement).
+        reserveDriftMonitor.recordDebit(fromCcy, payload.amount, 'tier3:payswap_crypto');
         if (destHasFiat) {
           // W1: Backing verifier check before mint (uses Stellar asset code)
           const tier3StellarCode = twinTokenCode(toCcy);
@@ -422,6 +419,8 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
               streamId: `${env}:twin:${paymentId}`, streamType: 'twin_token', kind: 'domain',
               payload: { settlementAccountId: `reserve:${toCcy}`, currency: toCcy, amount: payload.amount, backedAtFrame: now } as unknown as Record<string, unknown>,
             });
+            // I1: twin mint at destination implies destination reserve credited.
+            reserveDriftMonitor.recordCredit(toCcy, payload.amount, 'tier3:twin_mint');
           }
         }
         // W2: Record corridor obligation for netting

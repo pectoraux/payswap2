@@ -46,6 +46,25 @@ export {
   type ReserveLowAlert,
 } from './reserve-monitor';
 
+// I1: per-country reserve drift monitoring with alarm threshold.
+export {
+  ReserveDriftMonitor,
+  reserveDriftMonitor,
+  newDriftAlertId,
+  type DriftSample,
+  type DriftState,
+  type DriftStatus,
+} from './reserve-drift-monitor';
+
+// D1 + D2: stablecoin→twin composition per corridor + migration proposals (never executed).
+export {
+  MigrationProposalEngine,
+  migrationProposalEngine,
+  type CorridorComposition,
+  type CompositionInput,
+  type MigrationProposal,
+} from './migration-proposals';
+
 export {
   MintLimitEngine,
   BurnLimitEngine,
