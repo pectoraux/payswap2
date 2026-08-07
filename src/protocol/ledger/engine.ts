@@ -217,6 +217,11 @@ export class LedgerEngine {
     return [...set].sort();
   }
 
+  /** Alias for activeAccounts() (test compatibility). */
+  getAccountCodes(): string[] {
+    return this.activeAccounts();
+  }
+
   /** Total number of journal entries posted. */
   count(): number {
     return this.journals.length;

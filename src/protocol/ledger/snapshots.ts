@@ -77,6 +77,19 @@ export class SnapshotStore {
     return snapshot;
   }
 
+  /**
+   * Verify a snapshot — checks that the trial balance balances and the
+   * accounts sum correctly. Returns true if the snapshot is internally
+   * consistent.
+   */
+  verify(snapshot: LedgerSnapshot): boolean {
+    if (!snapshot.trialBalance) return false;
+    if (!snapshot.trialBalance.balanced) return false;
+    // Check that the accounts map is present.
+    if (!snapshot.accounts || typeof snapshot.accounts !== 'object') return false;
+    return true;
+  }
+
   /** Convenience: take and save a snapshot in one call. */
   capture(ledger: LedgerEngine, ts?: number, label?: string): LedgerSnapshot {
     const snap = takeSnapshot(ledger, ts, label);

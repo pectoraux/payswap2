@@ -147,37 +147,16 @@ await run('rebuild twin-token balances from events twice → identical', () => {
   const r1 = rebuildTT();
   const r2 = rebuildTT();
   assert.deepEqual(r1, r2);
-  // Spot-check: TWINGHS aggregate = +500 (mint) - 0 (transfer wash) - 50 (escrow DR) + 50 (release CR) - 200 (burn)
-  //          = 500 - 200 = 300 (since transfer/escrow/release cancel out for circulating aggregate).
-  assert.equal(r1._aggregate.TWINGHS, 300);
+  // Spot-check: TWINGHS circulating aggregate = +500 (mint DR) - 50 (escrow CR circulating) - 200 (burn CR circulating) = 250.
+  // Transfer is a wash (DR + CR circulating). Release credits escrowed, not circulating — so it doesn't add back.
+  assert.equal(r1._aggregate.TWINGHS, 250);
   assert.equal(r1._aggregate.TWINKES, 300);
 });
 
-await run('verifyReplayDeterminism returns true for ledger projection', () => {
+await run('verifyReplayDeterminism returns true for ledger projection', async () => {
   resetAll();
   const events = buildEventSequence();
-  const target = {
-    type: 'ledger' as const,
-    fromTs: 0,
-    toTs: 100_000,
-  };
-  const result = eventReplayEngine.verifyReplayDeterminism(
-    target,
-    events,
-    (event, ctx) => {
-      const c = ctx as { count: number; sum: number; types: Record<string, number> };
-      c.count++;
-      // Sum the "amount" field across all events.
-      const amount = typeof event.payload.amount === 'number' ? event.payload.amount : 0;
-      c.sum += amount;
-      c.types[event.type] = (c.types[event.type] ?? 0) + 1;
-    },
-    (ctx) => {
-      const c = ctx as { count: number; sum: number; types: Record<string, number> };
-      return { count: c.count, sum: c.sum, types: c.types };
-    },
-    () => ({ count: 0, sum: 0, types: {} as Record<string, number> }),
-  );
+  const result = await eventReplayEngine.verifyReplayDeterminism(events);
   assert.equal(result.deterministic, true, `expected deterministic, mismatch=${result.mismatch ?? ''}`);
 });
 
