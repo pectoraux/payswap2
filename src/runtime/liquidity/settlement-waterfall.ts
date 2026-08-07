@@ -235,8 +235,154 @@ export function twinTokenCode(currency: string): string {
   return 'TWIN' + currency.toUpperCase();
 }
 
-// Examples:
-//   currency = 'GHS' → symbol = 'tGHS', stellarCode = 'TWINGHS'
-//   currency = 'NGN' → symbol = 'tNGN', stellarCode = 'TWINNGN'
-//   currency = 'KES' → symbol = 'tKES', stellarCode = 'TWINKES'
-//   currency = 'XOF' → symbol = 'tXOF', stellarCode = 'TWINXOF'
+// ── S3: Per-leg waterfall resolution ──────────────────────────────────
+
+export interface LegResolution {
+  /** Which tier served this leg (1-5). */
+  tier: SettlementTier;
+  /** What source provided the liquidity. */
+  source: string;
+  /** Whether this leg was served or needs fallback. */
+  served: boolean;
+  /** Tiers skipped and why. */
+  skipped: SkipReason[];
+}
+
+/**
+ * Resolve a single leg of a payment through the waterfall.
+ * Each leg asks: "whose liquidity pays for this side?"
+ *
+ * - RESERVE leg: try tier 1 (PaySwap FIAT), then tier 2 (LP FIAT)
+ * - MARKET leg: try tier 3 (PaySwap crypto), then tier 4 (LP crypto)
+ *
+ * The strategy name is derived from the pair of leg results:
+ *   (RESERVE, RESERVE) → RESERVE_TO_RESERVE
+ *   (RESERVE, MARKET)  → RESERVE_TO_MARKET
+ *   (MARKET, RESERVE)  → MARKET_TO_RESERVE
+ *   (MARKET, MARKET)   → MARKET_TO_MARKET
+ *   (RESERVE, same)    → LOCAL_RAIL
+ */
+export function resolveLeg(params: {
+  country: string;
+  currency: string;
+  amount: number;
+  hasFiatReserve: boolean;
+  fiatReserveAmount: number;
+  lpFiatAvailable: number;
+  payswapCryptoAvailable: number;
+  lpCryptoAvailable: number;
+}): LegResolution {
+  const skipped: SkipReason[] = [];
+
+  // Try FIAT tiers first (1, 2)
+  if (params.hasFiatReserve && params.fiatReserveAmount >= params.amount) {
+    return { tier: 1, source: 'payswap_fiat', served: true, skipped };
+  }
+  if (params.hasFiatReserve) {
+    skipped.push({ tier: 1, reason: `Insufficient FIAT: need ${params.amount}, have ${params.fiatReserveAmount}` });
+  } else {
+    skipped.push({ tier: 1, reason: `No FIAT reserve in ${params.country}` });
+  }
+
+  if (params.lpFiatAvailable >= params.amount) {
+    return { tier: 2, source: 'lp_fiat', served: true, skipped };
+  }
+  skipped.push({ tier: 2, reason: `Insufficient LP FIAT: need ${params.amount}, have ${params.lpFiatAvailable}` });
+
+  // Try crypto tiers (3, 4)
+  if (params.payswapCryptoAvailable >= params.amount) {
+    return { tier: 3, source: 'payswap_crypto', served: true, skipped };
+  }
+  skipped.push({ tier: 3, reason: `Insufficient crypto: need ${params.amount}, have ${params.payswapCryptoAvailable}` });
+
+  if (params.lpCryptoAvailable >= params.amount) {
+    return { tier: 4, source: 'lp_crypto', served: true, skipped };
+  }
+  skipped.push({ tier: 4, reason: `Insufficient LP crypto: need ${params.amount}, have ${params.lpCryptoAvailable}` });
+
+  // Tier 5: marketplace auction (last resort)
+  return { tier: 5, source: 'marketplace', served: false, skipped };
+}
+
+/**
+ * Derive the strategy name from a pair of leg resolutions.
+ *
+ * Tiers 1-2 = RESERVE, tiers 3-5 = MARKET.
+ * The strategy name is the pair: <sendLeg>_TO_<receiveLeg>.
+ */
+export function deriveStrategy(
+  sendLeg: LegResolution,
+  receiveLeg: LegResolution,
+  isLocalPayment: boolean,
+): string {
+  if (isLocalPayment) return 'LOCAL_RAIL';
+
+  const sendIsReserve = sendLeg.tier <= 2;
+  const receiveIsReserve = receiveLeg.tier <= 2;
+
+  if (sendIsReserve && receiveIsReserve) return 'RESERVE_TO_RESERVE';
+  if (sendIsReserve && !receiveIsReserve) return 'RESERVE_TO_MARKET';
+  if (!sendIsReserve && receiveIsReserve) return 'MARKET_TO_RESERVE';
+  return 'MARKET_TO_MARKET';
+}
+
+/**
+ * Full per-leg resolution: resolve both legs, derive strategy,
+ * and return a combined result with the full skip trail.
+ */
+export function resolvePayment(params: {
+  originCountry: string;
+  destinationCountry: string;
+  sourceCurrency: string;
+  destinationCurrency: string;
+  amount: number;
+  senderHasFiatReserve: boolean;
+  senderFiatReserveAmount: number;
+  receiverHasFiatReserve: boolean;
+  receiverFiatReserveAmount: number;
+  senderLpFiatAvailable: number;
+  receiverLpFiatAvailable: number;
+  payswapStablecoinAvailable: number;
+  payswapTwinTokenAvailable: number;
+  lpCryptoAvailable: number;
+}): {
+  strategy: string;
+  sendLeg: LegResolution;
+  receiveLeg: LegResolution;
+  isLocal: boolean;
+  allSkipped: SkipReason[];
+} {
+  const local = isLocal({
+    originCountry: params.originCountry,
+    destinationCountry: params.destinationCountry,
+    sourceCurrency: params.sourceCurrency,
+    destinationCurrency: params.destinationCurrency,
+  });
+
+  const sendLeg = resolveLeg({
+    country: params.originCountry,
+    currency: params.sourceCurrency,
+    amount: params.amount,
+    hasFiatReserve: params.senderHasFiatReserve,
+    fiatReserveAmount: params.senderFiatReserveAmount,
+    lpFiatAvailable: params.senderLpFiatAvailable,
+    payswapCryptoAvailable: params.payswapStablecoinAvailable,
+    lpCryptoAvailable: params.lpCryptoAvailable,
+  });
+
+  const receiveLeg = resolveLeg({
+    country: params.destinationCountry,
+    currency: params.destinationCurrency,
+    amount: params.amount,
+    hasFiatReserve: params.receiverHasFiatReserve,
+    fiatReserveAmount: params.receiverFiatReserveAmount,
+    lpFiatAvailable: params.receiverLpFiatAvailable,
+    payswapCryptoAvailable: params.payswapTwinTokenAvailable,
+    lpCryptoAvailable: params.lpCryptoAvailable,
+  });
+
+  const strategy = deriveStrategy(sendLeg, receiveLeg, local);
+  const allSkipped = [...sendLeg.skipped, ...receiveLeg.skipped];
+
+  return { strategy, sendLeg, receiveLeg, isLocal: local, allSkipped };
+}

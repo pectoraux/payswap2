@@ -27,7 +27,7 @@ import type { UncommittedEvent } from '../events';
 import type { RuntimeSnapshot } from '../invariants';
 import type { Environment } from '../types';
 import { uid } from '../types';
-import { selectSettlementSource, isLocal, twinTokenSymbol, twinTokenCode, type WaterfallInput, type WaterfallResult, type SettlementTier, TIER_FEES, TIER_NAMES } from '../liquidity/settlement-waterfall';
+import { selectSettlementSource, isLocal, twinTokenSymbol, twinTokenCode, resolvePayment, type WaterfallInput, type WaterfallResult, type SettlementTier, TIER_FEES, TIER_NAMES } from '../liquidity/settlement-waterfall';
 import { backingVerifier } from '../../protocol/treasury-v2/backing';
 import { netSettlementEngine } from '../../protocol/settlement/net-settlement';
 import { lpMandateService } from '../liquidity/lp-mandate-service';
@@ -280,7 +280,25 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
       const local = isLocal({ originCountry: fromCountryName, destinationCountry: toCountryName, sourceCurrency: fromCcy, destinationCurrency: toCcy });
       const twinSymbol = twinTokenSymbol(toCcy);
 
-      // Emit routing.decision with the waterfall result
+      // S3: Per-leg resolution — derive strategy from the waterfall per leg
+      const legResolution = resolvePayment({
+        originCountry: fromCountryName,
+        destinationCountry: toCountryName,
+        sourceCurrency: fromCcy,
+        destinationCurrency: toCcy,
+        amount: payload.amount,
+        senderHasFiatReserve: senderState.hasFiatReserve,
+        senderFiatReserveAmount: senderState.fiatReserveAmount,
+        receiverHasFiatReserve: receiverState.hasFiatReserve,
+        receiverFiatReserveAmount: receiverState.fiatReserveAmount,
+        senderLpFiatAvailable: lpFiatAvailable,
+        receiverLpFiatAvailable: lpFiatAvailable,
+        payswapStablecoinAvailable: 20_000,
+        payswapTwinTokenAvailable: 50_000,
+        lpCryptoAvailable: lpCryptoAvailable,
+      });
+
+      // Emit routing.decision with the waterfall result + per-leg derivation
       events.push({
         type: 'routing.decision',
         streamId: `${env}:routing:${paymentId}`,
@@ -290,6 +308,7 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           paymentId,
           model: 'two-reserve-waterfall',
           isLocal: local,
+          derivedStrategy: legResolution.strategy,
           tier: waterfall.tier,
           tierName: waterfall.tierName,
           source: waterfall.source,
@@ -305,6 +324,10 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           twinTokenSymbol: twinSymbol,         // display: tGHS
           twinTokenCode: twinTokenCode(toCcy), // Stellar: TWINGHS
           skipped: waterfall.skipped,
+          // S3: Per-leg resolution details
+          sendLeg: { tier: legResolution.sendLeg.tier, source: legResolution.sendLeg.source, served: legResolution.sendLeg.served },
+          receiveLeg: { tier: legResolution.receiveLeg.tier, source: legResolution.receiveLeg.source, served: legResolution.receiveLeg.served },
+          allSkipped: legResolution.allSkipped,
           explanation: waterfall.explanation,
           compiledBy: 'SettlementWaterfall',
           compiledAt: now,
