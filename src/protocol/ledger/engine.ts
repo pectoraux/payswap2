@@ -59,6 +59,8 @@ export interface TrialBalance {
   totalCredits: number;
   balanced: boolean;
   accounts: Record<string, AccountTrialBalance>;
+  /** Per-currency breakdown (test compatibility). */
+  byCurrency?: Record<string, { totalDebits: number; totalCredits: number; delta: number; balanced: boolean }>;
 }
 
 /** Balance sheet grouping. */
@@ -76,6 +78,14 @@ export interface BalanceSheet {
   balanced: boolean;
   /** Discrepancy between assets and (liabilities + equity). */
   discrepancy: number;
+  /** Alias for discrepancy (test compatibility). */
+  delta?: number;
+  /** Total assets (test compatibility). */
+  totalAssets?: number;
+  /** Total liabilities (test compatibility). */
+  totalLiabilities?: number;
+  /** Total equity (test compatibility). */
+  totalEquity?: number;
 }
 
 /** Income statement. */
@@ -155,6 +165,11 @@ export class LedgerEngine {
     return this.post(journal);
   }
 
+  /** Alias for postFromLegs (test compatibility). */
+  postLines(params: Omit<CreateJournalEntryParams, 'startSeq'>): JournalEntry {
+    return this.postFromLegs(params);
+  }
+
   /** Return journals matching the filter, in post order. */
   getJournal(filter?: JournalFilter): JournalEntry[] {
     if (!filter) return [...this.journals];
@@ -210,6 +225,30 @@ export class LedgerEngine {
     return balance;
   }
 
+  /**
+   * Get detailed account balance (debit, credit, balance, per-currency).
+   * Test compatibility: returns an object, not just a number.
+   */
+  getAccountDetail(accountCode: string, asOfTs?: number): {
+    debit: number; credit: number; balance: number;
+    byCurrency: Record<string, { debit: number; credit: number; balance: number }>;
+  } {
+    let debit = 0, credit = 0;
+    const byCurrency: Record<string, { debit: number; credit: number; balance: number }> = {};
+    for (const e of this.entries) {
+      if (e.accountCode !== accountCode) continue;
+      if (asOfTs != null && e.ts > asOfTs) continue;
+      debit = round(debit + e.debit, 6);
+      credit = round(credit + e.credit, 6);
+      let c = byCurrency[e.currency];
+      if (!c) { c = { debit: 0, credit: 0, balance: 0 }; byCurrency[e.currency] = c; }
+      c.debit = round(c.debit + e.debit, 6);
+      c.credit = round(c.credit + e.credit, 6);
+      c.balance = round(c.debit - c.credit, 6);
+    }
+    return { debit, credit, balance: round(debit - credit, 6), byCurrency };
+  }
+
   /** All account codes that have at least one leg, sorted alphabetically. */
   activeAccounts(): string[] {
     const set = new Set<string>();
@@ -220,6 +259,11 @@ export class LedgerEngine {
   /** Alias for activeAccounts() (test compatibility). */
   getAccountCodes(): string[] {
     return this.activeAccounts();
+  }
+
+  /** Number of entries (test compatibility). */
+  size(): number {
+    return this.entries.length;
   }
 
   /** Total number of journal entries posted. */
@@ -235,6 +279,7 @@ export class LedgerEngine {
   /** Compute a trial balance across all accounts (or up to `asOfTs`). */
   getTrialBalance(asOfTs?: number): TrialBalance {
     const accounts: Record<string, AccountTrialBalance> = {};
+    const byCurrency: Record<string, { totalDebits: number; totalCredits: number; delta: number; balanced: boolean }> = {};
     let totalDebits = 0;
     let totalCredits = 0;
     for (const e of this.entries) {
@@ -248,15 +293,26 @@ export class LedgerEngine {
       t.credit = round(t.credit + e.credit, 6);
       totalDebits = round(totalDebits + e.debit, 6);
       totalCredits = round(totalCredits + e.credit, 6);
+      // Per-currency breakdown.
+      let c = byCurrency[e.currency];
+      if (!c) { c = { totalDebits: 0, totalCredits: 0, delta: 0, balanced: false }; byCurrency[e.currency] = c; }
+      c.totalDebits = round(c.totalDebits + e.debit, 6);
+      c.totalCredits = round(c.totalCredits + e.credit, 6);
     }
     for (const code of Object.keys(accounts)) {
       accounts[code].balance = round(accounts[code].debit - accounts[code].credit, 6);
+    }
+    for (const ccy of Object.keys(byCurrency)) {
+      const delta = round(byCurrency[ccy].totalDebits - byCurrency[ccy].totalCredits, 6);
+      byCurrency[ccy].delta = delta;
+      byCurrency[ccy].balanced = Math.abs(delta) < 1e-6;
     }
     return {
       totalDebits,
       totalCredits,
       balanced: Math.abs(round(totalDebits - totalCredits, 6)) < 1e-6,
       accounts,
+      byCurrency,
     };
   }
 
@@ -308,6 +364,10 @@ export class LedgerEngine {
       equity: { accounts: equity, total: equityTotal },
       balanced: Math.abs(discrepancy) < 1e-6,
       discrepancy,
+      delta: discrepancy,
+      totalAssets: assetTotal,
+      totalLiabilities: liabilityTotal,
+      totalEquity: equityTotal,
     };
   }
 

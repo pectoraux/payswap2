@@ -90,11 +90,13 @@ export interface JournalLegInput {
 /** Input for `createJournalEntry()`. */
 export interface CreateJournalEntryParams {
   /** Transaction id linking to the originating domain operation. */
-  txId: string;
+  txId?: string;
   /** Human-readable description. */
   description: string;
   /** The legs (debit/credit movements). */
-  legs: JournalLegInput[];
+  legs?: JournalLegInput[];
+  /** Alias for legs (test compatibility). */
+  lines?: JournalLegInput[];
   /** Optional explicit timestamp (defaults to now). */
   ts?: number;
   /** Optional explicit journal id (defaults to generated). */
@@ -125,8 +127,13 @@ export function createJournalEntry(params: CreateJournalEntryParams): JournalEnt
   let seq = params.startSeq ?? 0;
 
   // Validate legs and build the entries array.
+  // Accept both `legs` and `lines` (test compatibility).
+  const legs = params.legs ?? params.lines ?? [];
+  if (legs.length === 0) {
+    throw new Error('journal entry has no legs');
+  }
   const entries: LedgerEntry[] = [];
-  for (const leg of params.legs) {
+  for (const leg of legs) {
     const debit = leg.debit ?? 0;
     const credit = leg.credit ?? 0;
     if (debit < 0 || credit < 0) {
@@ -165,7 +172,7 @@ export function createJournalEntry(params: CreateJournalEntryParams): JournalEnt
   const balanced = validateBalancedInner(entries);
   if (!balanced.balanced) {
     throw new Error(
-      `journal entry is unbalanced — ${balanced.mismatches
+      `Unbalanced journal entry — ${balanced.mismatches
         .map((m) => `currency ${m.currency}: debit ${m.totalDebit} ≠ credit ${m.totalCredit}`)
         .join('; ')}`,
     );
@@ -200,6 +207,8 @@ export interface BalanceCheckResult {
     totalCredit: number;
     difference: number;
   }[];
+  /** Per-currency map (test compatibility). */
+  byCurrency?: Record<string, { totalDebit: number; totalCredit: number; difference: number; delta: number; balanced: boolean }>;
 }
 
 /**
@@ -253,9 +262,21 @@ function validateBalancedInner(entries: LedgerEntry[]): BalanceCheckResult {
     }
   }
 
+  const byCurrency: Record<string, { totalDebit: number; totalCredit: number; difference: number; delta: number; balanced: boolean }> = {};
+  for (const c of currencies) {
+    byCurrency[c.currency] = {
+      totalDebit: c.totalDebit,
+      totalCredit: c.totalCredit,
+      difference: c.difference,
+      delta: c.difference,
+      balanced: c.difference === 0,
+    };
+  }
+
   return {
     balanced: mismatches.length === 0,
     currencies,
     mismatches,
+    byCurrency,
   };
 }

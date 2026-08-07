@@ -105,13 +105,13 @@ await run('post → getAccountBalance correct', () => {
       credit('user:wallet:w1', 200, 'GHS'),
     ],
   });
-  const cash = ledgerEngine.getAccountBalance('cash:bank:GHS');
+  const cash = ledgerEngine.getAccountDetail('cash:bank:GHS');
   assert.equal(cash.debit, 200);
   assert.equal(cash.credit, 0);
   assert.equal(cash.balance, 200);
   assert.equal(cash.byCurrency.GHS.balance, 200);
 
-  const wallet = ledgerEngine.getAccountBalance('user:wallet:w1');
+  const wallet = ledgerEngine.getAccountDetail('user:wallet:w1');
   assert.equal(wallet.credit, 200);
   assert.equal(wallet.balance, -200);
 });
@@ -193,8 +193,8 @@ await run('rebuildLedgerFromEvents: deterministic (rebuild twice → identical)'
   // Verify account codes match exactly.
   assert.deepEqual(led1.getAccountCodes(), led2.getAccountCodes());
   // Spot-check: circulating should be 500 + 300 - 200 = 600
-  const circ1 = led1.getAccountBalance('twintoken:circulating:TWINGHS');
-  const circ2 = led2.getAccountBalance('twintoken:circulating:TWINGHS');
+  const circ1 = led1.getAccountDetail('twintoken:circulating:TWINGHS');
+  const circ2 = led2.getAccountDetail('twintoken:circulating:TWINGHS');
   assert.equal(circ1.balance, 600);
   assert.equal(circ2.balance, 600);
 });
