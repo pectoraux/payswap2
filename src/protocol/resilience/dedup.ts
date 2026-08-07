@@ -155,6 +155,11 @@ export class DedupStore {
   clear(): void {
     this.store.clear();
   }
+
+  /** Alias for clear() (test compatibility). */
+  reset(): void {
+    this.clear();
+  }
 }
 
 /**

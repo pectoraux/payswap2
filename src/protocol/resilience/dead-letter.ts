@@ -215,6 +215,11 @@ export class DeadLetterQueue {
     this.entries.clear();
     this.order.length = 0;
   }
+
+  /** Alias for clear() (test compatibility). */
+  reset(): void {
+    this.clear();
+  }
 }
 
 // Global singleton — survives Next.js dev module re-instantiation.

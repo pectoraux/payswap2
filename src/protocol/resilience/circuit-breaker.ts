@@ -132,6 +132,11 @@ export class CircuitBreaker {
     return this._state;
   }
 
+  /** Alias for state() (test compatibility). */
+  getState(): CircuitState {
+    return this.state();
+  }
+
   /** Snapshot of runtime metrics. */
   metrics(): CircuitBreakerMetrics {
     return {
@@ -286,6 +291,11 @@ export class CircuitBreakerRegistry {
     return [...this.breakers.values()];
   }
 
+  /** All registered breaker names (test compatibility). */
+  names(): string[] {
+    return [...this.breakers.keys()];
+  }
+
   /** Snapshot of every breaker's state. */
   states(): { name: string; state: CircuitState }[] {
     return [...this.breakers.entries()].map(([name, b]) => ({ name, state: b.state() }));
@@ -313,6 +323,13 @@ export class CircuitBreakerRegistry {
   /** Number of registered breakers. */
   size(): number {
     return this.breakers.size;
+  }
+
+  /** Reset every breaker to closed state (for tests). */
+  resetAll(): void {
+    for (const b of this.breakers.values()) {
+      b.reset();
+    }
   }
 }
 
