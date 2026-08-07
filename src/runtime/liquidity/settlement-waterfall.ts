@@ -103,6 +103,19 @@ export interface WaterfallInput {
   // PaySwap crypto reserves
   payswapStablecoinAvailable: number;  // USDC in treasury
   payswapTwinTokenAvailable: number;   // twin tokens minted for this currency
+  // F2: FX quote for cross-currency transfers (null for same-currency)
+  fxQuote?: FxQuote | null;
+}
+
+export interface FxQuote {
+  fromCurrency: string;
+  toCurrency: string;
+  rate: number;
+  sourceAmount: number;
+  destinationAmount: number;
+  spreadBps: number;
+  expiresAt: number;
+  provider: string;
 }
 
 export function selectSettlementSource(input: WaterfallInput): WaterfallResult {
@@ -112,6 +125,12 @@ export function selectSettlementSource(input: WaterfallInput): WaterfallResult {
     sourceCurrency: input.sourceCurrency,
     destinationCurrency: input.destinationCurrency,
   });
+
+  // F1/F2: If cross-currency, compute the destination amount from the FX quote
+  const needsFx = input.sourceCurrency !== input.destinationCurrency;
+  const destAmount = needsFx && input.fxQuote
+    ? input.fxQuote.destinationAmount
+    : input.amount;
 
   const skipped: SkipReason[] = [];
   const fees = (tier: SettlementTier) => TIER_FEES[tier];
@@ -165,33 +184,33 @@ export function selectSettlementSource(input: WaterfallInput): WaterfallResult {
   const cryptoSource = destHasFiat ? 'payswap_twin_token' : 'payswap_stablecoin';
   const cryptoAssetKind = destHasFiat ? 'twin token (t' + input.destinationCurrency + ')' : 'stablecoin (USDC)';
 
-  if (cryptoAvailable >= input.amount) {
+  if (cryptoAvailable >= destAmount) {
     return {
       tier: 3, tierName: TIER_NAMES[3], source: cryptoSource,
-      amount: input.amount, available: cryptoAvailable,
-      used: input.amount, sufficient: true, skipped,
-      explanation: `Cross-border payment settled via PaySwap ${cryptoAssetKind} → ${input.destinationCountry}`,
+      amount: destAmount, available: cryptoAvailable,
+      used: destAmount, sufficient: true, skipped,
+      explanation: `Cross-border payment settled via PaySwap ${cryptoAssetKind} → ${input.destinationCountry}${needsFx ? ` (FX: ${input.sourceCurrency}→${input.destinationCurrency} @ ${input.fxQuote?.rate ?? 1})` : ''}`,
       feeBps: fees(3).bps, payswapSharePct: fees(3).payswapPct, lpSharePct: fees(3).lpPct,
     };
   }
-  skipped.push({ tier: 3, reason: `Insufficient ${cryptoAssetKind}: need ${input.amount}, have ${cryptoAvailable}` });
+  skipped.push({ tier: 3, reason: `Insufficient ${cryptoAssetKind}: need ${destAmount}, have ${cryptoAvailable}` });
 
   // Tier 4: LP crypto bandwidth
-  if (input.lpCryptoAvailable >= input.amount) {
+  if (input.lpCryptoAvailable >= destAmount) {
     return {
       tier: 4, tierName: TIER_NAMES[4], source: 'lp_crypto',
-      amount: input.amount, available: input.lpCryptoAvailable,
-      used: input.amount, sufficient: true, skipped,
+      amount: destAmount, available: input.lpCryptoAvailable,
+      used: destAmount, sufficient: true, skipped,
       explanation: `Cross-border payment settled via LP crypto bandwidth`,
       feeBps: fees(4).bps, payswapSharePct: fees(4).payswapPct, lpSharePct: fees(4).lpPct,
     };
   }
-  skipped.push({ tier: 4, reason: `Insufficient LP crypto: need ${input.amount}, have ${input.lpCryptoAvailable}` });
+  skipped.push({ tier: 4, reason: `Insufficient LP crypto: need ${destAmount}, have ${input.lpCryptoAvailable}` });
 
   // Tier 5: Marketplace auction
   return {
     tier: 5, tierName: TIER_NAMES[5], source: 'marketplace',
-    amount: input.amount, available: 0, used: 0, sufficient: false, skipped,
+    amount: destAmount, available: 0, used: 0, sufficient: false, skipped,
     explanation: `Cross-border payment requires marketplace auction — all crypto tiers insufficient`,
     feeBps: fees(5).bps, payswapSharePct: fees(5).payswapPct, lpSharePct: fees(5).lpPct,
   };
