@@ -30,6 +30,9 @@ import { uid } from '../types';
 import { selectSettlementSource, isLocal, twinTokenSymbol, twinTokenCode, type WaterfallInput, type WaterfallResult, type SettlementTier, TIER_FEES, TIER_NAMES } from '../liquidity/settlement-waterfall';
 import { backingVerifier } from '../../protocol/treasury-v2/backing';
 import { netSettlementEngine } from '../../protocol/settlement/net-settlement';
+import { lpMandateService } from '../liquidity/lp-mandate-service';
+import { fxExposureService } from '../liquidity/fx-exposure-service';
+import { auctionEngine } from '../../protocol/settlement/auctions';
 import type {
   CreatePaymentCommand,
   CreatePaymentPayload,
@@ -340,12 +343,30 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
         }
 
       } else if (waterfall.tier === 2) {
-        // Tier 2: LP FIAT bandwidth — LP extends PaySwap's fiat capacity
+        // S2: Tier 2 — LP FIAT bandwidth via mandate service
+        // Check if any LP has an active mandate for this country/currency
+        const mandateAvailable = lpMandateService.getTotalAvailable(toCountryName, toCcy);
+        const mandateCheck = mandateAvailable >= payload.amount;
         events.push({
           type: 'liquidity.resolved',
           streamId: `${env}:liquidity:${paymentId}`, streamType: 'liquidity', kind: 'domain',
-          payload: { paymentId, tier: 2, source: 'lp_fiat', amount: payload.amount, lpFiatAvailable, feeBps: waterfall.feeBps, lpSharePct: waterfall.lpSharePct, reason: `Tier 2: LP FIAT bandwidth used for ${paymentId}`, resolvedAt: now } as unknown as Record<string, unknown>,
+          payload: {
+            paymentId, tier: 2, source: 'lp_fiat', amount: payload.amount,
+            mandateAvailable, mandateCheck,
+            feeBps: waterfall.feeBps, lpSharePct: waterfall.lpSharePct,
+            reason: `Tier 2: LP FIAT bandwidth ${mandateCheck ? 'used' : 'insufficient mandate'} for ${paymentId}`,
+            resolvedAt: now,
+          } as unknown as Record<string, unknown>,
         });
+        if (mandateCheck) {
+          // Record the debit against the LP's mandate
+          // (in production, the actual debit happens via the PSP)
+          events.push({
+            type: 'lp.fiat_debited',
+            streamId: `${env}:liquidity:${paymentId}`, streamType: 'liquidity', kind: 'domain',
+            payload: { paymentId, tier: 2, country: toCountryName, currency: toCcy, amount: payload.amount, debitedAt: now } as unknown as Record<string, unknown>,
+          });
+        }
 
       } else if (waterfall.tier === 3) {
         // Tier 3: PaySwap crypto reserves — twin token (if dest has FIAT) or stablecoin
@@ -418,22 +439,66 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
         });
 
       } else {
-        // Tier 5: Marketplace auction
+        // S5: Tier 5 — Marketplace auction (async, parks in PENDING_LIQUIDITY)
+        // Open an auction for LPs to bid on this settlement
+        let auctionId: string | null = null;
+        try {
+          const auction = auctionEngine.open({
+            corridor: `${fromCcy}-${toCcy}`,
+            amount: netAmount,
+            currency: toCcy,
+            mode: 'BULK',
+            deadline: now + 300_000, // 5-minute auction window
+          });
+          auctionId = auction.id;
+        } catch { /* auction engine may not be initialized */ }
+
         events.push({
           type: 'liquidity.resolved',
           streamId: `${env}:liquidity:${paymentId}`, streamType: 'liquidity', kind: 'domain',
-          payload: { paymentId, tier: 5, source: 'marketplace', amount: payload.amount, feeBps: waterfall.feeBps, lpSharePct: waterfall.lpSharePct, reason: `Tier 5: Marketplace auction required for ${paymentId}`, resolvedAt: now } as unknown as Record<string, unknown>,
+          payload: {
+            paymentId, tier: 5, source: 'marketplace', amount: payload.amount,
+            auctionId, status: 'PENDING_LIQUIDITY',
+            feeBps: waterfall.feeBps, lpSharePct: waterfall.lpSharePct,
+            reason: `Tier 5: Marketplace auction ${auctionId ? 'opened' : 'failed to open'} for ${paymentId}`,
+            resolvedAt: now,
+          } as unknown as Record<string, unknown>,
         });
         events.push({
           type: 'settlement.contract.created',
           streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
-          payload: { contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy, amount: netAmount, escrowAmount: netAmount, escrowCurrency: 'USDC', strategy: 'Tier 5: Auction', createdAt: now } as unknown as Record<string, unknown>,
+          payload: { contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy, amount: netAmount, escrowAmount: netAmount, escrowCurrency: 'USDC', strategy: 'Tier 5: Auction', auctionId, status: 'PENDING_LIQUIDITY', createdAt: now } as unknown as Record<string, unknown>,
         });
         events.push({
           type: 'settlement.contract.funded',
           streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
           payload: { contractId: `sc_${paymentId}`, fundedAt: now } as unknown as Record<string, unknown>,
         });
+        // F3: Record FX exposure for cross-currency auctions
+        if (fromCcy !== toCcy) {
+          const fxPosition = fxExposureService.openPosition({
+            fromCurrency: fromCcy,
+            toCurrency: toCcy,
+            rate: 1, // simplified — real rate from FxQuote
+            sourceAmount: payload.amount,
+            destinationAmount: netAmount,
+            paymentId,
+          });
+          if (fxPosition) {
+            events.push({
+              type: 'fx.position_opened',
+              streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
+              payload: { paymentId, positionId: fxPosition.id, corridor: fxPosition.corridor, sourceAmount: payload.amount, rate: 1, openedAt: now } as unknown as Record<string, unknown>,
+            });
+          } else {
+            // FX limit breached — block the payment
+            events.push({
+              type: 'fx.limit_breached',
+              streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
+              payload: { paymentId, corridor: `${fromCcy}:${toCcy}`, reason: 'FX exposure limit breached', blockedAt: now } as unknown as Record<string, unknown>,
+            });
+          }
+        }
       }
 
       // 3. ledger.entry.posted — balanced double-entry for the settlement.
