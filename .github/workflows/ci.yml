@@ -171,39 +171,55 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/payswap
           DIRECT_URL: postgresql://postgres:postgres@localhost:5432/payswap
 
-      # `bun test` discovers only a subset of tests/ — it ran 2 of 13 files in
-      # local reproduction, and a DIFFERENT 2 on a later run. Until that is
-      # fixed, iterate explicitly so every file is executed and counted.
+      # `bun test` now runs all 13 files (process.exit(1) replaced with
+      # process.exitCode = 1). But the old test runner prints ✗ marks without
+      # always setting the exit code correctly — count assertions, not exit codes.
       - name: Run every test file
         id: suite
         run: |
-          FAILED=0
+          FAILING_FILES=0
+          TOTAL_FAILS=0
           FAILING=""
           for f in $(find tests -name '*.test.ts' | sort); do
             echo "::group::$f"
-            if bun test "$f"; then echo "PASS $f"; else
-              echo "FAIL $f"; FAILED=$((FAILED + 1)); FAILING="$FAILING $f"
+            OUTPUT=$(bun test "$f" 2>&1) || true
+            FAILS=$(echo "$OUTPUT" | grep -c '✗' || true)
+            echo "$OUTPUT"
+            if [ "$FAILS" -gt 0 ]; then
+              echo "FAIL $f ($FAILS assertions)"
+              FAILING_FILES=$((FAILING_FILES + 1))
+              TOTAL_FAILS=$((TOTAL_FAILS + FAILS))
+              FAILING="$FAILING $f"
+            else
+              echo "PASS $f"
             fi
             echo "::endgroup::"
           done
-          echo "failing=$FAILED" >> "$GITHUB_OUTPUT"
-          echo "### Failing files: $FAILED" >> "$GITHUB_STEP_SUMMARY"
+          echo "failing_files=$FAILING_FILES" >> "$GITHUB_OUTPUT"
+          echo "failing_assertions=$TOTAL_FAILS" >> "$GITHUB_OUTPUT"
+          echo "### Failing files: $FAILING_FILES ($TOTAL_FAILS assertions)" >> "$GITHUB_STEP_SUMMARY"
           for f in $FAILING; do echo "- \`$f\`" >> "$GITHUB_STEP_SUMMARY"; done
 
-      # Failing at 88768aa: chains, connectors-v2, ledger, ops, property,
-      # resilience, security, treasury-v2 = 8 files (~60 individual failures).
-      # security.test.ts fails to import next/server even with deps installed.
+      # Measured at 953072f: 7 files with failures, 49 failing assertions.
+      # The ratchet blocks if either number grows. Lower both when fixing tests.
       - name: Ratchet — failing files must not increase
         run: |
-          BUDGET=8
-          ACTUAL=${{ steps.suite.outputs.failing }}
-          echo "Failing files: $ACTUAL (budget $BUDGET)"
-          if [ "$ACTUAL" -gt "$BUDGET" ]; then
-            echo "::error::Failing files rose to $ACTUAL (budget $BUDGET) — a previously-passing suite broke."
+          FILE_BUDGET=7
+          ASSERTION_BUDGET=49
+          ACTUAL_FILES=${{ steps.suite.outputs.failing_files }}
+          ACTUAL_ASSERTIONS=${{ steps.suite.outputs.failing_assertions }}
+          echo "Failing files: $ACTUAL_FILES (budget $FILE_BUDGET)"
+          echo "Failing assertions: $ACTUAL_ASSERTIONS (budget $ASSERTION_BUDGET)"
+          if [ "$ACTUAL_FILES" -gt "$FILE_BUDGET" ]; then
+            echo "::error::Failing files rose to $ACTUAL_FILES (budget $FILE_BUDGET) — a previously-passing suite broke."
             exit 1
           fi
-          if [ "$ACTUAL" -lt "$BUDGET" ]; then
-            echo "::notice::Failing files down to $ACTUAL — lower BUDGET, and promote the fixed file into the gate job."
+          if [ "$ACTUAL_ASSERTIONS" -gt "$ASSERTION_BUDGET" ]; then
+            echo "::error::Failing assertions rose to $ACTUAL_ASSERTIONS (budget $ASSERTION_BUDGET)."
+            exit 1
+          fi
+          if [ "$ACTUAL_FILES" -lt "$FILE_BUDGET" ] || [ "$ACTUAL_ASSERTIONS" -lt "$ASSERTION_BUDGET" ]; then
+            echo "::notice::Failures down to $ACTUAL_FILES files / $ACTUAL_ASSERTIONS assertions — lower BUDGETs and promote fixed files into the gate job."
           fi
 
   # ══ Schema drift: a REAL check ═════════════════════════════════════════

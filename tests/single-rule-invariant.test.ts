@@ -61,7 +61,8 @@ const FORBIDDEN_PATTERNS: { pattern: string; description: string }[] = [
 ];
 
 describe('CI-4: Single-rule invariant (no parallel routing)', () => {
-  it('settlement-waterfall.ts is the ONLY module that implements tier selection', () => {
+  // The filesystem scan can be slow in a busy process — set a generous timeout.
+  it('settlement-waterfall.ts is the ONLY module that implements tier selection', async () => {
     const files = collectTsFiles(SRC_DIR);
     const violations: { file: string; description: string; pattern: string }[] = [];
 

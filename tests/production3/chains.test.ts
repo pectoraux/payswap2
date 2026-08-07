@@ -311,4 +311,4 @@ for (const r of results) {
   }
 }
 console.log(`\nchains.test.ts — PASS=${pass} FAIL=${fail}`);
-if (fail > 0) console.error(`FAILED: ${fail} tests`);
+if (fail > 0) process.exitCode = 1;

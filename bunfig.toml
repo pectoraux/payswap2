@@ -1,5 +1,5 @@
 [test]
 # Run all test files under tests/, not just tests/production3/
-# This ensures `bun test` discovers routing.golden.test.ts,
-# single-rule-invariant.test.ts, and money.property.test.ts.
 root = "."
+# The single-rule invariant test scans all of src/ — give it room.
+timeout = 30000
