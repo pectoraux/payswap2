@@ -150,7 +150,7 @@ export function reconcileTwinTokenBacking(
     const ledgerEscrowed = Math.max(0, ledger.getAccountBalance(escrowedAccount(asset.code)));
     const ledgerCirculating = Math.max(0, ledger.getAccountBalance(circulatingAccount(asset.code)));
 
-    if (Math.abs(ledgerBacking - expectedBacking) > 1e-6) {
+    if (Math.round((ledgerBacking - expectedBacking) * 1e6) !== 0) {
       discrepancies.push({
         item: `backing:${currency}`,
         ledgerValue: ledgerBacking,
@@ -159,7 +159,7 @@ export function reconcileTwinTokenBacking(
         note: `twin:backing:${currency} ledger does not match circulating+escrowed from twin token engine`,
       });
     }
-    if (Math.abs(ledgerCirculating - circulating) > 1e-6) {
+    if (Math.round((ledgerCirculating - circulating) * 1e6) !== 0) {
       discrepancies.push({
         item: `circulating:${asset.code}`,
         ledgerValue: ledgerCirculating,
@@ -168,7 +168,7 @@ export function reconcileTwinTokenBacking(
         note: `twintoken:circulating:${asset.code} ledger does not match twin token engine`,
       });
     }
-    if (Math.abs(ledgerEscrowed - escrowed) > 1e-6) {
+    if (Math.round((ledgerEscrowed - escrowed) * 1e6) !== 0) {
       discrepancies.push({
         item: `escrowed:${asset.code}`,
         ledgerValue: ledgerEscrowed,
@@ -215,7 +215,7 @@ export function reconcileEscrow(
 
   for (const [assetCode, frozenAmount] of frozenByAsset) {
     const ledgerEscrowed = Math.max(0, ledger.getAccountBalance(escrowedAccount(assetCode)));
-    if (Math.abs(ledgerEscrowed - frozenAmount) > 1e-6) {
+    if (Math.round((ledgerEscrowed - frozenAmount) * 1e6) !== 0) {
       discrepancies.push({
         item: `escrow:${assetCode}`,
         ledgerValue: ledgerEscrowed,
@@ -285,7 +285,7 @@ export function reconcilePayouts(
     const netAmount = payout.netAmount ?? 0;
     if (netAmount > 0) {
       const legs = journals.flatMap((j) => j.entries);
-      const matchingLegs = legs.filter((l) => Math.abs(l.debit - netAmount) < 1e-6 || Math.abs(l.credit - netAmount) < 1e-6);
+      const matchingLegs = legs.filter((l) => Math.round((l.debit - netAmount) * 1e6) === 0 || Math.round((l.credit - netAmount) * 1e6) === 0);
       if (matchingLegs.length === 0) {
         discrepancies.push({
           item: `payout:${payout.id}:net`,
@@ -331,7 +331,7 @@ export function reconcileMerchant(
   // is exposed. Treat 0 as "no opinion" (skip).
   const sourcePayable = merchant?.bondEscrowed ?? 0;
 
-  if (merchant && sourcePayable > 0 && Math.abs(ledgerPayable - sourcePayable) > 1e-6) {
+  if (merchant && sourcePayable > 0 && Math.round((ledgerPayable - sourcePayable) * 1e6) !== 0) {
     discrepancies.push({
       item: `merchant:${merchantId}:payable`,
       ledgerValue: ledgerPayable,

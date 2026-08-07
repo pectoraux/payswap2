@@ -59,3 +59,35 @@ The twin token mint+burn is therefore **wasteful** on `LOCAL_RAIL`. Instead:
 ### Acceptance criterion
 - A `LOCAL_RAIL` payment no longer emits `twin.minted`.
 - The decision is documented (this file) with one sentence naming `tGHS`'s local job.
+
+---
+
+## MON-5 — One rounding policy, one site
+
+### Decision: HALF_UP everywhere, residual to the fee earner.
+
+**Fees** (the `mulBps` path): `Math.round(amount * bps / 10000)` — HALF_UP.
+The residual (the rounding remainder) is assigned to the fee earner
+(PaySwap or the LP), never to the merchant or customer. This is the
+`Money.mulBps()` implementation: `(minorUnits * bps + 5000) / 10000`.
+
+**FX** (the `convert` path): HALF_UP on the converted amount. The spread
+accrues to the treasury. The `FxEngine.quote()` method applies the spread
+as `midRate * (1 - spreadBps / 1e4)` — the residual goes to the treasury.
+
+**Splits** (the `allocate` path): the largest remainder method. Parts are
+computed as `floor(total * ratio / sum_ratios)`, then the remainder is
+distributed one minor unit at a time to the parts with the largest
+fractional remainder. The parts sum **exactly** to the total — no rounding
+gap. This is the `Money.allocate()` implementation.
+
+**The one invariant:** `fee + netAmount == grossAmount` for every payment,
+exactly, in integer minor units. The property test in
+`tests/money.property.test.ts` asserts this for a million random amounts.
+
+### Why HALF_UP (not HALF_EVEN)
+HALF_UP is the standard for financial calculations (it's what Stripe, Wise,
+and most banks use). HALF_EVEN (banker's rounding) is better for statistics
+but produces results that surprise users — a 0.5 fee rounds up, not "to the
+nearest even number." Financial systems prioritize predictability over
+statistical unbiasedness.

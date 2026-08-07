@@ -112,8 +112,16 @@ function buildLedgerEntryEvent(
   description: string,
   lines: JournalLine[],
 ): UncommittedEvent {
-  const debitSum = lines.reduce((s, l) => s + l.debit, 0);
-  const creditSum = lines.reduce((s, l) => s + l.credit, 0);
+  // MON-4: exact balance check. Previously: Math.abs(debitSum - creditSum) < 0.01
+  // (a tolerance that could conceal a one-cent-per-transaction leak). Now:
+  // the debit and credit sums are rounded to 2 decimal places (cents) and
+  // must be EXACTLY equal. A one-cent discrepancy fails the check.
+  //
+  // The rounding to 2dp is necessary because the input amounts are IEEE-754
+  // doubles (MON-3 will replace them with integer minor units). Once MON-3
+  // lands, this becomes a pure integer comparison with no rounding.
+  const debitSum = Math.round(lines.reduce((s, l) => s + l.debit, 0) * 100);
+  const creditSum = Math.round(lines.reduce((s, l) => s + l.credit, 0) * 100);
   return {
     type: 'ledger.entry.posted',
     streamId: `${env}:ledger:${paymentRef}`,
@@ -125,9 +133,9 @@ function buildLedgerEntryEvent(
       refType: 'payment',
       description,
       lines,
-      debitTotal: Math.round(debitSum * 100) / 100,
-      creditTotal: Math.round(creditSum * 100) / 100,
-      isBalanced: Math.abs(debitSum - creditSum) < 0.01,
+      debitTotal: debitSum / 100,
+      creditTotal: creditSum / 100,
+      isBalanced: debitSum === creditSum,
       postedAt: Date.now(),
       correlationId,
     } as unknown as Record<string, unknown>,

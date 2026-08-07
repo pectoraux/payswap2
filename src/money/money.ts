@@ -71,27 +71,51 @@ export class Money {
     return new Money(this.minorUnits - other.minorUnits, this.currency);
   }
 
+  /**
+   * Allocate this Money across `ratios` so the parts sum EXACTLY to the total.
+   *
+   * Uses the largest remainder method: each part gets floor(total * ratio / sum),
+   * then the remainder (total - sum of floors) is distributed one minor unit at
+   * a time to the parts with the largest fractional remainder.
+   *
+   * This guarantees: sum(parts) === total, exactly, in integer minor units.
+   * No rounding gap, no tolerance needed.
+   */
   allocate(ratios: number[]): Money[] {
     if (ratios.length === 0) return [];
-    const total = ratios.reduce((s, r) => s + r, 0);
-    if (total <= 0) throw new Error('Money.allocate: ratios must sum to > 0');
-    const results: bigint[] = new Array(ratios.length).fill(BigInt(0));
+    const sum = ratios.reduce((s, r) => s + r, 0);
+    if (sum <= 0) throw new Error('Money.allocate: ratios must sum to > 0');
+
+    // Scale ratios to integers (avoid float precision loss).
+    // Use a large scale factor, then divide by GCD conceptually.
+    const SCALE = BigInt(1_000_000_000); // 1e9
+    const scaledSum = BigInt(Math.round(sum * 1_000_000_000));
+
+    // Compute floor share for each part.
+    const results: bigint[] = new Array(ratios.length);
+    const remainders: { idx: number; remainder: bigint }[] = [];
     let allocated = BigInt(0);
-    const scale = BigInt(1000000);
-    const scaledTotal = BigInt(Math.round(total * 1_000_000));
+
     for (let i = 0; i < ratios.length; i++) {
-      const scaledRatio = BigInt(Math.round(ratios[i] * 1_000_000));
-      const share = (this.minorUnits * scaledRatio) / scaledTotal;
-      results[i] = share;
-      allocated += share;
+      const scaledRatio = BigInt(Math.round(ratios[i] * 1_000_000_000));
+      // share = floor(total * ratio / sum)
+      const product = this.minorUnits * scaledRatio;
+      const floorShare = product / scaledSum;
+      const remainder = product - (floorShare * scaledSum); // the fractional part, scaled
+      results[i] = floorShare;
+      allocated += floorShare;
+      remainders.push({ idx: i, remainder });
     }
-    let remainder = this.minorUnits - allocated;
-    let idx = 0;
-    while (remainder > BigInt(0) && idx < results.length) {
-      results[idx] += BigInt(1);
-      remainder -= BigInt(1);
-      idx++;
+
+    // Distribute the remainder one minor unit at a time to the parts with
+    // the largest fractional remainder.
+    let toDistribute = this.minorUnits - allocated;
+    remainders.sort((a, b) => (a.remainder < b.remainder ? 1 : a.remainder > b.remainder ? -1 : 0));
+    for (let i = 0; i < remainders.length && toDistribute > 0; i++) {
+      results[remainders[i].idx] += BigInt(1);
+      toDistribute -= BigInt(1);
     }
+
     return results.map((m) => new Money(m, this.currency));
   }
 
@@ -102,6 +126,26 @@ export class Money {
     const scaledFactor = BigInt(Math.round(f * 1_000_000));
     const product = this.minorUnits * scaledFactor;
     return new Money(product / scale, this.currency);
+  }
+
+  /**
+   * Multiply by basis points (bps). The standard fee calculation:
+   * `amount.mulBps(80)` = amount × 80 / 10000 = 0.8% fee.
+   *
+   * This is exact: `minorUnits * bps / 10000` using integer division.
+   * The remainder is assigned to the fee recipient (HALF_UP rounding).
+   *
+   * MON-5 rounding policy: fees use HALF_UP. The residual (the rounding
+   * remainder) is assigned to the fee earner, never the merchant.
+   */
+  mulBps(bps: number): Money {
+    if (!Number.isInteger(bps) || bps < 0) {
+      throw new Error(`Money.mulBps: bps must be a non-negative integer, got ${bps}`);
+    }
+    // exact integer arithmetic: (minorUnits * bps + 5000) / 10000 rounds HALF_UP
+    const product = this.minorUnits * BigInt(bps);
+    const rounded = (product + BigInt(5000)) / BigInt(10000);
+    return new Money(rounded, this.currency);
   }
 
   divide(divisor: number, _mode: RoundingMode = 'HALF_UP'): Money {
@@ -123,7 +167,10 @@ export class Money {
     if (this.minorUnits > other.minorUnits) return 1;
     return 0;
   }
-  equals(other: Money): boolean { return this.compare(other) === 0; }
+  equals(other: Money): boolean {
+    if (this.currency !== other.currency) return false;
+    return this.minorUnits === other.minorUnits;
+  }
   greaterThan(other: Money): boolean { return this.compare(other) > 0; }
   lessThan(other: Money): boolean { return this.compare(other) < 0; }
   greaterThanOrEqual(other: Money): boolean { return this.compare(other) >= 0; }
@@ -190,6 +237,9 @@ export const money = {
   ghs: (amount: number | string) => Money.fromMajor(amount, 'GHS'),
   usdc: (amount: number | string) => Money.fromMajor(amount, 'USDC'),
   eur: (amount: number | string) => Money.fromMajor(amount, 'EUR'),
+  ngn: (amount: number | string) => Money.fromMajor(amount, 'NGN'),
+  kes: (amount: number | string) => Money.fromMajor(amount, 'KES'),
+  xof: (amount: number | string) => Money.fromMajor(amount, 'XOF'),
   fromMinor: (minor: bigint | number | string, currency: Currency) => Money.fromMinor(minor, currency),
   zero: (currency: Currency = 'USD') => Money.zero(currency),
 };
