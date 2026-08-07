@@ -6196,3 +6196,34 @@ Stage Summary:
 - The event payload extraction bug (`event.payload` vs `event`) was the root cause of E1/E2/E3/E4 all being dead — the listeners were receiving the SimulationEvent wrapper, not the payload. Now fixed for all 3 listeners.
 - Test scenarios: 21/21 pass (100%).
 - tsc: 0 errors in new files | lint: 0 errors (348 warnings) | browser-verified: ✅ | E3 end-to-end verified: ✅
+
+---
+Task ID: PROD-ROADMAP-P0-P2
+Agent: main (Z.ai Code)
+Task: Implement P0 (security) + P2 (CI) from the production roadmap. P0 SEC-1,2,3 first (exploitable today), then P2 CI-1,2,3,4 (golden test before money migration).
+
+Work Log:
+- SEC-1: Closed the unauthenticated /api/runtime/dispatch endpoint. Added getServerSession check — returns 401 if no session. The session's user ID + role override metadata.actor (no impersonation). The gateway at /api/runtime/gateway/dispatch already had this; now both routes require auth.
+- SEC-2: Deny-by-default on /api/*. Updated middleware.ts to match /api/:path*. Added PUBLIC_ROUTES allowlist: auth, health, showcase, identity recovery, webhooks, payment links, waitlist. Every other API route returns 401 without a session. Verified: /api/treasury/insights → 401, /api/runtime/dispatch → 401, /api/showcase → 200 (public).
+- SEC-3: Stopped enumerating the command catalogue. The 400 response for unknown commands now returns generic "Unknown command type" — no list of registered types. The GET endpoint returns only { ok: true, reachable: true } — no command type list.
+- CI-1: Added "test": "bun test" and "typecheck": "tsc --noEmit" scripts to package.json. Also added "test:routing" for the golden + single-rule tests specifically.
+- CI-2: Created .github/workflows/ci.yml. Runs on every push + PR: install → prisma generate → typecheck → lint → test → prisma migrate diff (schema drift). Red build blocks merge.
+- CI-3: Created tests/routing.golden.test.ts — the Part 0 contract. 8 fixtures covering LOCAL_RAIL, RESERVE_TO_RESERVE, RESERVE_TO_MARKET, MARKET_TO_RESERVE, MARKET_TO_MARKET, tier 5 fallback, and edge cases. Each fixture asserts strategy name, send leg tier, receive leg tier, isLocal. Also tests isLocal() + twinTokenCode(). All 14 tests pass. This is the snapshot that must stay stable across P1 (money) and P3 (scale) work.
+- CI-4: Created tests/single-rule-invariant.test.ts. Greps all .ts/.tsx files under src/ for forbidden patterns (hand-written boolean matrices on hasFiatReserve returning strategy names). Only settlement-waterfall.ts is allowed to implement tier selection. Also asserts policy-engine.ts imports resolvePayment (not a hand-written matrix) and handlers.ts imports selectSettlementSource. All 3 tests pass.
+
+Verification:
+- SEC-1: /api/runtime/dispatch without session → 401 ✅
+- SEC-2: /api/treasury/insights without session → 401 ✅; /api/showcase without session → 200 ✅
+- CI-3: 14 golden routing tests pass ✅
+- CI-4: 3 single-rule invariant tests pass ✅
+- Test scenarios: 21/21 pass (100%)
+- Homepage: renders, theme toggle works
+- lint: 0 errors, 348 warnings
+
+Stage Summary:
+- P0 SEC-1,2,3 DONE: the auth bypass is closed, /api/* is deny-by-default, command catalogue is not enumerated.
+- P2 CI-1,2,3,4 DONE: test runner + GitHub Actions + golden routing test + single-rule invariant. The Part 0 contract is now enforceable in CI.
+- Remaining P0: SEC-4 (scoped API keys), SEC-5 (rate limiting), SEC-6 (KMS) — next week.
+- Remaining P2: CI-5 (replay determinism wired into CI) — the test exists, just needs to pass.
+- The golden routing test is the safety net for P1 (money migration). It must stay stable.
+- tsc: 0 errors in new files | lint: 0 errors (348 warnings) | browser-verified: ✅ | tests: 17 pass, 0 fail
