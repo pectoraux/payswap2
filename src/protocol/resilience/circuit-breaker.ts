@@ -151,7 +151,10 @@ export class CircuitBreaker {
       lastFailureTs: this.lastFailureTs,
       openedAt: this.openedAt,
       consecutiveHalfOpenSuccesses: this.consecutiveHalfOpenSuccesses,
-    };
+      // Test compatibility aliases.
+      trips: this.totalTrips,
+      rejections: this.totalRejected,
+    } as CircuitBreakerMetrics;
   }
 
   /** Force the breaker back to CLOSED (e.g. an admin override). */
@@ -258,6 +261,7 @@ export const DEFAULT_BREAKER_POLICY: Omit<CircuitBreakerOptions, 'name'> = {
   failureThreshold: 5,
   failureWindowMs: 60_000,
   cooldownMs: 30_000,
+  halfOpenMaxRequests: 1,
   successThresholdToClose: 2,
 };
 
@@ -267,6 +271,7 @@ export const DEFAULT_BREAKER_NAMES = [
   'mpesa',
   'fx_rate',
   'stellar_horizon',
+  'stellar_settlement',
   'ethereum_rpc',
   'db',
 ] as const;

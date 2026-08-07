@@ -114,6 +114,11 @@ export class ChainRegistry {
     return this.adapters.has(chain);
   }
 
+  /** Alias for has() (test compatibility). */
+  isRegistered(chain: string): boolean {
+    return this.has(chain);
+  }
+
   /** Reset all registered adapters (for tests). */
   reset(): void {
     this.adapters.clear();

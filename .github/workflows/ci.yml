@@ -201,13 +201,12 @@ jobs:
           echo "### Failing files: $FAILING_FILES ($TOTAL_FAILS assertions)" >> "$GITHUB_STEP_SUMMARY"
           for f in $FAILING; do echo "- \`$f\`" >> "$GITHUB_STEP_SUMMARY"; done
 
-      # Measured at aae789c: 7 files with failures, 49 failing assertions.
+      # Measured at f77f46a: 6 files with failures, 43 failing assertions.
       # The ratchet blocks if either number grows. Lower both when fixing tests.
-      # Lowered FILE_BUDGET from 8 to 7 — the suite budget is now tight.
       - name: Ratchet — failing files must not increase
         run: |
-          FILE_BUDGET=7
-          ASSERTION_BUDGET=49
+          FILE_BUDGET=6
+          ASSERTION_BUDGET=43
           ACTUAL_FILES=${{ steps.suite.outputs.failing_files }}
           ACTUAL_ASSERTIONS=${{ steps.suite.outputs.failing_assertions }}
           echo "Failing files: $ACTUAL_FILES (budget $FILE_BUDGET)"
