@@ -6357,3 +6357,39 @@ Stage Summary:
 - P1 MON-3d DONE: settlement-waterfall tier comparisons now use exact integer cents. Routing is deterministic.
 - P3 SCALE-1 DONE: singleton inventory written. 10 authorities + 20+ caches + 3 timers classified.
 - The golden routing test (CI-3) proved its value: the `sufficientCents` migration could have changed routing behavior, but the test caught nothing — the behavior is identical.
+
+---
+Task ID: PROD-ROADMAP-OPS-2-3
+Agent: main (Z.ai Code)
+Task: P4 OPS-2 (signed webhooks with retry + dead-letter + replay) + OPS-3 (three-way reconciliation, scheduled + alerting).
+
+Work Log:
+- OPS-2: Upgraded `protocol/webhooks/engine.ts`:
+  • Stripe-style signature: `t=<timestamp>,v1=<hmac>` over `timestamp.body`. Timestamp prevents replay (recipients reject >5min old).
+  • `verifyStripeSignature()` — parses the `t=,v1=` header, checks freshness, recomputes HMAC, timingSafeEqual.
+  • Real HTTP delivery with `fetch()` — 3 attempts with exponential backoff (0s, 10s, 60s). 10s timeout per attempt.
+  • Dead-letter queue: if all 3 retries fail, status='dead_lettered' + `webhook.dead_lettered` event emitted.
+  • `replayDelivery(deliveryId)` — re-attempts a dead-lettered delivery with a fresh signature. Dashboard can call this.
+  • `getDeadLetteredDeliveries(merchantId)` + `getDeliveryHistory(endpointId, limit)` for the dashboard.
+  • Updated `WebhookDeliveryStatus` to include 'dead_lettered' + 'replaying'.
+
+- OPS-3: Created `protocol/ledger/three-way-reconciliation.ts`:
+  • `ThreeWayReconciliationEngine` — reconciles internal ledger ↔ PSP/bank ↔ chain.
+  • Compares ledger payment volume vs PSP volume (count + exact integer cents).
+  • Compares ledger twin token supply vs chain supply (exact micro-units).
+  • Alerts: `ReconciliationAlert` with leg, item, ledgerValue, externalValue, difference, severity ('info'|'warning'|'critical').
+  • `reconciliation.discrepancy` event for each discrepancy. `reconciliation.completed` event per cycle.
+  • Periodic scheduler: `start(intervalMs)` — runs every 5 minutes by default.
+  • History: last 100 results stored for dashboard.
+  • globalThis singleton for Next.js dev-mode safety.
+
+Verification:
+- 28 tests pass (17,073 expect() calls).
+- Test scenarios: 21/21 pass (100%).
+- Homepage: renders.
+- lint: 0 errors, 352 warnings.
+
+Stage Summary:
+- P4 OPS-2 DONE: webhooks are now signed (Stripe-style t=,v1=), retried (3 attempts, exponential backoff), dead-lettered, and replayable from the dashboard.
+- P4 OPS-3 DONE: three-way reconciliation runs every 5 minutes, comparing internal ledger ↔ PSP/bank ↔ chain. Discrepancies emit alerts with amount + leg.
+- Remaining P4: OPS-4 (observability — structured logs, RED metrics), OPS-5 (zero-downtime migrations), OPS-6 (kill switches), OPS-7 (PAN out of scope).
