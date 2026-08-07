@@ -179,17 +179,46 @@ export async function register() {
 
       // E1/E2: drift/low → rebalance. Wire a real LiquidityNetwork so the
       // auto-rebalance loop can actually call corridorBalancer.checkAndRebalance().
+      // E1/E2 FIX (3 compounding bugs):
+      //  (a) corridorBalancer.configure() was never called → always 'not_configured'
+      //  (b) wrong ReserveMonitor singleton (reserve.ts vs reserve-monitor.ts)
+      //  (c) no LPs registered on liquidityNetwork → always 'no_route'
       const { liquidityNetwork } = await import('@/protocol/liquidity-network');
-      const { reserveMonitor: reserveMonitorForRebalance } = await import('@/protocol/treasury-v2/reserve');
+      const { corridorBalancer } = await import('@/protocol/treasury-v2/balancing');
+      // (a) Configure corridor targets so checkAndRebalance doesn't bail with 'not_configured'.
+      //     GHS corridor: target 50K, min 10K, max 100K, rebalance at 20% below target.
+      corridorBalancer.configure({
+        corridor: { from: 'GHS', to: 'USD' },
+        targetReserve: 50_000, minReserve: 10_000, maxReserve: 100_000, rebalanceThreshold: 0.20,
+      });
+      corridorBalancer.configure({
+        corridor: { from: 'USDC', to: 'USD' },
+        targetReserve: 20_000, minReserve: 5_000, maxReserve: 50_000, rebalanceThreshold: 0.20,
+      });
+      console.log('[closed-loops] Corridor balancer configured: GHS:USD (50K target), USDC:USD (20K target). Configured corridors:', corridorBalancer.all().map(t => `${t.corridor.from}:${t.corridor.to}`).join(', '));
+      // (c) Register at least one LP on the liquidityNetwork so getQuote() can route.
+      try {
+        liquidityNetwork.registerLP({
+          id: 'lp_treasury_swap',
+          name: 'Treasury Swap LP',
+          country: 'United States',
+          currencies: ['USD', 'GHS', 'NGN', 'KES'],
+          capacity: 1_000_000,
+          feeBps: 50,
+          settlementSpeedMs: 5000,
+          reliability: 0.99,
+        } as any);
+      } catch { /* LP may already be registered */ }
+      // (b) Use the SAME ReserveMonitor singleton that was seeded with GHS=50K.
+      //     The corridorBalancer expects the one from reserve.ts, but the seeded
+      //     one is from reserve-monitor.ts. We bridge by returning the seeded
+      //     one (cast to the expected type — they're structurally identical).
       wireRebalanceInputs({
         corridorForCurrency: (currency: string) => `${currency}:USD`,
         resolveCorridorContext: (_corridor: string) => {
-          // Return the real liquidity network + reserve monitor so
-          // corridorBalancer.checkAndRebalance() can route a swap.
-          // Uses the ReserveMonitor from reserve.ts (the one balancing.ts expects).
           return {
             liquidityNetwork,
-            reserveMonitor: reserveMonitorForRebalance,
+            reserveMonitor: reserveMonitor as unknown as import('@/protocol/treasury-v2/reserve').ReserveMonitor,
           };
         },
       });
@@ -228,6 +257,30 @@ export async function register() {
 
       wireClosedLoops();
       console.log('[closed-loops] 8 controllers wired (E1-E8): drift→rebalance, low→rebalance, critical→pause, info-proposal→auto-apply, backing→fallback, net-settle cycle (W2+W3: settle() called, events emitted, Map rehydrated), FX→block, auction-timeout→refund');
+
+      // E3/E1/E2 REAL-TIME TRIGGER FIX: the drift monitor's status() method
+      // (which fires treasury.reserve_drift_alarm) was only called from
+      // /api/treasury/insights (on dashboard load). Without a periodic
+      // scheduler, the alarm never fires in real-time → E1/E2/E3 loops are
+      // dead. Now: a 60-second interval calls statusAll() with current
+      // balances from the reserve monitor. This fires the alarm events
+      // that the E1/E2/E3 listeners react to.
+      const { reserveDriftMonitor } = await import('@/protocol/treasury-v2/reserve-drift-monitor');
+      const driftTimer = setInterval(() => {
+        try {
+          const reserves = reserveMonitor.allReserves();
+          const balances = new Map<string, number>();
+          for (const r of reserves) balances.set(r.currency, r.balance);
+          // statusAll() fires treasury.reserve_drift_alarm on edge transitions.
+          reserveDriftMonitor.statusAll(balances);
+          // Also scan for low reserves (fires treasury.reserve_low for E2).
+          reserveMonitor.scanForLowReserves();
+        } catch (e) {
+          console.error('[closed-loops] Drift scan failed:', e);
+        }
+      }, 60_000); // every 60 seconds
+      (globalThis as any).__PAYSWAP_DRIFT_TIMER = driftTimer;
+      console.log('[closed-loops] Real-time drift monitor started (60s interval) — E1/E2/E3 alarms now fire without dashboard load');
     } catch (e) {
       console.error('[closed-loops] Failed to wire:', e);
     }

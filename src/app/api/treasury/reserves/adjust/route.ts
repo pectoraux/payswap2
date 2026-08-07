@@ -189,13 +189,14 @@ export async function POST(req: NextRequest) {
 
   // --- Stage 1 FIX: Dispatch through the runtime kernel ------------------
   // Previously: direct db.wallet.update + db.walletTransaction.create
-  // Now: dispatches wallet.credit or wallet.debit through the dispatcher,
-  // which produces events + ledger entries verified by the constitution.
-  const { runtime } = await import('@/runtime');
+  // Now: dispatches wallet.credit or wallet.debit through the runtimeHost,
+  // which routes to the isolated runtime for the environment. NO CONTAMINATION:
+  // no longer uses the bare `runtime` singleton.
+  const { runtimeHost } = await import('@/runtime');
   const txType = action === 'add' ? 'CREDIT' : 'DEBIT';
   const delta = action === 'add' ? amount : -amount;
 
-  const dispatchResult = await runtime.dispatcher.dispatch({
+  const hostResult = await runtimeHost.execute({
     type: action === 'add' ? 'wallet.credit' : 'wallet.debit',
     payload: {
       walletId: `reserve:${currency}`,
@@ -213,9 +214,9 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  if (!dispatchResult.success) {
+  if (!hostResult.success) {
     return NextResponse.json(
-      { error: `Reserve adjustment failed: ${dispatchResult.error ?? dispatchResult.message}` },
+      { error: `Reserve adjustment failed: ${hostResult.error ?? hostResult.message}` },
       { status: 500 },
     );
   }

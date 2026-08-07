@@ -264,8 +264,18 @@ export class CorridorBalancer {
   }
 }
 
-/** Singleton corridor balancer. */
-export const corridorBalancer = new CorridorBalancer();
+/** Singleton corridor balancer (on globalThis for Next.js dev-mode safety). */
+declare global {
+  // eslint-disable-next-line no-var
+  var __PAYSWAP_CORRIDOR_BALANCER: CorridorBalancer | undefined;
+}
+
+export const corridorBalancer: CorridorBalancer =
+  globalThis.__PAYSWAP_CORRIDOR_BALANCER ?? new CorridorBalancer();
+
+if (!globalThis.__PAYSWAP_CORRIDOR_BALANCER) {
+  globalThis.__PAYSWAP_CORRIDOR_BALANCER = corridorBalancer;
+}
 
 /** Re-export the liquidity-network corridor key helper for convenience. */
 export { liquidityCorridorKey };

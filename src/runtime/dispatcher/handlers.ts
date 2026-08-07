@@ -565,6 +565,31 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
                 streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
                 payload: { contractId: `sc_${paymentId}`, fundedAt: now } as unknown as Record<string, unknown>,
               });
+            } else {
+              // E5 GAP FIX: fallback.tier is null (loop paused or no fallback
+              // available). Previously: the payment was already marked
+              // payment.completed but NO settlement events were emitted — a
+              // silent failure (merchant sees "completed", no settlement
+              // exists). Now: emit a BLOCKED settlement contract so the
+              // projection can see the payment completed but settlement was
+              // blocked. This is not a payment.failed (the lifecycle already
+              // transitioned to completed), but it IS an auditable record
+              // that the settlement didn't happen.
+              events.push({
+                type: 'settlement.contract.created',
+                streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
+                payload: {
+                  contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy,
+                  amount: netAmount, escrowAmount: 0, escrowCurrency: 'USDC',
+                  strategy: 'Tier 3: backing_blocked_no_fallback',
+                  status: 'BLOCKED',
+                  blockedReason: tier3MintCheck.reason,
+                  closedLoop: 'E5_backing_fallback',
+                  fallbackTier: null,
+                  createdAt: now,
+                } as unknown as Record<string, unknown>,
+              });
+              // No settlement.contract.funded — the contract is BLOCKED, not funded.
             }
           } else {
             // Destination has FIAT reserve → mint twin token (FIAT deposit → mint)

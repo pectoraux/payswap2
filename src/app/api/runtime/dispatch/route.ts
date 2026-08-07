@@ -18,7 +18,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { runtime } from '@/runtime';
+import { runtime, runtimeHost } from '@/runtime';
 import type { RuntimeCommand } from '@/runtime';
 
 export const dynamic = 'force-dynamic';
@@ -44,11 +44,20 @@ export async function POST(req: Request) {
     }
 
     const command: RuntimeCommand = { type, payload, metadata };
-    const result = await runtime.dispatcher.dispatch(command);
+    // NO CONTAMINATION FIX: route through runtimeHost.execute() so the
+    // command goes to the isolated runtime for its environment (sandbox or
+    // live), not the shared bare `runtime` singleton.
+    const hostResult = await runtimeHost.execute(command);
 
     return NextResponse.json({
-      ok: result.success,
-      ...result,
+      ok: hostResult.success,
+      success: hostResult.success,
+      commandType: hostResult.commandType,
+      entityId: hostResult.entityId,
+      events: hostResult.events,
+      message: hostResult.message,
+      error: hostResult.error,
+      transactionId: hostResult.transactionId,
     });
   } catch (err) {
     return NextResponse.json(

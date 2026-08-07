@@ -76,7 +76,18 @@ class ClosedLoopAuditLog {
   }
 }
 
-export const closedLoopAuditLog = new ClosedLoopAuditLog();
+// Store on globalThis to survive Next.js dev-mode module duplication.
+declare global {
+  // eslint-disable-next-line no-var
+  var __PAYSWAP_CLOSED_LOOP_AUDIT_LOG: ClosedLoopAuditLog | undefined;
+}
+
+export const closedLoopAuditLog: ClosedLoopAuditLog =
+  globalThis.__PAYSWAP_CLOSED_LOOP_AUDIT_LOG ?? new ClosedLoopAuditLog();
+
+if (!globalThis.__PAYSWAP_CLOSED_LOOP_AUDIT_LOG) {
+  globalThis.__PAYSWAP_CLOSED_LOOP_AUDIT_LOG = closedLoopAuditLog;
+}
 
 // ── Per-loop switches (human override) ────────────────────────────────────
 
@@ -601,8 +612,13 @@ export function wireClosedLoops(): void {
   wired = true;
 
   // E1 + E3: drift alarm → rebalance (warning) or pause (critical)
-  eventEngine.on('treasury.reserve_drift_alarm', (payload: any) => {
-    const { currency, drift, level } = payload;
+  eventEngine.on('treasury.reserve_drift_alarm', (event: any) => {
+    // eventEngine wraps events as {id, type, payload, ts, frame}. The drift
+    // data is inside event.payload.
+    const data = event?.payload ?? event;
+    const currency = data?.currency;
+    const drift = data?.drift;
+    const level = data?.level;
     if (level === 'critical') {
       pauseCorridor(`drift_alarm:${level}`, currency, `critical_drift:${drift}`);
     } else {
@@ -612,15 +628,17 @@ export function wireClosedLoops(): void {
   });
 
   // E2: reserve low → rebalance
-  eventEngine.on('treasury.reserve_low', (payload: any) => {
-    const { currency, balance, available } = payload;
+  eventEngine.on('treasury.reserve_low', (event: any) => {
+    const data = event?.payload ?? event;
+    const { currency, balance, available } = data;
     const shortfall = Math.max(0, balance - available);
     autoRebalance('E2_low_rebalance', 'reserve_low', currency, shortfall);
   });
 
   // E4: info-severity proposal → auto-apply
-  eventEngine.on('treasury.migration_proposed', (payload: any) => {
-    const proposals: import('@/protocol/treasury-v2/migration-proposals').MigrationProposal[] = payload?.proposals ?? [];
+  eventEngine.on('treasury.migration_proposed', (event: any) => {
+    const data = event?.payload ?? event;
+    const proposals: import('@/protocol/treasury-v2/migration-proposals').MigrationProposal[] = data?.proposals ?? [];
     for (const p of proposals) {
       if (p.severity === 'info') {
         // Fire-and-forget — the actuator records its own audit trail.

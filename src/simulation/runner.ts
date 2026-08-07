@@ -11,7 +11,7 @@
  * goes through: handler → invariants → event store → ledger.
  */
 
-import { runtime } from '@/runtime';
+import { runtime, runtimeHost } from '@/runtime';
 import { db } from '@/lib/db';
 import { generateEconomy, getEconomyStats, type SimEconomy } from './economy';
 import { SCENARIO_LIBRARY, generateDailyTransactions, shouldTrigger, type SimulationScenario } from './scenarios';
@@ -89,7 +89,7 @@ export async function runSimulation(days: number = 120): Promise<SimulationResul
 
     for (const txn of txns) {
       try {
-        const result = await runtime.dispatcher.dispatch({
+        const result = await runtimeHost.execute({
           type: 'payment.create',
           payload: {
             merchantId: merchant.id,

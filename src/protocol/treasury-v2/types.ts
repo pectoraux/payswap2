@@ -133,6 +133,33 @@ export interface CorridorTarget {
   minReserve: number;
   maxReserve: number;
   rebalanceThreshold: number;
+  /** Last time this corridor was rebalanced (null = never). */
+  lastBalancedTs: number | null;
+}
+
+/** Configuration for a corridor target (input to CorridorBalancer.configure). */
+export interface CorridorTargetConfig {
+  corridor: CorridorId;
+  targetReserve: number;
+  minReserve: number;
+  maxReserve: number;
+  rebalanceThreshold: number;
+}
+
+/** Treasury corridor (from/to currencies). */
+export interface TreasuryCorridor {
+  from: string;
+  to: string;
+}
+
+/** Result of a corridor rebalance attempt. */
+export interface RebalanceResult {
+  rebalanced: boolean;
+  reason?: string;
+  from?: string;
+  to?: string;
+  amount?: number;
+  route?: string;
 }
 
 /** A corridor funding movement (in or out). */
