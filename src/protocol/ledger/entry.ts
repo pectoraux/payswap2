@@ -15,19 +15,23 @@
  * re-checks an existing entry.
  */
 import { uid, nowTs, round } from '@/kernel/support';
+import { Money } from '@/money/money';
 
-/** Helper: create a debit leg. */
+/** Helper: create a debit leg. Uses Money for exact rounding. */
 export function debit(accountCode: string, amount: number, currency: string, memo?: string): {
   accountCode: string; debit: number; credit: number; currency: string; memo?: string;
 } {
-  return { accountCode, debit: amount, credit: 0, currency, memo };
+  // MON-3: round to exact cents via Money to avoid float drift.
+  const exactAmount = Money.fromMajor(amount, currency as any).toNumber();
+  return { accountCode, debit: exactAmount, credit: 0, currency, memo };
 }
 
-/** Helper: create a credit leg. */
+/** Helper: create a credit leg. Uses Money for exact rounding. */
 export function credit(accountCode: string, amount: number, currency: string, memo?: string): {
   accountCode: string; debit: number; credit: number; currency: string; memo?: string;
 } {
-  return { accountCode, debit: 0, credit: amount, currency, memo };
+  const exactAmount = Money.fromMajor(amount, currency as any).toNumber();
+  return { accountCode, debit: 0, credit: exactAmount, currency, memo };
 }
 
 /** A single debit or credit against one account. Exactly one of debit/credit is non-zero. */

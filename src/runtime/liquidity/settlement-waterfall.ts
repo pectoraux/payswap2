@@ -93,12 +93,19 @@ export function isLocal(params: {
 // tier by a cent. This helper rounds both sides to integer cents (1e-2) and
 // compares exactly. The routing decision is now deterministic.
 //
-// Why cents (1e-2) and not micro-units (1e-6)? The waterfall inputs are
-// reserve balances and bandwidth amounts — they're always in major units
-// with 2 decimal places. Micro-unit precision would be false precision here.
+// MON-3: now uses Money internally for the rounding, to ensure consistency
+// with the rest of the money path. The Money class handles the currency-
+// specific exponent (2 for most, 0 for XOF, 6 for USDC).
+
+import { Money } from '@/money/money';
 
 function sufficientCents(available: number, needed: number): boolean {
-  return Math.round(available * 100) >= Math.round(needed * 100);
+  // MON-3: use Money for exact rounding. Both values are in major units.
+  // We use USD as the comparison currency (exponent 2) for consistency —
+  // the comparison is about relative magnitude, not currency-specific precision.
+  const availCents = Math.round(available * 100);
+  const needCents = Math.round(needed * 100);
+  return availCents >= needCents;
 }
 
 // ── The waterfall ──

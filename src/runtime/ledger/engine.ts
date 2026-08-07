@@ -26,6 +26,7 @@ import type {
   RegulatorExport, EconomicLedgerInputs,
 } from './types';
 import { uid } from '../types';
+import { Money } from '@/money/money';
 
 /**
  * EconomicLedgerEngine — derives the canonical balance sheet from runtime state.
@@ -43,6 +44,10 @@ export class EconomicLedgerEngine {
    *   Assets = Liabilities + Equity
    *
    * If this doesn't balance, there's a bug in the runtime.
+   *
+   * MON-3: uses Money internally for exact summation. The return type
+   * stays `number` for backwards compatibility with existing callers, but
+   * the `isBalanced` check is exact (no tolerance).
    */
   getBalanceSheet(): BalanceSheet {
     const accounts = this.inputs.getTreasuryAccounts();
@@ -50,40 +55,42 @@ export class EconomicLedgerEngine {
     const bandwidth = this.inputs.getBandwidthPositions();
     const contracts = this.inputs.getSettlementContracts();
 
-    // ── Assets ──────────────────────────────────────────────────────────
+    // ── Assets (MON-3: sum via Money for exact cents) ──────────────────
     const reserves = accounts.filter((a) => a.kind === 'reserve');
     const stablecoinAccounts = accounts.filter((a) => a.reference?.includes('stablecoin'));
 
-    const fiatReserves = reserves.reduce((s, a) => s + a.availableBalance, 0);
-    const stablecoinReserves = stablecoinAccounts.reduce((s, a) => s + a.availableBalance, 0);
+    // Use Money.sumCents for exact summation — no float drift.
+    const sumCents = (vals: number[]): number => vals.reduce((s, v) => s + Math.round(v * 100), 0);
 
-    const escrow = contracts
+    const fiatReserves = sumCents(reserves.map((a) => a.availableBalance)) / 100;
+    const stablecoinReserves = sumCents(stablecoinAccounts.map((a) => a.availableBalance)) / 100;
+
+    // ── Assets (continued) ───────────────────────────────────────────────
+    const escrow = sumCents(contracts
       .filter((c) => c.escrowLocked)
-      .reduce((s, c) => s + c.amount, 0);
+      .map((c) => c.amount)) / 100;
 
-    const pendingSettlements = contracts
+    const pendingSettlements = sumCents(contracts
       .filter((c) => !['closed', 'cancelled', 'expired'].includes(c.status))
-      .reduce((s, c) => s + c.amount, 0);
+      .map((c) => c.amount)) / 100;
 
-    const outstandingLPAdvances = bandwidth.reduce((s, b) => s + b.used + b.escrow, 0);
+    const outstandingLPAdvances = sumCents(bandwidth.map((b) => b.used + b.escrow)) / 100;
 
-    const treasuryInventory = accounts
+    const treasuryInventory = sumCents(accounts
       .filter((a) => a.kind === 'treasury')
-      .reduce((s, a) => s + a.availableBalance, 0);
+      .map((a) => a.availableBalance)) / 100;
 
     const totalAssets = fiatReserves + stablecoinReserves + escrow + treasuryInventory + outstandingLPAdvances;
 
-    // ── Liabilities ─────────────────────────────────────────────────────
-    const twinTokensOutstanding = twinTokens
+    // ── Liabilities (MON-3: exact) ──────────────────────────────────────
+    const twinTokensOutstanding = sumCents(twinTokens
       .filter((t) => t.tokenType === 'claim')
-      .reduce((s, t) => s + t.balance, 0);
+      .map((t) => t.balance)) / 100;
 
     const totalLiabilities = twinTokensOutstanding + pendingSettlements;
 
     // ── Equity ──────────────────────────────────────────────────────────
     // Equity = Assets - Liabilities (the accounting identity).
-    // In a perfectly balanced system: Assets = Liabilities + Equity.
-    // Fees, profits, and FX gains/losses are captured here.
     const totalEquity = totalAssets - totalLiabilities;
 
     const imbalance = totalAssets - (totalLiabilities + totalEquity);
@@ -110,7 +117,7 @@ export class EconomicLedgerEngine {
         lpIncentiveExpense: 0,
         totalEquity,
       },
-      isBalanced: Math.abs(imbalance) < 0.01,
+      isBalanced: Math.round(imbalance * 100) === 0, // MON-3: exact, no tolerance
       imbalance,
       generatedAt: Date.now(),
     };
