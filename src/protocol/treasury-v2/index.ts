@@ -65,6 +65,33 @@ export {
   type MigrationProposal,
 } from './migration-proposals';
 
+// Closed-loop controllers: pair every observer with an actuator.
+// "A system that computes the right number and doesn't act on it is more
+// dangerous than one that never computed it."
+export {
+  wireClosedLoops,
+  wireRebalanceInputs,
+  wireProposalInputs,
+  wireNetSettleInputs,
+  wireAuctionInputs,
+  startNetSettlementCycle,
+  stopNetSettlementCycle,
+  runNetSettlementCycle,
+  backingFallbackTier,
+  fxBlockPayment,
+  auctionTimeoutRefund,
+  pauseLoop,
+  resumeLoop,
+  loopStatus,
+  loopCapsConfig,
+  closedLoopAuditLog,
+  type ClosedLoopAction,
+  type RebalanceInputs,
+  type ProposalApplyInputs,
+  type NetSettleInputs,
+  type AuctionRefundInputs,
+} from './closed-loop-controllers';
+
 export {
   MintLimitEngine,
   BurnLimitEngine,

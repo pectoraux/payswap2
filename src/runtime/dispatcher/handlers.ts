@@ -27,9 +27,10 @@ import type { UncommittedEvent } from '../events';
 import type { RuntimeSnapshot } from '../invariants';
 import type { Environment } from '../types';
 import { uid } from '../types';
-import { selectSettlementSource, isLocal, twinTokenSymbol, twinTokenCode, resolvePayment, type WaterfallInput, type WaterfallResult, type SettlementTier, TIER_FEES, TIER_NAMES } from '../liquidity/settlement-waterfall';
+import { selectSettlementSource, isLocal, twinTokenCode, resolvePayment, type WaterfallInput, type WaterfallResult, type SettlementTier, TIER_FEES, TIER_NAMES } from '../liquidity/settlement-waterfall';
 import { backingVerifier } from '../../protocol/treasury-v2/backing';
 import { reserveDriftMonitor } from '../../protocol/treasury-v2/reserve-drift-monitor';
+import { backingFallbackTier, fxBlockPayment } from '../../protocol/treasury-v2/closed-loop-controllers';
 import { netSettlementEngine } from '../../protocol/settlement/net-settlement';
 import { lpMandateService } from '../liquidity/lp-mandate-service';
 import { fxExposureService } from '../liquidity/fx-exposure-service';
@@ -209,7 +210,63 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
     });
 
     // 2. payment.completed OR payment.failed — the lifecycle transition.
-    if (success) {
+    // E7 CLOSED LOOP (pre-check): for cross-currency payments, check FX
+    // exposure BEFORE emitting payment.completed. If the limit is breached,
+    // emit payment.failed instead — the payment is blocked, not completed.
+    // This is the "act" that was previously missing: the FX exposure was
+    // computed (and a limit_breached event emitted) but the payment
+    // continued as if nothing happened.
+    let fxBlockBreached: { corridor: string; reason: string } | null = null;
+    if (success && (payload.sourceCurrency ?? payload.currency) !== (payload.destinationCurrency ?? payload.currency)) {
+      const srcCcy = payload.sourceCurrency ?? payload.currency;
+      const dstCcy = payload.destinationCurrency ?? payload.currency;
+      // Pre-flight: would opening this position breach the limit?
+      const projectedPosition = fxExposureService.openPosition({
+        fromCurrency: srcCcy,
+        toCurrency: dstCcy,
+        rate: 1,
+        sourceAmount: payload.amount,
+        destinationAmount: netAmount,
+        paymentId,
+      });
+      if (!projectedPosition) {
+        // Limit would be breached → block the payment.
+        const blockAction = fxBlockPayment(paymentId, `${srcCcy}:${dstCcy}`, 'FX exposure limit breached (pre-flight)');
+        fxBlockBreached = { corridor: `${srcCcy}:${dstCcy}`, reason: blockAction.reason ?? 'FX exposure limit breached' };
+        events.push({
+          type: 'fx.limit_breached',
+          streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
+          payload: {
+            paymentId, corridor: fxBlockBreached.corridor, reason: fxBlockBreached.reason,
+            blockedAt: now, closedLoop: 'E7_fx_block', closedLoopActionId: blockAction.id,
+            paymentBlocked: true, preFlight: true,
+          } as unknown as Record<string, unknown>,
+        });
+      } else {
+        // Position opened successfully → close it immediately; the tier-5
+        // path will re-open it if the payment actually reaches tier 5.
+        // (This is a pre-flight check; we don't want to keep the position
+        // open if the payment fails for other reasons.)
+        fxExposureService.closePosition(projectedPosition.id);
+      }
+    }
+
+    if (success && fxBlockBreached) {
+      // E7 ACTUATOR: emit payment.failed (not payment.completed) so the
+      // lifecycle projection marks the payment as FAILED. This is the
+      // "act" — previously the payment would complete despite the FX breach.
+      events.push({
+        type: 'payment.failed',
+        streamId, streamType: 'payment', kind: 'domain',
+        payload: {
+          paymentId,
+          intentId: command.metadata.commandId ?? command.metadata.correlationId,
+          reason: `FX exposure limit breached for corridor ${fxBlockBreached.corridor}`,
+          failedAt: now,
+          closedLoop: 'E7_fx_block',
+        } as unknown as Record<string, unknown>,
+      });
+    } else if (success) {
       events.push({
         type: 'payment.completed',
         streamId,
@@ -273,13 +330,14 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
         lpFiatAvailable,
         lpCryptoAvailable,
         payswapStablecoinAvailable: 20_000,
-        payswapTwinTokenAvailable: 50_000, // tGHS minted for Ghana
+        payswapTwinTokenAvailable: 50_000, // TWINGHS minted for Ghana
       };
 
       const waterfall = selectSettlementSource(waterfallInput);
       const treasuryStreamId = `${env}:treasury:${paymentId}`;
       const local = isLocal({ originCountry: fromCountryName, destinationCountry: toCountryName, sourceCurrency: fromCcy, destinationCurrency: toCcy });
-      const twinSymbol = twinTokenSymbol(toCcy);
+      // Stellar convention everywhere — one canonical twin token name.
+      const twinSymbol = twinTokenCode(toCcy);
 
       // S3: Per-leg resolution — derive strategy from the waterfall per leg
       const legResolution = resolvePayment({
@@ -322,8 +380,8 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           toCurrency: toCcy,
           senderHasFiatReserve: senderState.hasFiatReserve,
           receiverHasFiatReserve: receiverState.hasFiatReserve,
-          twinTokenSymbol: twinSymbol,         // display: tGHS
-          twinTokenCode: twinTokenCode(toCcy), // Stellar: TWINGHS
+          twinTokenSymbol: twinSymbol,         // Stellar convention: TWINGHS
+          twinTokenCode: twinSymbol,           // same — one canonical name
           skipped: waterfall.skipped,
           // S3: Per-leg resolution details
           sendLeg: { tier: legResolution.sendLeg.tier, source: legResolution.sendLeg.source, served: legResolution.sendLeg.served },
@@ -341,7 +399,7 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
         // Twin token supply tracks reserve *top-ups* (treasury operations),
         // not payment flows. A local GHS→GHS payment is a symmetric FIAT
         // movement (+X in, −X out) → net reserve movement 0 → net twin
-        // movement 0. Minting tGHS here would be wasteful and would
+        // movement 0. Minting TWINGHS here would be wasteful and would
         // pollute the backing invariant. See DECISIONS.md (I2).
         //
         // What LOCAL_RAIL DOES do: credit the FIAT reserve (sender's deposit)
@@ -402,11 +460,41 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           const tier3StellarCode = twinTokenCode(toCcy);
           const tier3MintCheck = backingVerifier.onMint(tier3StellarCode, netAmount);
           if (!tier3MintCheck.allowed) {
+            // E5 CLOSED LOOP: backing block → tier fallback.
+            // Previously: emit treasury.backing_blocked and continue with NO mint
+            // (silently broken). Now: emit the block AND record the fallback
+            // decision so the actuator can move the payment to tier 4 (LP crypto).
+            const fallback = backingFallbackTier(3, tier3StellarCode, netAmount);
             events.push({
               type: 'treasury.backing_blocked',
               streamId: `${env}:treasury:${paymentId}`, streamType: 'treasury', kind: 'domain',
-              payload: { paymentId, assetCode: tier3StellarCode, displaySymbol: twinSymbol, amount: netAmount, reason: tier3MintCheck.reason, blockedAt: now } as unknown as Record<string, unknown>,
+              payload: {
+                paymentId, assetCode: tier3StellarCode, displaySymbol: twinSymbol,
+                amount: netAmount, reason: tier3MintCheck.reason, blockedAt: now,
+                // E5: tier fallback decision (the actuator's recommendation).
+                fallbackTier: fallback.tier,
+                fallbackReason: fallback.reason,
+                closedLoop: 'E5_backing_fallback',
+              } as unknown as Record<string, unknown>,
             });
+            // E5 ACTUATOR: if fallback is tier 4, emit a liquidity.resolved
+            // event that records the fallback. (We don't re-run the waterfall
+            // here — the handler is pure. The fallback is recorded as an
+            // event so the projection + dispatcher can act on it.)
+            if (fallback.tier === 4) {
+              events.push({
+                type: 'liquidity.resolved',
+                streamId: `${env}:liquidity:${paymentId}`, streamType: 'liquidity', kind: 'domain',
+                payload: {
+                  paymentId, tier: 4, source: 'lp_crypto',
+                  amount: netAmount, lpCryptoAvailable,
+                  feeBps: TIER_FEES[4].bps, lpSharePct: TIER_FEES[4].lpPct,
+                  reason: `E5 BACKING FALLBACK: tier 3 backing blocked (${tier3MintCheck.reason}), falling back to tier 4 (LP crypto) for ${paymentId}`,
+                  trigger: 'backing_blocked',
+                  resolvedAt: now,
+                } as unknown as Record<string, unknown>,
+              });
+            }
           } else {
             // Destination has FIAT reserve → mint twin token (FIAT deposit → mint)
             events.push({
@@ -512,14 +600,13 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
               streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
               payload: { paymentId, positionId: fxPosition.id, corridor: fxPosition.corridor, sourceAmount: payload.amount, rate: 1, openedAt: now } as unknown as Record<string, unknown>,
             });
-          } else {
-            // FX limit breached — block the payment
-            events.push({
-              type: 'fx.limit_breached',
-              streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
-              payload: { paymentId, corridor: `${fromCcy}:${toCcy}`, reason: 'FX exposure limit breached', blockedAt: now } as unknown as Record<string, unknown>,
-            });
           }
+          // E7 NOTE: the FX limit breach case is handled by the pre-flight
+          // check above (before payment.completed). If we reach this point,
+          // the pre-flight passed and the position was opened successfully.
+          // The duplicate block here was removed because it would have
+          // emitted payment.failed AFTER payment.completed, creating an
+          // inconsistent lifecycle.
         }
       }
 

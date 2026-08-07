@@ -1,327 +1,222 @@
-# PaySwap Architecture Audit & Roadmap (v2 — Simplified)
+# PaySwap Architecture Audit & Roadmap (v3 — Post-Wiring, Honest)
 
-## One-Sentence Vision
-
-> A liquidity network with two reserve layers: local FIAT reserves for domestic settlement, and crypto reserves for cross-border settlement, with LPs extending reserve capacity through approved bandwidth when PaySwap's own reserves are insufficient.
-
----
-
-## The Simplified Model
-
-### Two reserve layers, one clear rule:
-
-```
-Local payments  → FIAT reserves
-Cross-border    → Crypto reserves
-```
-
-### Reserve types:
-
-| Reserve | Used for | Example |
-|---------|----------|---------|
-| **FIAT reserves** | Local transfers, merchant settlement, cash-out, wallet top-ups | GHS bank account in Ghana |
-| **Crypto reserves** | Cross-border movement where no FIAT reserve exists | USDC (stablecoin) |
-| **Twin tokens** | Cross-border where FIAT reserve DOES exist (1:1 mirror) | `tGHS` = mirror of GHS FIAT reserve |
-
-### Evolution path:
-
-```
-stablecoin-heavy cross-border liquidity
-        ↓ (as PaySwap opens more FIAT reserves)
-more FIAT reserves → more twin-token reserves
-        ↓
-less stablecoin dependency
-```
+> **One-sentence vision:** A liquidity network with two reserve layers (local
+> FIAT, cross-border crypto) where every observer is paired with an actuator,
+> and demo + live data share one pipeline with zero contamination.
 
 ---
 
-## LP Role: Reserve Capacity Providers
+## The two design principles this audit measures against
 
-LPs are NOT a separate settlement layer — they **extend** PaySwap's reserve capacity.
-
-### A. LP FIAT bandwidth
-In countries where PaySwap doesn't yet have enough FIAT reserves, LPs let PaySwap auto-settle by withdrawing from their PSP/bank/rail accounts. LPs are compensated when their bandwidth is used.
-
-### B. LP crypto bandwidth
-In countries without FIAT reserves, LPs provide stablecoin bandwidth for cross-border settlement via blockchain rails.
-
----
-
-## The Settlement Waterfall
-
-This is the ONLY priority order — simple and predictable:
-
-```
-1. PaySwap FIAT reserves          (cheapest — our own money, 0 LP fee)
-2. LP FIAT bandwidth              (LP extends our fiat capacity, LP fee)
-3. PaySwap crypto reserves        (our USDC/twin tokens, 0 LP fee)
-4. LP crypto bandwidth            (LP extends our crypto capacity, LP fee)
-5. LP marketplace auction         (open auction — last resort, highest fee)
-```
-
-### Decision flow:
-
-```
-Customer Payment
-      ↓
-Settlement Router
-      ↓
-Is this local (same country)?
-
-YES → Try FIAT waterfall:
-        1. PaySwap FIAT reserve sufficient? → Settle, mint twin token
-        2. LP FIAT bandwidth available? → Settle via LP, compensate LP
-        3. Neither? → Open marketplace auction
-
-NO → Try Crypto waterfall:
-        1. Does destination have FIAT reserve? 
-           YES → Use twin token (mint/burn on Stellar)
-           NO  → Use stablecoin (USDC transfer on Stellar)
-        2. PaySwap crypto reserve sufficient? → Settle
-        3. LP crypto bandwidth available? → Settle via LP
-        4. Neither? → Open marketplace auction
-```
+1. **No orphans.** Every observer (`ReserveDriftMonitor`, `BackingVerifier`,
+   `MigrationProposalEngine`, `ReserveMonitor`, `RuntimeHost`) must be wired
+   to an actuator that ACTS on what the observer computes. A dashboard that
+   reports a problem the system doesn't fix is worse than no dashboard —
+   because the dashboard says the problem is handled.
+2. **No contamination.** Demo and live data must flow through the same
+   pipeline (so demo code is production-tested) but never mix at any layer
+   (event store, snapshot, projection, singleton state, invariant engine).
 
 ---
 
-## The Core Invariant
+## Vision vs Reality (v3 — more honest, more granular)
 
-```
-FIAT reserve movement ↔ matching reserve asset movement
-```
+> Legend: ✅ done · 🟡 computed but not acted on · 🟠 computed but isolated from
+> production · 🔴 missing or broken · ⚠️ partial
 
-- FIAT deposited into reserve → matching twin token minted
-- FIAT withdrawn from reserve → matching twin token burned
-- This gives exact 1:1 backing for the FIAT reserve layer
+### A. The money path
 
----
+| # | Vision | Reality | Status |
+|---|---|---|---|
+| A1 | One pipeline: API → `runtimeHost.execute()` → dispatcher → handler → invariant → event store → projection | Production `paymentService` / `refundService` / `payoutService` call `runtime.dispatcher.dispatch()` directly, **bypassing `RuntimeHost`**. The isolated host is only used by showcase + tests. | 🟠 |
+| A2 | Sandbox + live share the pipeline but never share state | Sandbox + live share ONE bare `runtime` singleton with one EventStore, one `snapshotCache`, one InvariantEngine. `RuntimeHost.verifyIsolation()` proves isolation is *possible* — production just doesn't use it. | 🔴 |
+| A3 | Stream IDs namespaced by env (`sandbox:payment:X` vs `live:payment:X`) | Handlers do namespace stream IDs by env. ✅ But the shared snapshot mixes them back together. | ⚠️ |
+| A4 | Per-env event stores | `RuntimeHost` creates 2 `InMemoryEventStore`s. Bare `runtime` has 1. `PostgresEventStore` writes to one global `EventRecord` table with no env column; `hydrate()` hardcodes `environment: 'sandbox'` for ALL loaded events. | 🔴 |
+| A5 | Per-env snapshot cache | `snapshotCache` is a module-level singleton shared across envs. A sandbox dispatch's invariants are verified against a snapshot containing live events. | 🔴 |
+| A6 | Per-env invariant engine | `RuntimeHost` creates 2. Bare `runtime` has 1. No `EnvironmentBoundaryInvariant` exists in the 17 built-ins. | 🔴 |
+| A7 | Per-env projections | All 4 primary projections (`Payment`/`Wallet`/`Treasury`/`Refund`) key by entity ID with no env prefix. `PaymentsService.list(merchantId)` returns sandbox + live together. `PaymentView` has no env field. | 🔴 |
 
-## Current State vs Target
+### B. The settlement waterfall (the ONLY routing rule)
 
-| Component | Current State | Target State |
-|-----------|--------------|--------------|
-| **FIAT reserves** | Hardcoded $50K Ghana, $0 others | Real bank accounts, real balance tracking |
-| **Crypto reserves** | Hardcoded $20K USDC | Real Stellar wallet, real USDC/twin token balances |
-| **Twin tokens** | 3 implementations, none wired | Single Stellar-backed engine, minted/burned on FIAT movement |
-| **LP FIAT bandwidth** | Hardcoded split, no LP queried | Real LP bank authorization, auto-debit, compensation |
-| **LP crypto bandwidth** | Hardcoded split | Real LP USDC bandwidth on Stellar |
-| **Marketplace auction** | 3 implementations, none triggered | Single auction engine, triggered as last resort |
-| **Local rails** | 13 adapters, none called | Real MTN MoMo / bank transfer for local disbursement |
-| **Stellar** | Real adapter exists, stub used | Real adapter for twin token mint/burn + USDC transfer |
+| # | Vision | Reality | Status |
+|---|---|---|---|
+| B1 | Waterfall routes every payment | `PaymentCommandHandler` runs `selectSettlementSource()` on every payment, emits `routing.decision` with tier + per-leg resolution. | ✅ |
+| B2 | 5 tiers, deterministic priority | Tiers 1 (PaySwap FIAT) → 2 (LP FIAT) → 3 (PaySwap crypto) → 4 (LP crypto) → 5 (auction). Fee model per tier. | ✅ |
+| B3 | LOCAL vs CROSS-BORDER split | `isLocal()` checks country + currency. LOCAL can only use tiers 1, 2, 5. CROSS-BORDER can only use tiers 3, 4, 5. | ✅ |
+| B4 | Strategy derived from per-leg waterfall (S3) | `resolvePayment()` → `resolveLeg()` × 2 → `deriveStrategy()`. 5 strategy names produced, no hand-written branch. | ✅ |
+| B5 | LP resolved at compile time (S4) | All bandwidth actions carry specific `lpId`s from `BandwidthPosition`. No `'auto_select'`. | ✅ |
+| B6 | Tier 5 parks, resumes, or refunds — never hangs | `auctionEngine.open()` is called on tier 5. Auction has a deadline. But no auto-resume on fill / refund on timeout wired into the dispatcher. | 🟡 |
+| B7 | Backing block triggers tier fallback | `backingVerifier.onMint()` blocks the mint, but the handler just records `treasury.backing_blocked` and **the payment continues with a missing mint**. No fallback to tier 4. | 🟡 |
 
----
+### C. The core invariant (FIAT movement ↔ twin token movement)
 
-## What to Keep, Delete, Build
+| # | Vision | Reality | Status |
+|---|---|---|---|
+| C1 | FIAT deposit → twin token minted | Tier 3 cross-border path: real sender FIAT deposit → `twin.minted` event. LOCAL_RAIL does NOT mint (I2 decision). | ✅ |
+| C2 | FIAT withdraw → twin token burned | `backingVerifier.recordBurn()` exists. Dispatcher does NOT call it anywhere — no `twin.burned` event is emitted on disbursement. | 🟡 |
+| C3 | 1:1 backing always auditable | `backingVerifier.verifyBacking()` exists, emits `treasury.backing_verified` / `treasury.backing_mismatch`. No caller invokes it on a cycle. | 🟡 |
+| C4 | Backing shortfall blocks the mint | `backingVerifier.onMint()` returns `allowed: false`. Handler emits `treasury.backing_blocked` and **continues without minting** — no tier fallback. | 🟡 |
+| C5 | Twin token name = Stellar code everywhere | `twinTokenSymbol()` now aliases `twinTokenCode()` → both return `TWIN<CCY>`. UI, events, and on-chain use one name. | ✅ |
 
-### KEEP (solid foundation)
-- ✅ `src/runtime/dispatcher/` — event-sourced pipeline, OCC, invariants
-- ✅ `src/runtime/ledger/engine.ts` — double-entry ledger
-- ✅ `src/runtime/liquidity/policy-engine.ts` — strategy selection (needs simplification to 2-layer model)
-- ✅ `src/runtime/host/runtime-host.ts` — sandbox/live isolation
-- ✅ `src/protocol/chains/stellar/adapter.ts` — real Stellar adapter
-- ✅ `src/protocol/twin-token/engine.ts` — real Stellar-backed twin token engine
-- ✅ `src/protocol/settlement/escrow.ts` — real escrow lifecycle
-- ✅ `src/protocol/settlement/auctions.ts` — real auction engine
-- ✅ `src/protocol/providers/` — 13 provider adapters
-- ✅ `src/live/` — real Stripe/Paystack/Flutterwave/Stellar connectors
+### D. Observers → Actuators (the "no orphans" principle)
 
-### DELETE (parallel stubs, duplicates, dead code)
-- ❌ `src/runtime/settlement/adapters.ts` — stub returning fake txHashes
-- ❌ `src/kernel/twin-token.ts` — duplicate of `protocol/twin-token/engine.ts`
-- ❌ `src/kernel/treasury.ts` + `treasury-ai.ts` — simulation-only
-- ❌ `src/protocol/treasury.ts` (old v1)
-- ❌ `src/protocol/contracts/index.ts` — unused SmartContract interfaces
-- ❌ 13 NoOp engine stubs in `src/runtime/engines/`
-- ❌ `src/kernel/liquidity-planner.ts` — superseded by policy engine
-- ❌ `src/runtime/economic/marketplace.ts` — duplicate of auction engine
-- ❌ `src/runtime/engines/liquidity-marketplace/service.ts` — duplicate, read-only
+| # | Observer | Computed | Acted on? | Status |
+|---|---|---|---|---|
+| D1 | `ReserveDriftMonitor` | per-currency drift %, alarm threshold (30%/24h) | 🟡 Alarm event fires. **Nothing listens.** No auto-rebalance. | 🟡 |
+| D2 | `ReserveMonitor.alertIfLow()` | low-reserve alert | 🟡 Alert event fires. **Nothing listens.** No auto-rebalance. | 🟡 |
+| D3 | `MigrationProposalEngine` | proposals on threshold crossings | 🟡 Proposals generated. **Never executed, even at `info` severity.** Operator-in-the-loop is good for `advisory`/`urgent`; `info` should auto-apply. | 🟡 |
+| D4 | `BackingVerifier` block | mint blocked with shortfall named | 🟡 Block recorded. **No tier fallback** — payment continues with a missing mint. | 🟡 |
+| D5 | `NetSettlementEngine` | corridor obligations recorded | 🟡 Obligations recorded. `CorridorBalancer` exists but is only called by manual `/api/treasury/rebalance`. **No cycle-based auto-net settlement.** | 🟡 |
+| D6 | `FxExposureService` | per-corridor open FX position + limit | 🟡 Position opened on tier 5. **No auto-hedge or auto-block when limit breached.** Handler emits `fx.limit_breached` but the payment continues. | 🟡 |
+| D7 | `LpMandateService` | per-LP mandate availability | ✅ Tier 2 checks mandate availability before recording `lp.fiat_debited`. | ✅ |
+| D8 | `RuntimeHost` | per-env runtime contexts with isolation | 🟠 `verifyIsolation()` passes. **Production path bypasses it.** The host is computed but not used. | 🟠 |
+| D9 | `CorridorBalancer` | rebalance moves net liquidity donor→recipient | 🟡 Only invoked manually. **No auto-trigger from drift/low alerts.** | 🟡 |
+| D10 | `AuctionEngine` | opens auction on tier 5 | 🟡 Opens auction. **No auto-award on bid, no auto-refund on timeout.** | 🟡 |
 
-### BUILD (wiring + simplification)
+### E. The treasury controllers (closed loops to build)
 
-#### A. Simplify the policy engine to 2-layer model
-Replace the 5-strategy model with the 2-layer waterfall:
-
-Current:
-```
-LOCAL_RAIL | RESERVE_TO_RESERVE | RESERVE_TO_MARKET | MARKET_TO_RESERVE | MARKET_TO_MARKET
-```
-
-Simplified:
-```
-LOCAL (same country) → FIAT waterfall
-CROSS_BORDER → Crypto waterfall (twin token if FIAT reserve exists, stablecoin if not)
-```
-
-#### B. Wire real execution to the waterfall steps
-Each waterfall step calls a real implementation:
-
-| Waterfall Step | Real Implementation |
-|---------------|-------------------|
-| PaySwap FIAT reserve | Check real bank balance → disburse via local rail |
-| LP FIAT bandwidth | Query LP bank authorization → auto-debit → compensate LP |
-| PaySwap crypto reserve | Check Stellar wallet → transfer USDC or mint/burn twin token |
-| LP crypto bandwidth | Query LP Stellar bandwidth → transfer → compensate LP |
-| Marketplace auction | `auctionEngine.open()` → LPs bid → `auctionEngine.close()` → award |
-
-#### C. Implement the core invariant
-```
-FIAT deposited → twin token minted on Stellar
-FIAT withdrawn → twin token burned on Stellar
-```
+| # | Loop | Trigger | Action | Status |
+|---|---|---|---|---|
+| E1 | Drift → rebalance | `treasury.reserve_drift_alarm` (warning) | `corridorBalancer.checkAndRebalance(corridor, network, monitor)` up to a per-cycle cap | 🔴 |
+| E2 | Low → rebalance | `treasury.reserve_low` | same as E1 | 🔴 |
+| E3 | Critical drift → pause | `treasury.reserve_drift_alarm` (critical) | pause corridor disbursement + alert human | 🔴 |
+| E4 | `info` proposal → auto-apply | migration proposal severity=`info` | execute the conversion via dispatcher, audit log | 🔴 |
+| E5 | Backing block → tier fallback | `treasury.backing_blocked` | retry payment at next waterfall tier | 🔴 |
+| E6 | Net settlement cycle | every N minutes | `corridorBalancer.settle()` for all corridors with obligations | 🔴 |
+| E7 | FX limit breach → block + hedge | `fx.limit_breached` | block the payment (not just log) + open hedge | 🔴 |
+| E8 | Auction timeout → refund | auction deadline passed | `settlementEscrow.refund()` to the payer | 🔴 |
 
 ---
 
-## Roadmap
+## The 12 contamination risks (from the pipeline audit)
 
-### Phase 0: Simplify & Clean (~2 days)
-
-**Goal:** Reduce to the 2-layer model, delete dead code
-
-- [ ] **0.1 Simplify LiquidityPolicyEngine** to 2-layer waterfall
-  - Replace 5 strategies with: `LOCAL` (fiat waterfall) + `CROSS_BORDER` (crypto waterfall)
-  - The waterfall priority is hardcoded: FIAT reserve → LP FIAT → crypto reserve → LP crypto → auction
-  - Remove `RESERVE_TO_RESERVE`, `RESERVE_TO_MARKET`, `MARKET_TO_RESERVE`, `MARKET_TO_MARKET` as separate strategies
-  - The router just asks: "Is this local?" → FIAT waterfall; "Is this cross-border?" → Crypto waterfall
-
-- [ ] **0.2 Delete dead code**
-  - Stub adapters, duplicate twin token engine, old treasury, NoOp stubs, duplicate marketplace
-
-- [ ] **0.3 Simplify PaymentCommandHandler**
-  - Remove the 5-strategy switch
-  - Replace with: `if (local) { fiatWaterfall() } else { cryptoWaterfall() }`
-  - Each waterfall step tries the next priority if the current one is insufficient
-
-### Phase 1: Wire Real Execution (~1 week)
-
-**Goal:** Connect existing implementations to the waterfall
-
-- [ ] **1.1 Real FIAT reserve balance**
-  - Replace hardcoded `$50K Ghana` with real balance lookup
-  - Track FIAT reserves per country in the event store
-  - When FIAT is deposited/withdrawn, emit `reserve.fiat.deposited` / `reserve.fiat.withdrawn`
-
-- [ ] **1.2 Real twin token mint/burn on Stellar**
-  - When FIAT is deposited → call `twinTokenEngine.mint()` on Stellar
-  - When FIAT is withdrawn → call `twinTokenEngine.burn()` on Stellar
-  - This implements the core invariant: FIAT movement ↔ twin token movement
-
-- [ ] **1.3 Real crypto reserve balance**
-  - Replace hardcoded `$20K USDC` with real Stellar wallet balance
-  - Query Stellar account for USDC + twin token balances
-  - Use `src/live/stellar.ts` or `src/protocol/chains/stellar/adapter.ts`
-
-- [ ] **1.4 Real LP bandwidth query**
-  - Replace hardcoded LP split with real `BandwidthEngine.findAvailable()`
-  - LPs register their fiat + crypto bandwidth
-  - When bandwidth is consumed, update the LP's position
-
-- [ ] **1.5 Real local rail disbursement**
-  - For FIAT waterfall step 1: call provider adapter (MTN MoMo / bank) to disburse
-  - Use `providerRegistry.getByType('mobile_money')` or `('bank_account')`
-  - On provider confirmation → settlement confirmed
-
-- [ ] **1.6 Real escrow for marketplace auction**
-  - When waterfall reaches step 5 (auction):
-    - `settlementEscrow.freeze()` — lock the stablecoin
-    - `auctionEngine.open()` — open auction for LPs
-    - LPs bid via `/api/lp/bid`
-    - `auctionEngine.close()` — select winner(s)
-    - Winner disburses → `settlementEscrow.release()`
-
-### Phase 2: LP Bandwidth System (~2 weeks)
-
-**Goal:** Real LP registration, bandwidth, compensation
-
-- [ ] **2.1 LP registration API** — `/api/lp/register`
-  - LP provides: country, currency, bank account authorization, stablecoin address
-  - System registers LP in `BandwidthEngine`
-  - LP stakes collateral (twin tokens or USDC)
-
-- [ ] **2.2 LP fiat bandwidth** — auto-debit authorization
-  - LP authorizes PaySwap to debit their PSP/bank account
-  - When FIAT waterfall reaches step 2 (LP FIAT), system debits LP account
-  - LP is compensated with fee share
-
-- [ ] **2.3 LP crypto bandwidth** — Stellar bandwidth
-  - LP provides USDC bandwidth on Stellar
-  - When crypto waterfall reaches step 4 (LP crypto), system transfers from LP's Stellar account
-  - LP is compensated with fee share
-
-- [ ] **2.4 LP compensation** — fee distribution
-  - When LP bandwidth is used, LP earns their fee share (based on waterfall step)
-  - Step 2 (LP FIAT): lower fee (PaySwap's own rail, LP just provides capacity)
-  - Step 4 (LP crypto): higher fee (LP provides cross-border liquidity)
-  - Step 5 (auction): highest fee (market rate)
-
-### Phase 3: Real Cross-Border Settlement (~2 weeks)
-
-**Goal:** Actual money movement across borders
-
-- [ ] **3.1 Twin token settlement** — when destination has FIAT reserve
-  - Sender deposits FIAT in country A → mint `tA` twin token
-  - Transfer `tA` on Stellar to country B
-  - Burn `tA` in country B → withdraw FIAT from country B reserve
-  - This is the "twin token bridge" — 1:1 backed, no slippage
-
-- [ ] **3.2 Stablecoin settlement** — when destination has NO FIAT reserve
-  - Sender deposits FIAT in country A → mint `tA` twin token
-  - Swap `tA` → USDC on Stellar (or use PaySwap's USDC reserve)
-  - Transfer USDC to country B
-  - LP in country B provides fiat bandwidth → disburses to recipient
-  - LP is compensated from the USDC
-
-- [ ] **3.3 Stellar path payments** — optimized routing
-  - Use `pathPaymentQuote` to find the cheapest path
-  - May route through multiple hops (tA → USDC → tB)
-  - Settlement is atomic on Stellar
-
-### Phase 4: Marketplace Auction (~2 weeks)
-
-**Goal:** Real LP bidding as last resort
-
-- [ ] **4.1 Auction lifecycle in pipeline**
-  - When waterfall reaches step 5: `auctionEngine.open()`
-  - LPs receive notification (WebSocket or polling)
-  - LPs submit bids: amount, fee rate, estimated time
-  - `auctionEngine.close()` after timeout or full coverage
-  - Greedy cheapest-first selection (existing logic)
-  - Multi-LP partial fills for coverage optimization
-
-- [ ] **4.2 LP reputation tracking**
-  - Record: settlement speed, success rate, dispute rate
-  - Adjust LP ranking in future auctions
-  - Suspend LPs with poor performance
-
-### Phase 5: PSP Collection & Real Money In (~1 week)
-
-**Goal:** Customers actually pay into the system
-
-- [ ] **5.1 Payment collection via PSP**
-  - Customer pays via Paystack/FLW/Stripe
-  - PSP webhook → `payment.create` dispatched through pipeline
-  - FIAT deposited into PaySwap's bank account → twin token minted
-
-- [ ] **5.2 QR code payments**
-  - Generate dynamic QR for in-store checkout
-  - On scan + pay → webhook → pipeline dispatch
+1. **Two dispatch contracts, only one is used in production.** `runtimeHost.execute()` provides isolation; `runtime.dispatcher.dispatch()` (used by `paymentService`, `refundService`, `payoutService`, `/api/runtime/dispatch`, `/api/treasury/reserves/adjust`, `/api/treasury/freeze`) does not. — `src/runtime/planner/index.ts:387`, `src/services/payment-service.ts:110`.
+2. **Single shared EventStore** in the production path. — `src/runtime/index.ts:934-938`.
+3. **`PostgresEventStore.hydrate()` mislabels all loaded events as `'sandbox'`.** — `src/runtime/events/postgres-event-store.ts:72`.
+4. **`snapshotCache` is a module-level singleton** shared across envs. — `src/runtime/dispatcher/snapshot-cache.ts:162`.
+5. **All 7 treasury/liquidity singletons mix sandbox + live state.** `backingVerifier`, `reserveMonitor`, `reserveDriftMonitor`, `migrationProposalEngine`, `netSettlementEngine`, `lpMandateService`, `fxExposureService`.
+6. **All 4 primary projections mix sandbox + live state** in their `byId` maps.
+7. **The runtime EventStore subscriber only listens to the bare `runtime` singleton's event store** — events dispatched through `runtimeHost.execute()` are invisible to the dashboard. — `src/services/projections/index.ts:160`.
+8. **No `EnvironmentBoundaryInvariant`.** — `src/runtime/invariants/builtins.ts:688-706` (17 invariants, none env-related).
+9. **`/api/treasury/reserves/adjust` hardcodes `environment: 'sandbox'`** for what should be the most live of operations. — `src/app/api/treasury/reserves/adjust/route.ts:210`.
+10. **`/api/showcase` `simulatePaymentFlow` hardcodes `environment: 'sandbox'`** — fine for demo, but showcase payments and real sandbox payments share the same sandbox runtime inside the host.
+11. **`live-pipeline-test.ts` makes REAL Stripe/Paystack/Flutterwave/Stellar API calls but dispatches the corresponding event as `environment: 'sandbox'`.** Real money movement, sandbox event label.
+12. **The env-switcher UI toggles a cookie AND POSTs to `/api/runtime/host`** to switch the host's active environment — but since the production payment path doesn't use the host, this switch has zero effect on payment routing.
 
 ---
 
-## Simplified Fee Model
+## Roadmap — ordered by "danger of inaction"
 
-| Waterfall Step | Fee | Who Earns |
-|---------------|-----|-----------|
-| 1. PaySwap FIAT reserve | 0.8% (80bps) | 100% PaySwap |
-| 2. LP FIAT bandwidth | 1.0% (100bps) | 60% PaySwap, 40% LP |
-| 3. PaySwap crypto reserve | 1.2% (120bps) | 100% PaySwap |
-| 4. LP crypto bandwidth | 1.5% (150bps) | 20% PaySwap, 80% LP |
-| 5. Marketplace auction | 2.0%+ (200bps+) | 10% PaySwap, 90% LP (market rate) |
+> The most dangerous items are NOT the missing features — they're the
+> computed-but-not-acted-on observers. A dashboard that reports a problem
+> the system doesn't fix is worse than no dashboard, because the dashboard
+> says the problem is handled.
 
-**Customer sees:** the fee from whichever waterfall step settles their payment. The waterfall is transparent — cheaper for customers when PaySwap has reserves, more expensive when LPs/marketplace are needed.
+### Phase 0 — Close the orphan loops (HIGH danger of inaction)
+
+These are the "computed but not acted on" gaps. Each one is a place where
+the system reports a problem and then does nothing about it.
+
+- [ ] **0.1 Drift → rebalance closed loop (E1, E3)**
+  - When `reserveDriftMonitor` fires `treasury.reserve_drift_alarm` at `warning` level, auto-trigger `corridorBalancer.checkAndRebalance()` for the affected corridor up to a per-cycle cap.
+  - When the alarm is `critical`, pause corridor disbursement + alert human.
+  - **Acceptance:** a simulated drift over 30% triggers an auto-rebalance; the dashboard shows the rebalance event AND the drift clearing within 1 cycle.
+
+- [ ] **0.2 Low reserve → rebalance closed loop (E2)**
+  - Same as 0.1 but triggered by `treasury.reserve_low` from `reserveMonitor.alertIfLow()`.
+  - **Acceptance:** a reserve dropping below 20% available triggers an auto-rebalance.
+
+- [ ] **0.3 `info` proposal → auto-apply (E4)**
+  - `MigrationProposalEngine` proposals at severity `info` auto-execute via the dispatcher (small amount, capped, audit log).
+  - `advisory` and `urgent` proposals still require human approval.
+  - **Acceptance:** an `info` proposal appears and is auto-applied within 1 cycle; the dashboard shows the conversion event.
+
+- [ ] **0.4 Backing block → tier fallback (E5, B7, C4)**
+  - When `backingVerifier.onMint()` blocks a mint, the handler retries the payment at the next waterfall tier (tier 3 → tier 4 → tier 5).
+  - **Acceptance:** a cross-border payment with insufficient backing falls back to LP crypto (tier 4) instead of silently minting nothing.
+
+- [ ] **0.5 FX limit breach → block + hedge (E7)**
+  - When `fxExposureService.openPosition()` returns null (limit breached), the handler BLOCKS the payment (not just logs).
+  - **Acceptance:** a payment that would breach the FX limit is blocked with a clear reason, not allowed to continue.
+
+- [ ] **0.6 Auction timeout → refund (E8, B6)**
+  - When an auction deadline passes with no winning bid, `settlementEscrow.refund()` returns the funds to the payer.
+  - **Acceptance:** a tier-5 payment that times out is refunded, not left in PENDING_LIQUIDITY forever.
+
+- [ ] **0.7 Net settlement cycle (E6, D5)**
+  - A periodic job (default every 5 minutes) calls `corridorBalancer.settle()` for all corridors with obligations.
+  - **Acceptance:** a balanced corridor (KE→GH 1.2M, GH→KE 1.15M) settles 50K net, not 2.35M gross.
+
+### Phase 1 — Fix the contamination (HIGH danger of false confidence)
+
+These are the "computed but isolated from production" gaps. The system
+reports isolation is working (`verifyIsolation()` passes) but production
+bypasses the isolated path.
+
+- [ ] **1.1 Route production payment path through `runtimeHost.execute()`**
+  - `paymentService.create()`, `refundService.create()`, `payoutService.create()` use `runtimeHost.execute()` instead of `runtime.dispatcher.dispatch()`.
+  - **Acceptance:** a sandbox payment and a live payment with the same ID succeed without colliding.
+
+- [ ] **1.2 Delete the bare `runtime` singleton** (or rename to `runtimeSandboxOnly`)
+  - Prevent accidental imports. Force all callers through `runtimeHost.getRuntime(env)` or `runtimeHost.execute(cmd)`.
+  - **Acceptance:** `rg "from '@/runtime'" src/services` returns 0 matches.
+
+- [ ] **1.3 Add `EnvironmentBoundaryInvariant`**
+  - Rejects any proposed event whose `metadata.environment` differs from the runtime's own environment.
+  - **Acceptance:** a sandbox dispatch in the live runtime is rejected at the invariant gate.
+
+- [ ] **1.4 Per-env snapshot cache**
+  - Move `snapshotCache` from module-level singleton to per-runtime instance owned by `createRuntime()`.
+  - **Acceptance:** `sandbox.snapshotCache !== live.snapshotCache`.
+
+- [ ] **1.5 Per-env treasury/liquidity singletons**
+  - Either key state maps with `${env}:${assetCode}` or make the singletons per-runtime instances.
+  - **Acceptance:** a sandbox mint of TWINUSD does NOT consume the live daily mint cap.
+
+- [ ] **1.6 Per-env projections**
+  - Add `environment` field to `PaymentView` / `WalletView` / `TreasuryAccountView` / `RefundView`. Filter by env in `list()` / `get()`.
+  - **Acceptance:** `PaymentsService.list(merchantId, { environment: 'live' })` returns only live payments.
+
+- [ ] **1.7 Add `environment` column to `EventRecord` Prisma table**
+  - `PostgresEventStore.hydrate()` reads it instead of hardcoding `'sandbox'`.
+  - **Acceptance:** a live event loaded from Postgres has `environment: 'live'`.
+
+- [ ] **1.8 Move the runtime EventStore subscriber to listen to BOTH host runtimes**
+  - `src/services/projections/index.ts:160` subscribes to `runtimeHost.getRuntime('sandbox').eventStore` AND `runtimeHost.getRuntime('live').eventStore`.
+  - **Acceptance:** a showcase payment triggers the Prisma sync projection.
+
+### Phase 2 — The execution gaps (MEDIUM danger)
+
+These are real execution seams that need live API wiring.
+
+- [ ] **2.1 Real Stellar twin token mint/burn** — replace the event emission with `twinTokenEngine.mint()` / `.burn()` on Stellar.
+- [ ] **2.2 Real FIAT reserve balance** — replace hardcoded `$50K Ghana` with real bank API balance.
+- [ ] **2.3 Real LP bandwidth query** — replace hardcoded LP split with `BandwidthEngine.findAvailable()`.
+- [ ] **2.4 Real local rail disbursement** — call provider adapter (MTN MoMo / bank) for tier 1 disbursement.
+- [ ] **2.5 Real escrow lifecycle** — `settlementEscrow.freeze()` / `.release()` / `.refund()` wired into the waterfall tiers.
+- [ ] **2.6 Real PSP collection** — webhook → `payment.create` dispatched through `runtimeHost.execute()`.
+
+### Phase 3 — The dashboard tells the truth (LOW danger, HIGH value)
+
+- [ ] **3.1 Treasury insights UI** — surface drift, composition, proposals on the admin console.
+- [ ] **3.2 Action audit trail** — every auto-action (E1-E8) records an audit log entry visible to operators.
+- [ ] **3.3 "Computed but not acted" alarm** — meta-monitor that fires if any observer emits an event that no actuator consumes within N seconds.
 
 ---
 
-## The Simplest Diagram
+## Fee model (by waterfall tier) — unchanged
+
+| Tier | Fee | Split | Description |
+|------|-----|-------|-------------|
+| 1 | 80bps | 100% PaySwap | PaySwap FIAT reserves |
+| 2 | 100bps | 60% PS, 40% LP | LP FIAT bandwidth |
+| 3 | 120bps | 100% PaySwap | PaySwap crypto (twin token or stablecoin) |
+| 4 | 150bps | 20% PS, 80% LP | LP crypto bandwidth |
+| 5 | 200bps+ | 10% PS, 90% LP | Marketplace auction |
+
+---
+
+## The simplest diagram (unchanged from v2)
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -339,7 +234,7 @@ FIAT withdrawn → twin token burned on Stellar
               ▼                ▼
     ┌─── FIAT Waterfall ──┐  ┌─── Crypto Waterfall ──────────────┐
     │ 1. PaySwap FIAT     │  │ Dest has FIAT reserve?            │
-    │    reserve?         │  │   YES → Use twin token (mint/burn)│
+    │    reserve?         │  │   YES → Use TWIN<CCY> (mint/burn) │
     │    ↓ NO             │  │   NO  → Use stablecoin (USDC)     │
     │ 2. LP FIAT          │  │                                   │
     │    bandwidth?       │  │ 3. PaySwap crypto reserve?        │
@@ -350,8 +245,18 @@ FIAT withdrawn → twin token burned on Stellar
                              └───────────────────────────────────┘
                       ▼
     ┌─── Core Invariant ────────────────────────────┐
-    │ FIAT deposit  → mint twin token on Stellar    │
-    │ FIAT withdraw → burn twin token on Stellar    │
+    │ FIAT deposit  → mint TWIN<CCY> on Stellar     │
+    │ FIAT withdraw → burn TWIN<CCY> on Stellar     │
     │ 1:1 backing, always auditable                 │
     └───────────────────────────────────────────────┘
 ```
+
+---
+
+## What's different from v2
+
+- **Twin token naming:** `tGHS` / `tNGN` etc. are GONE. One name (`TWIN<CCY>`) everywhere — UI, events, on-chain.
+- **I1 + I2 + D1 + D2 are wired.** Drift monitor, migration proposals, LOCAL_RAIL twin-mint removal are all in the codebase.
+- **The audit is now honest about the contamination.** v2 said "single pipeline, sandbox/live isolation" as a goal; v3 says it's a goal the system CLAIMS to meet but does NOT.
+- **The audit is now honest about the orphan observers.** v2 listed the observers as "done"; v3 calls out that 7 of 10 observers compute but don't act.
+- **The roadmap is now ordered by danger of inaction.** Phase 0 (close orphan loops) is the most urgent — these are the "dashboard says problem is handled" traps.

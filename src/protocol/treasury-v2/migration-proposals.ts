@@ -160,7 +160,7 @@ export class MigrationProposalEngine {
     if (hist.length > this.maxHistory) hist.length = this.maxHistory;
     this.history.set(input.corridor, hist);
 
-    eventEngine.emit('treasury.composition_recorded', composition);
+    eventEngine.emit('treasury.composition_recorded', composition as unknown as Record<string, unknown>);
     return composition;
   }
 

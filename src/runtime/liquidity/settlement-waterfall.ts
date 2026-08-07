@@ -216,23 +216,35 @@ export function selectSettlementSource(input: WaterfallInput): WaterfallResult {
   };
 }
 
-// ── Twin token naming convention (currency-based, not country-based) ──
+// ── Twin token naming convention (Stellar on-chain code everywhere) ──
+//
+// There is ONE twin token name: the Stellar asset code `TWIN<CCY>`
+// (e.g. TWINGHS, TWINNGN, TWINKES, TWINXOF). It is used in UI,
+// dashboards, events, and on-chain. There is no separate "display
+// symbol" — the Stellar code IS the display symbol. Having two names
+// (tGHS for display, TWINGHS for chain) created ambiguity about which
+// one is canonical. Now there is one.
 
 /**
- * Display symbol for a twin token: tGHS, tNGN, tKES, tXOF.
- * Used in UI, dashboards, and human-readable contexts.
- */
-export function twinTokenSymbol(currency: string): string {
-  return 't' + currency.toUpperCase();
-}
-
-/**
- * Stellar on-chain asset code for a twin token: TWINGHS, TWINNGN, TWINKES.
- * This is the canonical asset code used on the Stellar network.
- * Must match src/protocol/chains/stellar/assets.ts:twinTokenCode()
+ * Canonical twin token name for a currency: the Stellar asset code.
+ * `TWIN<CCY>` (e.g. TWINGHS, TWINNGN, TWINKES, TWINXOF).
+ *
+ * Used everywhere: UI, dashboards, event payloads, on-chain. There is
+ * no separate "display symbol" — this IS the display symbol.
+ *
+ * Must match src/protocol/chains/stellar/assets.ts:twinTokenCode().
  */
 export function twinTokenCode(currency: string): string {
   return 'TWIN' + currency.toUpperCase();
+}
+
+/**
+ * @deprecated Use `twinTokenCode()` directly. Kept as a thin alias so
+ * existing call sites compile while we migrate. The two functions now
+ * return the same value — there is only one twin token name.
+ */
+export function twinTokenSymbol(currency: string): string {
+  return twinTokenCode(currency);
 }
 
 // ── S3: Per-leg waterfall resolution ──────────────────────────────────
