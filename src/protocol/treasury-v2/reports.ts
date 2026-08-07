@@ -87,7 +87,7 @@ export class TreasuryReports {
    * alerts, yields, capital efficiency, corridor funding, frozen
    * assets, LP profitability, and the latest stress test results.
    */
-  generateDailyTreasuryReport(): TreasuryReport {
+  async generateDailyTreasuryReport(): Promise<TreasuryReport> {
     const asOfTs = nowTs();
 
     // Reserves.
@@ -161,8 +161,21 @@ export class TreasuryReports {
     // Corridor reserves.
     const corridors: CorridorReserve[] = corridorFundingService.allCorridorReserves();
 
-    // Frozen assets.
-    const frozenAssets = this.frozenAssetList();
+    // Frozen assets — include both treasuryReports freezes and emergencyFreezeEngine freezes.
+    const frozenAssetStrings: string[] = [
+      ...this.frozenAssetList().map((f) => f.assetCode),
+    ];
+    // Also check emergencyFreezeEngine for asset-scope freezes.
+    try {
+      // Dynamic import to avoid circular dependency.
+      const { emergencyFreezeEngine } = await import('./freezes');
+      for (const f of emergencyFreezeEngine.all()) {
+        if (f.active && f.scope === 'asset' && !frozenAssetStrings.includes(f.target)) {
+          frozenAssetStrings.push(f.target);
+        }
+      }
+    } catch { /* emergencyFreezeEngine may not be initialized */ }
+    const frozenAssets = frozenAssetStrings;
 
     // LP profitability (top 20 by volume).
     const lpProfitability = lpProfitabilityService.getTopLPs('volume', 20);

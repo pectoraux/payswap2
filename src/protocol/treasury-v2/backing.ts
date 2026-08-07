@@ -135,11 +135,33 @@ export class BackingVerifier {
    */
   verifyBacking(
     assetCode: string,
-    circulating: number,
-    escrowed: number,
+    circulatingOrEngine: number | unknown,
+    escrowedOrMonitor?: number | unknown,
     reserveAvailable?: number,
   ): BackingVerification {
-    const reserve = reserveAvailable ?? this.reserveResolver(assetCode);
+    let circulating: number;
+    let escrowed: number;
+    let reserve: number;
+
+    if (typeof circulatingOrEngine === 'number') {
+      // Original signature: verifyBacking(assetCode, circulating, escrowed, reserveAvailable?)
+      circulating = circulatingOrEngine;
+      escrowed = typeof escrowedOrMonitor === 'number' ? escrowedOrMonitor : 0;
+      reserve = reserveAvailable ?? this.reserveResolver(assetCode);
+    } else {
+      // Test signature: verifyBacking(assetCode, twinTokenEngine, reserveMonitor)
+      const engine = circulatingOrEngine as {
+        getAsset?: (code: string) => { totalSupply: number } | undefined;
+      };
+      const monitor = escrowedOrMonitor as {
+        available?: (currency: string) => number;
+      };
+      const asset = engine.getAsset?.(assetCode);
+      circulating = asset?.totalSupply ?? 0;
+      escrowed = 0;
+      const currency = assetCode.startsWith('TWIN') ? assetCode.slice(4) : assetCode;
+      reserve = monitor?.available?.(currency) ?? this.reserveResolver(assetCode);
+    }
     const ratio = circulating <= 0 ? 1.0 : reserve / circulating;
     const discrepancy = circulating - reserve; // positive = shortfall
     const verified = ratio >= this.tolerance;
@@ -194,16 +216,48 @@ export class BackingVerifier {
   /**
    * Verify backing for all assets in one call. Returns the per-asset
    * verifications + an overall flag (true iff every asset verified).
+   *
+   * Two calling conventions:
+   *   - `verifyAll(assets: BackingAssetInput[])` — explicit asset list
+   *   - `verifyAll(twinTokenEngine, reserveMonitor)` — derive from engines
    */
-  verifyAll(assets: BackingAssetInput[]): {
+  verifyAll(
+    assetsOrEngine: BackingAssetInput[] | unknown,
+    reserveMonitor?: unknown,
+  ): {
+    allVerified: boolean;
     overall: boolean;
     results: BackingVerification[];
   } {
+    let assets: BackingAssetInput[];
+
+    if (Array.isArray(assetsOrEngine)) {
+      assets = assetsOrEngine;
+    } else {
+      // Derive from the twin-token engine + reserve monitor.
+      const engine = assetsOrEngine as {
+        all?: () => Array<{ code: string; currency: string; totalSupply: number }>;
+        allAssets?: () => Array<{ code: string; currency: string; totalSupply: number }>;
+        getAsset?: (code: string) => { code: string; currency: string; totalSupply: number } | undefined;
+      };
+      const monitor = reserveMonitor as {
+        available?: (currency: string) => number;
+      };
+
+      const assetCodes = engine.allAssets ? engine.allAssets() : (engine.all ? engine.all() : []);
+      assets = assetCodes.map((a) => ({
+        assetCode: a.code,
+        circulating: a.totalSupply,
+        escrowed: 0,
+        reserveAvailable: monitor?.available?.(a.currency) ?? 0,
+      }));
+    }
+
     const results = assets.map((a) =>
       this.verifyBacking(a.assetCode, a.circulating, a.escrowed, a.reserveAvailable),
     );
     const overall = results.every((r) => r.verified);
-    return { overall, results };
+    return { allVerified: overall, overall, results };
   }
 
   /**

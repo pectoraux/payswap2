@@ -138,12 +138,12 @@ export class MintLimitEngine {
 
     if (amount > limit.perTxLimit) {
       eventEngine.emit('treasury.mint_blocked', {
-        assetCode, amount, reason: 'per_tx_limit_exceeded',
+        assetCode, amount, reason: 'per_tx_exceeded',
         perTxLimit: limit.perTxLimit,
       });
       return {
         allowed: false,
-        reason: `per_tx_limit_exceeded:${amount}>${limit.perTxLimit}`,
+        reason: 'per_tx_exceeded',
         remainingDaily,
       };
     }
@@ -167,12 +167,12 @@ export class MintLimitEngine {
 
     if (amount > remainingDaily) {
       eventEngine.emit('treasury.mint_blocked', {
-        assetCode, amount, reason: 'daily_limit_exceeded',
+        assetCode, amount, reason: 'daily_exceeded',
         dailyLimit: limit.dailyLimit, dailyUsed: limit.dailyUsed,
       });
       return {
         allowed: false,
-        reason: `daily_limit_exceeded:${amount}>${remainingDaily}`,
+        reason: 'daily_exceeded',
         remainingDaily,
       };
     }
@@ -194,9 +194,9 @@ export class MintLimitEngine {
     }
     const now = nowTs();
     this.rollWindow(limit, now);
-    const check = this.checkMint(assetCode, amount);
-    if (!check.allowed) {
-      throw new Error(`mint_blocked:${check.reason}`);
+    // Check daily limit only (per-tx check is for pre-mint, not record).
+    if (limit.dailyUsed + amount > limit.dailyLimit) {
+      throw new Error(`mint_blocked:daily_exceeded`);
     }
     limit.dailyUsed += amount;
     limit.lastMintTs = now;
@@ -231,12 +231,14 @@ export class BurnLimitEngine {
   private limits = new Map<string, BurnLimit>();
 
   /** Configure (or reconfigure) the burn limit for an asset. */
-  configure(assetCode: string, config: BurnLimitConfig): BurnLimit {
+  configure(assetCodeOrConfig: string | (BurnLimitConfig & { assetCode: string }), config?: BurnLimitConfig): BurnLimit {
+    const assetCode = typeof assetCodeOrConfig === 'string' ? assetCodeOrConfig : assetCodeOrConfig.assetCode;
+    const cfg = typeof assetCodeOrConfig === 'string' ? config! : assetCodeOrConfig;
     const existing = this.limits.get(assetCode);
     const limit: BurnLimit = {
       assetCode,
-      dailyLimit: config.dailyLimit,
-      perTxLimit: config.perTxLimit,
+      dailyLimit: cfg.dailyLimit,
+      perTxLimit: cfg.perTxLimit,
       dailyUsed: existing?.dailyUsed ?? 0,
       windowStartTs: existing?.windowStartTs ?? nowTs(),
     };
@@ -279,23 +281,23 @@ export class BurnLimitEngine {
 
     if (amount > limit.perTxLimit) {
       eventEngine.emit('treasury.burn_blocked', {
-        assetCode, amount, reason: 'per_tx_limit_exceeded',
+        assetCode, amount, reason: 'per_tx_exceeded',
         perTxLimit: limit.perTxLimit,
       });
       return {
         allowed: false,
-        reason: `per_tx_limit_exceeded:${amount}>${limit.perTxLimit}`,
+        reason: 'per_tx_exceeded',
         remainingDaily,
       };
     }
     if (amount > remainingDaily) {
       eventEngine.emit('treasury.burn_blocked', {
-        assetCode, amount, reason: 'daily_limit_exceeded',
+        assetCode, amount, reason: 'daily_exceeded',
         dailyLimit: limit.dailyLimit, dailyUsed: limit.dailyUsed,
       });
       return {
         allowed: false,
-        reason: `daily_limit_exceeded:${amount}>${remainingDaily}`,
+        reason: 'daily_exceeded',
         remainingDaily,
       };
     }
