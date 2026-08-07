@@ -427,3 +427,28 @@ export interface TimeRange {
   fromTs: number;
   toTs: number;
 }
+
+// ── OPS-6: Kill switches (emergency freeze) ──────────────────────────────
+
+/** The scope of an emergency freeze (kill switch). */
+export type FreezeScope = 'account' | 'asset' | 'corridor' | 'currency' | 'tier' | 'lp' | 'global';
+
+/** An emergency freeze record. */
+export interface EmergencyFreeze {
+  id: string;
+  scope: FreezeScope;
+  target: string;
+  reason: string;
+  initiatedBy: string;
+  initiatedAt: number;
+  expiresAt?: number;
+  active: boolean;
+  liftedAt?: number;
+  liftedBy?: string;
+}
+
+/** A treasury corridor (from/to currencies). */
+export interface TreasuryCorridor {
+  from: string;
+  to: string;
+}

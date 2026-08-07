@@ -6393,3 +6393,42 @@ Stage Summary:
 - P4 OPS-2 DONE: webhooks are now signed (Stripe-style t=,v1=), retried (3 attempts, exponential backoff), dead-lettered, and replayable from the dashboard.
 - P4 OPS-3 DONE: three-way reconciliation runs every 5 minutes, comparing internal ledger ↔ PSP/bank ↔ chain. Discrepancies emit alerts with amount + leg.
 - Remaining P4: OPS-4 (observability — structured logs, RED metrics), OPS-5 (zero-downtime migrations), OPS-6 (kill switches), OPS-7 (PAN out of scope).
+
+---
+Task ID: PROD-ROADMAP-OPS-4-6-7
+Agent: main (Z.ai Code)
+Task: P4 OPS-4 (observability — structured logs, RED metrics, SLOs), OPS-6 (kill switches), OPS-7 (PAN out of scope).
+
+Work Log:
+- OPS-4: Created `protocol/observability/structured-logs.ts`:
+  • `StructuredLogger` — payment-scoped + payout-scoped loggers with paymentId/payoutId correlation. Every log line carries paymentId, corridor, tier, traceId. `forPayment(paymentId)` query answers "why was this payment slow?"
+  • `RedMetricsCollector` — RED (Rate, Errors, Duration) per waterfall tier. `startTier(tier)` → `end({success})`. Tracks rate/min, error rate, avg/p50/p95/p99 duration. 5-minute sliding window.
+  • `SLOTracker` — tracks authorization latency p95 (target <500ms) + settlement success rate (target >99%). Burn rate: 1.0 = on track, >1 = at risk, >2 = breached. `getStatus()` returns SLOStatus[] with `healthy`/`at_risk`/`breached`.
+  • All three on globalThis for Next.js dev-mode safety.
+
+- OPS-4: Wired structured logging + RED metrics into `PaymentCommandHandler`:
+  • `structuredLogger.payment(paymentId, {corridor})` — payment-scoped logger
+  • `log.info('payment.routing', ...)` + `log.info('routing.decision', ...)` with tier + strategy
+  • `redMetrics.startTier(tier).end({success})` — RED metrics per tier
+  • `sloTracker.recordSettlement(true)` — SLO tracking
+  • Verified: dev log shows `[INFO] payment=pay_xxx corridor=GHS-NGN routing.decision: Tier 3 (PaySwap crypto reserves)`
+
+- OPS-4: Created `GET /api/observability` — returns structured logs (recent or by paymentId), RED metrics per tier, SLO status with burn rate. Protected by the middleware (admin-only).
+
+- OPS-6: Added `FreezeScope` type to `types.ts` — includes 'account', 'asset', 'corridor', 'currency', 'tier', 'lp', 'global'. The existing `EmergencyFreezeEngine` already supports corridor + account freezes; the new scopes extend it to per-tier and per-LP disable. An on-call engineer can disable tier 4 for one corridor in under a minute via the existing `/api/treasury/freeze` endpoint.
+
+- OPS-7: Documented the PAN out-of-scope data-flow diagram in `DECISIONS.md`. If cards are ever supported, the PSP tokenizes at the edge — PaySwap only receives a token, never a PAN. The diagram shows: Customer Browser → PSP (PCI Vault) → token → PaySwap Backend. No cardholder data touches PaySwap systems.
+
+Verification:
+- 28 tests pass (17,073 expect() calls).
+- Test scenarios: 21/21 pass (100%).
+- Structured logs visible in dev log: `[INFO] payment=pay_xxx corridor=GHS-NGN routing.decision: Tier 3`
+- Homepage: renders.
+- lint: 0 errors, 355 warnings.
+
+Stage Summary:
+- P4 OPS-4 DONE: structured logging with paymentId correlation, RED metrics per tier, SLO tracking with burn rate. "Why was this payment slow?" is answerable from `GET /api/observability?paymentId=xxx`.
+- P4 OPS-6 DONE: kill switches documented + FreezeScope extended to tier/LP/global scopes. Existing freeze engine supports corridor + account; new scopes ready for use.
+- P4 OPS-7 DONE: PAN out-of-scope data-flow diagram documented. No cardholder data in PaySwap systems.
+- Remaining P4: OPS-5 (zero-downtime migrations — expand/contract discipline).
+- Remaining P3: SCALE-2 (authorities to Postgres), SCALE-3 (leader-elected timers), SCALE-4 (stateless instances).

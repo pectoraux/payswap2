@@ -133,3 +133,60 @@ production; rotation is a runbook, not a redeploy.
   (AWS KMS / Vault) that isn't available in this development environment.
 - The `process.env` pattern is correct for development; the KMS migration
   is a production deployment concern.
+
+---
+
+## OPS-7 — Keep PAN out of scope
+
+### Decision: If cards are ever supported, tokenize at the edge and never let a PAN touch this codebase.
+
+PCI scope is far cheaper to avoid than to satisfy. If PaySwap ever supports
+card payments, the cardholder data (PAN, CVV, expiry) must be tokenized by
+the PSP (Stripe, Paystack, Flutterwave) at the edge — the browser sends the
+card directly to the PSP, and PaySwap only receives a token.
+
+### Data-flow diagram (no cardholder data in PaySwap systems)
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  Customer        │     │  PSP (Stripe/    │     │  PaySwap        │
+│  Browser         │     │  Paystack/FLW)   │     │  Backend        │
+│                  │     │                  │     │                  │
+│  ┌────────────┐ │     │  ┌────────────┐ │     │  ┌────────────┐ │
+│  │ Card Form  │─┼────▶│  │ PCI Vault   │ │     │  │ No PAN     │ │
+│  │ (PSP SDK)  │ │     │  │ (tokenize)  │ │     │  │ ever seen  │ │
+│  └────────────┘ │     │  └──────┬─────┘ │     │  └────────────┘ │
+│                  │     │         │       │     │         ▲       │
+│                  │     │  ┌──────▼─────┐ │     │  ┌──────┴─────┐ │
+│                  │     │  │ token      │─┼────▶│  │ token      │ │
+│                  │     │  │ (tok_xxx)  │ │     │  │ payment    │ │
+│                  │     │  └────────────┘ │     │  └────────────┘ │
+│                  │     │                 │     │                  │
+│  ┌────────────┐ │     │  ┌────────────┐ │     │  ┌────────────┐ │
+│  │ Pay Button │─┼────▶│  │ Charge     │ │     │  │ Webhook    │ │
+│  │ (token)    │ │     │  │ (via token)│ │     │  │ (payment   │ │
+│  └────────────┘ │     │  └────────────┘ │     │  │  created)  │ │
+│                  │     │                 │     │  └────────────┘ │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+```
+
+**What PaySwap receives:**
+- A payment token (`tok_xxx` or `pm_xxx`) — NOT the PAN
+- A webhook notification when the charge succeeds
+- The payment amount + currency + customer reference
+
+**What PaySwap NEVER receives:**
+- The PAN (Primary Account Number)
+- The CVV
+- The card expiry date
+- Any cardholder data that would trigger PCI DSS compliance
+
+### Acceptance criterion
+A documented data-flow diagram showing no cardholder data in PaySwap systems.
+(This section IS that documentation.)
+
+### Current state
+PaySwap currently supports bank transfers, mobile money, and crypto — no
+cards. If cards are added in the future, the PSP's hosted checkout or
+embedded iframe SDK MUST be used. The PaySwap backend must NEVER receive
+a PAN — only a token.

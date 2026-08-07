@@ -37,6 +37,7 @@ import { fxExposureService } from '../liquidity/fx-exposure-service';
 import { auctionEngine } from '../../protocol/settlement/auctions';
 import { fxEngine } from '../../kernel/fx';
 import { Money } from '../../money/money';
+import { structuredLogger, redMetrics, sloTracker } from '../../protocol/observability/structured-logs';
 import type {
   CreatePaymentCommand,
   CreatePaymentPayload,
@@ -362,6 +363,11 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
       const fromCcy = corridorParts[0] ?? payload.currency;
       const toCcy = corridorParts[1] ?? payload.currency;
 
+      // OPS-4: structured logging + RED metrics.
+      const log = structuredLogger.payment(paymentId, { corridor });
+      const tierTimer = redMetrics.startTier(0); // tier set after waterfall
+      log.info('payment.routing', `Routing ${payload.amount} ${fromCcy}→${toCcy} via waterfall`);
+
       const currencyToCountry: Record<string, string> = {
         GHS: 'Ghana', XOF: 'Togo', KES: 'Kenya', NGN: 'Nigeria',
         ZAR: 'South Africa', UGX: 'Uganda', RWF: 'Rwanda', USD: 'United States',
@@ -422,6 +428,18 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
         payswapTwinTokenAvailable: 50_000,
         lpCryptoAvailable: lpCryptoAvailable,
       });
+
+      // OPS-4: log the routing decision + record RED metrics for the tier.
+      log.info('routing.decision', `Tier ${waterfall.tier} (${waterfall.tierName}) — ${waterfall.source}`, {
+        tier: waterfall.tier,
+        source: waterfall.source,
+        strategy: legResolution.strategy,
+        skipped: waterfall.skipped.length,
+      });
+      tierTimer.end({ success: true });
+      const tierTimerActual = redMetrics.startTier(waterfall.tier);
+      tierTimerActual.end({ success: true });
+      sloTracker.recordSettlement(true);
 
       // Emit routing.decision with the waterfall result + per-leg derivation
       events.push({
