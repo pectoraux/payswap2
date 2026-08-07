@@ -80,6 +80,8 @@ export {
   backingFallbackTier,
   fxBlockPayment,
   auctionTimeoutRefund,
+  isCorridorPaused,
+  resumeCorridor,
   pauseLoop,
   resumeLoop,
   loopStatus,

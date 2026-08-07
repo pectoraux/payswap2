@@ -6116,3 +6116,35 @@ Stage Summary:
   • E3 corridor pause: emits event but no handler checks for paused corridors.
 - Test scenarios: 21/21 pass (100%).
 - tsc: 0 errors in new files | lint: 0 errors (345 warnings) | browser-verified: ✅
+
+---
+Task ID: REAUDIT-FIXES-ROUND-2
+Agent: main (Z.ai Code)
+Task: Continue fixing the 5 remaining gaps from the reaudit: E5 backing fallback re-route, E3 corridor pause check, S2 LP mandate registration, E1/E2 auto-rebalance LiquidityNetwork, no-contamination (production through runtimeHost).
+
+Work Log:
+- E5 backing fallback re-route: Previously the E5 fallback only emitted a metadata `liquidity.resolved` event but the settlement contract was still labeled "Tier 3" and the tier-4 code path never ran. Now: when backing blocks at tier 3, the handler executes the FULL tier 4 code path — `liquidity.resolved` + `corridor.obligation.recorded` (with `reRouted: true`) + `settlement.contract.created` labeled "Tier 4: LP crypto (E5 fallback)" + `settlement.contract.funded`. The payment is actually re-routed through LP crypto, not just metadata-labeled.
+- Also refactored the tier-3 path: `corridor.obligation.recorded` + `settlement.contract.created` moved INTO the `if (destHasFiat)` branches (was outside, causing duplicate recording when backing blocked). Now each branch records exactly once.
+- E3 corridor pause check: `pauseCorridor()` now adds the currency to a `globalThis.__PAYSWAP_PAUSED_CORRIDORS` Set. Exported `isCorridorPaused(currency)` + `resumeCorridor(currency)`. The handler checks `isCorridorPaused(dstCcy)` before `payment.completed` — if paused, emits `payment.failed` with `closedLoop: 'E3_drift_pause'`. Previously: the pause event was emitted but nothing checked it, so payments continued through paused corridors.
+- S2 LP mandate registration: `instrumentation.ts` now registers 4 LP mandates at startup (lp_ghana_1, lp_ghana_2, lp_kenya_1, lp_nigeria_1) with real per-transaction + daily limits. Tier 2 (LP FIAT) can now actually settle via mandate — previously `getTotalAvailable()` always returned 0 → tier 2 always failed → waterfall skipped to tier 5.
+- E1/E2 auto-rebalance: Wired a real `LiquidityNetwork` (from `@/protocol/liquidity-network`) + `ReserveMonitor` (from `@/protocol/treasury-v2/reserve` — the one `corridorBalancer.checkAndRebalance` expects) into `wireRebalanceInputs()`. The `resolveCorridorContext` callback now returns `{ liquidityNetwork, reserveMonitor }` instead of null. The auto-rebalance loop can now actually call `checkAndRebalance()` (though it may still skip if no donor corridor has excess).
+- No contamination: Changed `executionPlanner` (in `planner/index.ts`) from `runtime.dispatcher.dispatch(input.command)` to `runtimeHost.execute(input.command)`. The host routes by `command.metadata.environment` → the correct isolated runtime (sandbox or live). Adapted `TransactionResult` → `DispatchResult` shape. This means `paymentService.create()` → `executionPlanner.execute()` → `runtimeHost.execute()` → isolated runtime per environment. The bare `runtime` singleton is no longer on the production money path.
+
+Verification:
+- tsc: 0 errors in my files. Pre-existing errors unchanged.
+- lint: 0 errors, 346 warnings.
+- Dev server: starts clean. [treasury] Reserve monitor seeded. [lp-mandates] 4 LP mandates registered. [closed-loops] 8 controllers wired.
+- LOCAL_RAIL: 5 events, no twin.minted (I2 preserved).
+- Cross-border GHS→NGN: payment.recorded fxRate=69.0 (real rate). 8 events.
+- Test scenarios: 21/21 pass (100%).
+- Closed-loops endpoint: 8 loops all enabled, all wired.
+- Homepage: renders, theme toggle works.
+
+Stage Summary:
+- E5 FIXED: backing fallback now re-routes through the full tier 4 code path (liquidity.resolved + corridor.obligation.recorded + settlement.contract with "Tier 4: LP crypto (E5 fallback)" label).
+- E3 FIXED: paused corridors are tracked in a Set; the handler checks `isCorridorPaused()` before settling and emits `payment.failed` if paused.
+- S2 FIXED: 4 LP mandates registered at startup. Tier 2 can now settle via LP FIAT bandwidth.
+- E1/E2 FIXED: real LiquidityNetwork + ReserveMonitor wired into the rebalance inputs. The auto-rebalance loop can now call `corridorBalancer.checkAndRebalance()`.
+- No contamination PARTIALLY FIXED: production `paymentService` → `executionPlanner` → `runtimeHost.execute()` (isolated per environment). The bare `runtime` singleton is no longer on the production money path. Remaining: the 7 treasury singletons (backingVerifier, reserveMonitor, etc.) are still global, not environment-partitioned. The Prisma EventRecord table still has no environment column. These are deeper structural changes that require schema migration.
+- Test scenarios: 21/21 pass (100%).
+- tsc: 0 errors in new files | lint: 0 errors (346 warnings) | browser-verified: ✅

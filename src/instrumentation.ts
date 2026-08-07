@@ -125,6 +125,38 @@ export async function register() {
         console.error('[treasury] Seed failed:', e);
       }
 
+      // S2 FIX: register LP mandates at startup. Without this, tier 2 (LP
+      // FIAT) always fails the mandate check → waterfall skips to tier 5.
+      // The showcase world state has LPs in Ghana, Kenya, Nigeria with
+      // fiat bandwidth. Register mandates for them so tier 2 can actually
+      // settle local payments via LP FIAT.
+      try {
+        const { lpMandateService } = await import('@/runtime/liquidity/lp-mandate-service');
+        lpMandateService.register({
+          lpId: 'lp_ghana_1', country: 'Ghana', currency: 'GHS',
+          accountReference: 'bank:ghana_1', perTransactionLimit: 30_000,
+          dailyLimit: 100_000, mandateReference: 'mandate_ghana_1',
+        });
+        lpMandateService.register({
+          lpId: 'lp_ghana_2', country: 'Ghana', currency: 'GHS',
+          accountReference: 'bank:ghana_2', perTransactionLimit: 25_000,
+          dailyLimit: 80_000, mandateReference: 'mandate_ghana_2',
+        });
+        lpMandateService.register({
+          lpId: 'lp_kenya_1', country: 'Kenya', currency: 'KES',
+          accountReference: 'bank:kenya_1', perTransactionLimit: 20_000,
+          dailyLimit: 60_000, mandateReference: 'mandate_kenya_1',
+        });
+        lpMandateService.register({
+          lpId: 'lp_nigeria_1', country: 'Nigeria', currency: 'NGN',
+          accountReference: 'bank:nigeria_1', perTransactionLimit: 15_000,
+          dailyLimit: 50_000, mandateReference: 'mandate_nigeria_1',
+        });
+        console.log('[lp-mandates] 4 LP mandates registered (Ghana x2, Kenya, Nigeria). Tier 2 can now settle.');
+      } catch (e) {
+        console.error('[lp-mandates] Register failed:', e);
+      }
+
       // Wire the E6 net settlement cycle to call netSettlementEngine.settle().
       wireNetSettleInputs({
         corridorsWithObligations: () => {
@@ -145,21 +177,20 @@ export async function register() {
         await import('@/protocol/treasury-v2');
       const { auctionEngine } = await import('@/protocol/settlement/auctions');
 
-      // E1/E2: drift/low → rebalance. The rebalance inputs need a corridor
-      // resolver and a corridor context (liquidityNetwork + reserveMonitor).
-      // We use a simple currency→corridor mapping (currency:USD as the
-      // cross-border pair) and the reserveMonitor as the context.
+      // E1/E2: drift/low → rebalance. Wire a real LiquidityNetwork so the
+      // auto-rebalance loop can actually call corridorBalancer.checkAndRebalance().
+      const { liquidityNetwork } = await import('@/protocol/liquidity-network');
+      const { reserveMonitor: reserveMonitorForRebalance } = await import('@/protocol/treasury-v2/reserve');
       wireRebalanceInputs({
         corridorForCurrency: (currency: string) => `${currency}:USD`,
-        resolveCorridorContext: (corridor: string) => {
-          // The corridorBalancer.checkAndRebalance needs a LiquidityNetwork,
-          // which we don't have in this context. Return null → the loop
-          // records 'no_context_for_corridor' and skips. This is honest —
-          // the auto-rebalance can't run without a liquidity network, and
-          // we don't have one wired. The manual /api/treasury/rebalance
-          // endpoint works directly via reserveMonitor.
-          void corridor;
-          return null;
+        resolveCorridorContext: (_corridor: string) => {
+          // Return the real liquidity network + reserve monitor so
+          // corridorBalancer.checkAndRebalance() can route a swap.
+          // Uses the ReserveMonitor from reserve.ts (the one balancing.ts expects).
+          return {
+            liquidityNetwork,
+            reserveMonitor: reserveMonitorForRebalance,
+          };
         },
       });
 

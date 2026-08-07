@@ -227,6 +227,29 @@ function autoRebalance(
   }
 }
 
+// E3: paused corridors — tracked in a Set on globalThis so handlers can check.
+declare global {
+  // eslint-disable-next-line no-var
+  var __PAYSWAP_PAUSED_CORRIDORS: Set<string> | undefined;
+}
+
+function getPausedCorridors(): Set<string> {
+  if (!globalThis.__PAYSWAP_PAUSED_CORRIDORS) {
+    globalThis.__PAYSWAP_PAUSED_CORRIDORS = new Set();
+  }
+  return globalThis.__PAYSWAP_PAUSED_CORRIDORS;
+}
+
+/** Check if a currency's corridor is paused (E3). Handlers call this before settling. */
+export function isCorridorPaused(currency: string): boolean {
+  return getPausedCorridors().has(currency);
+}
+
+/** Manually resume a paused corridor (operator override). */
+export function resumeCorridor(currency: string): boolean {
+  return getPausedCorridors().delete(currency);
+}
+
 function pauseCorridor(
   trigger: string,
   currency: string,
@@ -239,7 +262,10 @@ function pauseCorridor(
   if (!withinCap(loop, 1)) {
     return recordSkipped(loop, trigger, 'cap_exceeded', currency);
   }
-  // Pause = emit a corridor pause event that handlers can check.
+  // E3 ACTUATOR: add the currency to the paused set. Handlers check
+  // isCorridorPaused() before settling — if paused, the payment is blocked.
+  getPausedCorridors().add(currency);
+  // Also emit the event for audit/dashboard.
   eventEngine.emit('treasury.corridor_paused', {
     currency,
     reason,

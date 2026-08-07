@@ -25,7 +25,7 @@
 
 import type { RuntimeCommand } from '@/runtime/dispatcher/types';
 import type { DispatchResult } from '@/runtime/dispatcher/dispatcher';
-import { runtime } from '@/runtime';
+import { runtime, runtimeHost } from '@/runtime';
 import { liquidityPolicyEngine, type LiquidityExecutionPlan } from '@/runtime/liquidity';
 import { fxEngine } from '@/kernel/fx';
 
@@ -385,7 +385,23 @@ class ExecutionPlanner {
         return { result: 'success', detail: 'Settlement orchestrator engaged', data: { settlementInvoked: true } };
 
       case 'dispatcher': {
-        const dispatchResult = await runtime.dispatcher.dispatch(input.command);
+        // NO CONTAMINATION FIX: route through runtimeHost.execute() instead
+        // of runtime.dispatcher.dispatch(). The host routes by
+        // command.metadata.environment → the correct isolated runtime
+        // (sandbox or live). The bare `runtime` singleton shares one
+        // EventStore + snapshotCache across both environments.
+        const hostResult = await runtimeHost.execute(input.command);
+        // Adapt TransactionResult → DispatchResult shape for the planner.
+        const dispatchResult: DispatchResult = {
+          success: hostResult.success,
+          commandType: hostResult.commandType,
+          entityId: hostResult.entityId,
+          events: hostResult.events,
+          message: hostResult.message,
+          error: hostResult.error,
+          metrics: { compileTime: 0, verifyTime: 0, appendTime: 0, totalTime: hostResult.metrics.totalTime },
+          dispatchedAt: Date.now(),
+        };
         return {
           result: dispatchResult.success ? 'success' : 'failed',
           detail: dispatchResult.message,

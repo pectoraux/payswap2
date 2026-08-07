@@ -30,7 +30,7 @@ import { uid } from '../types';
 import { selectSettlementSource, isLocal, twinTokenCode, resolvePayment, type WaterfallInput, type WaterfallResult, type SettlementTier, TIER_FEES, TIER_NAMES } from '../liquidity/settlement-waterfall';
 import { backingVerifier } from '../../protocol/treasury-v2/backing';
 import { reserveDriftMonitor } from '../../protocol/treasury-v2/reserve-drift-monitor';
-import { backingFallbackTier, fxBlockPayment } from '../../protocol/treasury-v2/closed-loop-controllers';
+import { backingFallbackTier, fxBlockPayment, isCorridorPaused } from '../../protocol/treasury-v2/closed-loop-controllers';
 import { netSettlementEngine } from '../../protocol/settlement/net-settlement';
 import { lpMandateService } from '../liquidity/lp-mandate-service';
 import { fxExposureService } from '../liquidity/fx-exposure-service';
@@ -301,6 +301,23 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           closedLoop: 'E7_fx_block',
         } as unknown as Record<string, unknown>,
       });
+    } else if (success && isCorridorPaused(dstCcy)) {
+      // E3 ACTUATOR: the destination corridor is paused (by the E3 drift
+      // critical loop or by manual operator action). Block the payment —
+      // do NOT complete it. Previously: the pause event was emitted but
+      // nothing checked it, so payments continued through paused corridors.
+      events.push({
+        type: 'payment.failed',
+        streamId, streamType: 'payment', kind: 'domain',
+        payload: {
+          paymentId,
+          intentId: command.metadata.commandId ?? command.metadata.correlationId,
+          reason: `Corridor ${dstCcy} is paused (E3 drift critical or manual)`,
+          failedAt: now,
+          closedLoop: 'E3_drift_pause',
+          pausedCurrency: dstCcy,
+        } as unknown as Record<string, unknown>,
+      });
     } else if (success) {
       events.push({
         type: 'payment.completed',
@@ -497,8 +514,9 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           if (!tier3MintCheck.allowed) {
             // E5 CLOSED LOOP: backing block → tier fallback.
             // Previously: emit treasury.backing_blocked and continue with NO mint
-            // (silently broken). Now: emit the block AND record the fallback
-            // decision so the actuator can move the payment to tier 4 (LP crypto).
+            // (silently broken). Now: emit the block AND actually re-route the
+            // payment through the tier 4 code path (LP crypto). The settlement
+            // contract is labeled "Tier 4: LP crypto (E5 fallback)", NOT "Tier 3".
             const fallback = backingFallbackTier(3, tier3StellarCode, netAmount);
             events.push({
               type: 'treasury.backing_blocked',
@@ -506,16 +524,16 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
               payload: {
                 paymentId, assetCode: tier3StellarCode, displaySymbol: twinSymbol,
                 amount: netAmount, reason: tier3MintCheck.reason, blockedAt: now,
-                // E5: tier fallback decision (the actuator's recommendation).
                 fallbackTier: fallback.tier,
                 fallbackReason: fallback.reason,
                 closedLoop: 'E5_backing_fallback',
+                reRoutedToTier4: fallback.tier === 4,
               } as unknown as Record<string, unknown>,
             });
-            // E5 ACTUATOR: if fallback is tier 4, emit a liquidity.resolved
-            // event that records the fallback. (We don't re-run the waterfall
-            // here — the handler is pure. The fallback is recorded as an
-            // event so the projection + dispatcher can act on it.)
+            // E5 ACTUATOR: if fallback is tier 4, execute the FULL tier 4 code
+            // path (not just a metadata event). This is the "act" — the payment
+            // is actually re-routed through LP crypto, with the correct fee
+            // model, settlement contract label, and corridor obligation.
             if (fallback.tier === 4) {
               events.push({
                 type: 'liquidity.resolved',
@@ -524,10 +542,28 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
                   paymentId, tier: 4, source: 'lp_crypto',
                   amount: netAmount, lpCryptoAvailable,
                   feeBps: TIER_FEES[4].bps, lpSharePct: TIER_FEES[4].lpPct,
-                  reason: `E5 BACKING FALLBACK: tier 3 backing blocked (${tier3MintCheck.reason}), falling back to tier 4 (LP crypto) for ${paymentId}`,
+                  reason: `E5 BACKING FALLBACK: tier 3 backing blocked (${tier3MintCheck.reason}), re-routed to tier 4 (LP crypto) for ${paymentId}`,
                   trigger: 'backing_blocked',
                   resolvedAt: now,
                 } as unknown as Record<string, unknown>,
+              });
+              // Record corridor obligation for the re-routed payment.
+              netSettlementEngine.record(fromCountryName, toCountryName, toCcy, netAmount);
+              events.push({
+                type: 'corridor.obligation.recorded',
+                streamId: `${env}:corridor:${paymentId}`, streamType: 'corridor', kind: 'domain',
+                payload: { paymentId, fromCountry: fromCountryName, toCountry: toCountryName, currency: toCcy, amount: netAmount, recordedAt: now, reRouted: true } as unknown as Record<string, unknown>,
+              });
+              // Settlement contract labeled as Tier 4 (E5 fallback).
+              events.push({
+                type: 'settlement.contract.created',
+                streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
+                payload: { contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy, amount: netAmount, escrowAmount: netAmount, escrowCurrency: 'USDC', strategy: 'Tier 4: LP crypto (E5 fallback)', createdAt: now } as unknown as Record<string, unknown>,
+              });
+              events.push({
+                type: 'settlement.contract.funded',
+                streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
+                payload: { contractId: `sc_${paymentId}`, fundedAt: now } as unknown as Record<string, unknown>,
               });
             }
           } else {
@@ -544,26 +580,44 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
             });
             // I1: twin mint at destination implies destination reserve credited.
             reserveDriftMonitor.recordCredit(toCcy, payload.amount, 'tier3:twin_mint');
+            // W2: Record corridor obligation for netting (only when NOT re-routed).
+            netSettlementEngine.record(fromCountryName, toCountryName, toCcy, netAmount);
+            events.push({
+              type: 'corridor.obligation.recorded',
+              streamId: `${env}:corridor:${paymentId}`, streamType: 'corridor', kind: 'domain',
+              payload: { paymentId, fromCountry: fromCountryName, toCountry: toCountryName, currency: toCcy, amount: netAmount, recordedAt: now } as unknown as Record<string, unknown>,
+            });
+            // Settlement contract for cross-border escrow
+            events.push({
+              type: 'settlement.contract.created',
+              streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
+              payload: { contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy, amount: netAmount, escrowAmount: netAmount, escrowCurrency: 'USDC', strategy: `Tier 3: ${cryptoAsset}`, createdAt: now } as unknown as Record<string, unknown>,
+            });
+            events.push({
+              type: 'settlement.contract.funded',
+              streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
+              payload: { contractId: `sc_${paymentId}`, fundedAt: now } as unknown as Record<string, unknown>,
+            });
           }
+        } else {
+          // Dest has no FIAT reserve → stablecoin path. Record obligation + contract.
+          netSettlementEngine.record(fromCountryName, toCountryName, toCcy, netAmount);
+          events.push({
+            type: 'corridor.obligation.recorded',
+            streamId: `${env}:corridor:${paymentId}`, streamType: 'corridor', kind: 'domain',
+            payload: { paymentId, fromCountry: fromCountryName, toCountry: toCountryName, currency: toCcy, amount: netAmount, recordedAt: now } as unknown as Record<string, unknown>,
+          });
+          events.push({
+            type: 'settlement.contract.created',
+            streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
+            payload: { contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy, amount: netAmount, escrowAmount: netAmount, escrowCurrency: 'USDC', strategy: `Tier 3: ${cryptoAsset}`, createdAt: now } as unknown as Record<string, unknown>,
+          });
+          events.push({
+            type: 'settlement.contract.funded',
+            streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
+            payload: { contractId: `sc_${paymentId}`, fundedAt: now } as unknown as Record<string, unknown>,
+          });
         }
-        // W2: Record corridor obligation for netting
-        netSettlementEngine.record(fromCountryName, toCountryName, toCcy, netAmount);
-        events.push({
-          type: 'corridor.obligation.recorded',
-          streamId: `${env}:corridor:${paymentId}`, streamType: 'corridor', kind: 'domain',
-          payload: { paymentId, fromCountry: fromCountryName, toCountry: toCountryName, currency: toCcy, amount: netAmount, recordedAt: now } as unknown as Record<string, unknown>,
-        });
-        // Settlement contract for cross-border escrow
-        events.push({
-          type: 'settlement.contract.created',
-          streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
-          payload: { contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy, amount: netAmount, escrowAmount: netAmount, escrowCurrency: 'USDC', strategy: `Tier 3: ${cryptoAsset}`, createdAt: now } as unknown as Record<string, unknown>,
-        });
-        events.push({
-          type: 'settlement.contract.funded',
-          streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
-          payload: { contractId: `sc_${paymentId}`, fundedAt: now } as unknown as Record<string, unknown>,
-        });
 
       } else if (waterfall.tier === 4) {
         // Tier 4: LP crypto bandwidth
@@ -571,6 +625,12 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           type: 'liquidity.resolved',
           streamId: `${env}:liquidity:${paymentId}`, streamType: 'liquidity', kind: 'domain',
           payload: { paymentId, tier: 4, source: 'lp_crypto', amount: payload.amount, lpCryptoAvailable, feeBps: waterfall.feeBps, lpSharePct: waterfall.lpSharePct, reason: `Tier 4: LP crypto bandwidth used for ${paymentId}`, resolvedAt: now } as unknown as Record<string, unknown>,
+        });
+        netSettlementEngine.record(fromCountryName, toCountryName, toCcy, netAmount);
+        events.push({
+          type: 'corridor.obligation.recorded',
+          streamId: `${env}:corridor:${paymentId}`, streamType: 'corridor', kind: 'domain',
+          payload: { paymentId, fromCountry: fromCountryName, toCountry: toCountryName, currency: toCcy, amount: netAmount, recordedAt: now } as unknown as Record<string, unknown>,
         });
         events.push({
           type: 'settlement.contract.created',
