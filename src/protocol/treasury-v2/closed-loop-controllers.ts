@@ -157,6 +157,7 @@ let rebalanceInputs: RebalanceInputs | null = null;
 /** Wire the rebalance inputs (call once at startup). */
 export function wireRebalanceInputs(inputs: RebalanceInputs): void {
   rebalanceInputs = inputs;
+  globalThis.__PAYSWAP_REBALANCE_INPUTS = inputs;
 }
 
 function autoRebalance(
@@ -167,6 +168,9 @@ function autoRebalance(
 ): ClosedLoopAction {
   if (!loopSwitches[loop]) {
     return recordSkipped(loop, trigger, 'loop_paused', currency);
+  }
+  if (!rebalanceInputs) {
+    rebalanceInputs = getRebalanceInputs();
   }
   if (!rebalanceInputs) {
     return recordSkipped(loop, trigger, 'rebalance_inputs_not_wired', currency);
@@ -267,6 +271,7 @@ let proposalInputs: ProposalApplyInputs | null = null;
 
 export function wireProposalInputs(inputs: ProposalApplyInputs): void {
   proposalInputs = inputs;
+  globalThis.__PAYSWAP_PROPOSAL_INPUTS = inputs;
 }
 
 async function autoApplyInfoProposal(
@@ -278,6 +283,9 @@ async function autoApplyInfoProposal(
   }
   if (proposal.severity !== 'info') {
     return recordSkipped(loop, `proposal:${proposal.id}`, `severity_${proposal.severity}_requires_human`, proposal.toCurrency);
+  }
+  if (!proposalInputs) {
+    proposalInputs = getProposalInputs();
   }
   if (!proposalInputs) {
     return recordSkipped(loop, `proposal:${proposal.id}`, 'proposal_inputs_not_wired', proposal.toCurrency);
@@ -329,23 +337,52 @@ export interface NetSettleInputs {
   settleCorridor: (corridor: string) => { settled: number; currency: string };
 }
 
-let netSettleInputs: NetSettleInputs | null = null;
-let netSettleTimer: ReturnType<typeof setInterval> | null = null;
+// Store on globalThis to survive Next.js dev-mode module duplication.
+// Without this, instrumentation.ts and API routes see different module
+// instances, and wireNetSettleInputs() in one isn't visible to the other.
+declare global {
+  // eslint-disable-next-line no-var
+  var __PAYSWAP_NET_SETTLE_INPUTS: NetSettleInputs | null | undefined;
+  // eslint-disable-next-line no-var
+  var __PAYSWAP_NET_SETTLE_TIMER: ReturnType<typeof setInterval> | null | undefined;
+  // eslint-disable-next-line no-var
+  var __PAYSWAP_REBALANCE_INPUTS: RebalanceInputs | null | undefined;
+  // eslint-disable-next-line no-var
+  var __PAYSWAP_PROPOSAL_INPUTS: ProposalApplyInputs | null | undefined;
+  // eslint-disable-next-line no-var
+  var __PAYSWAP_AUCTION_INPUTS: AuctionRefundInputs | null | undefined;
+}
+
+function getNetSettleInputs(): NetSettleInputs | null {
+  return globalThis.__PAYSWAP_NET_SETTLE_INPUTS ?? null;
+}
+
+function getRebalanceInputs(): RebalanceInputs | null {
+  return globalThis.__PAYSWAP_REBALANCE_INPUTS ?? null;
+}
+
+function getProposalInputs(): ProposalApplyInputs | null {
+  return globalThis.__PAYSWAP_PROPOSAL_INPUTS ?? null;
+}
+
+function getAuctionInputs(): AuctionRefundInputs | null {
+  return globalThis.__PAYSWAP_AUCTION_INPUTS ?? null;
+}
 
 export function wireNetSettleInputs(inputs: NetSettleInputs): void {
-  netSettleInputs = inputs;
+  globalThis.__PAYSWAP_NET_SETTLE_INPUTS = inputs;
 }
 
 export function startNetSettlementCycle(intervalMs = 5 * 60 * 1000): void {
-  if (netSettleTimer) return;
-  netSettleTimer = setInterval(() => runNetSettlementCycle(), intervalMs);
+  if (globalThis.__PAYSWAP_NET_SETTLE_TIMER) return;
+  globalThis.__PAYSWAP_NET_SETTLE_TIMER = setInterval(() => runNetSettlementCycle(), intervalMs);
   eventEngine.emit('treasury.net_settle_cycle_started', { intervalMs, ts: nowTs() });
 }
 
 export function stopNetSettlementCycle(): void {
-  if (netSettleTimer) {
-    clearInterval(netSettleTimer);
-    netSettleTimer = null;
+  if (globalThis.__PAYSWAP_NET_SETTLE_TIMER) {
+    clearInterval(globalThis.__PAYSWAP_NET_SETTLE_TIMER);
+    globalThis.__PAYSWAP_NET_SETTLE_TIMER = null;
     eventEngine.emit('treasury.net_settle_cycle_stopped', { ts: nowTs() });
   }
 }
@@ -355,11 +392,12 @@ export function runNetSettlementCycle(): ClosedLoopAction[] {
   if (!loopSwitches[loop]) {
     return [recordSkipped(loop, 'cycle', 'loop_paused')];
   }
-  if (!netSettleInputs) {
+  const inputs = getNetSettleInputs();
+  if (!inputs) {
     return [recordSkipped(loop, 'cycle', 'net_settle_inputs_not_wired')];
   }
 
-  const corridors = netSettleInputs.corridorsWithObligations();
+  const corridors = inputs.corridorsWithObligations();
   const actions: ClosedLoopAction[] = [];
   for (const corridor of corridors) {
     if (!withinCap(loop, 1)) {
@@ -367,7 +405,7 @@ export function runNetSettlementCycle(): ClosedLoopAction[] {
       break;
     }
     try {
-      const { settled, currency } = netSettleInputs.settleCorridor(corridor);
+      const { settled, currency } = inputs.settleCorridor(corridor);
       const action: ClosedLoopAction = {
         id: uid('cl'),
         loop,
@@ -474,6 +512,7 @@ let auctionInputs: AuctionRefundInputs | null = null;
 
 export function wireAuctionInputs(inputs: AuctionRefundInputs): void {
   auctionInputs = inputs;
+  globalThis.__PAYSWAP_AUCTION_INPUTS = inputs;
 }
 
 export function auctionTimeoutRefund(
@@ -483,6 +522,9 @@ export function auctionTimeoutRefund(
   const loop: ClosedLoopAction['loop'] = 'E8_auction_refund';
   if (!loopSwitches[loop]) {
     return recordSkipped(loop, `auction:${auctionId}`, 'loop_paused');
+  }
+  if (!auctionInputs) {
+    auctionInputs = getAuctionInputs();
   }
   if (!auctionInputs) {
     return recordSkipped(loop, `auction:${auctionId}`, 'auction_inputs_not_wired');

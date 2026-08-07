@@ -1,175 +1,98 @@
-# PaySwap Roadmap — wiring the two-reserve model into the money path
+# PaySwap Roadmap — Unifying the Rule (v4)
 
-> **The model, in two lines:**
-> ```
-> Local payments  → FIAT reserves
-> Cross-border    → crypto reserves
-> ```
-> LPs extend reserve capacity when PaySwap's own reserves are insufficient.
-> Twin tokens mirror FIAT reserves 1:1. Stablecoins bridge until FIAT reserves grow.
-
-**This is not a build roadmap. It is a wiring roadmap.**
-
-The components exist. They are not connected. Nearly every ticket connects something
-that already exists rather than building something new.
-
-The waterfall and the 5-strategy matrix are **the same rule at two scopes**:
-- The waterfall answers: *for one leg of a payment, whose liquidity pays?*
-- Tiers 1–2 = RESERVE. Tiers 3–5 = MARKET.
-- The strategy names are labels on the pair of leg results.
-
-**Keep the two-layer framing for how you describe PaySwap. Keep the matrix for how
-you implement it. They are the same thing.**
-
-## What's already right — do not disturb
-- **The planner is pure.** `LiquidityPolicyEngine.compile()` — same input → same plan.
-- **Fallbacks are compiled in.** `buildFallbackGraph()` attaches fallback branches.
-- **Execution is a crash-safe saga.** `SettlementOrchestrator` rebuilds from events.
-- **Fees follow the economics.** Reserve strategies = 100% PaySwap; market = LP split.
-
-## What's broken
-- Netting engine: only called by the simulator, not the settlement path
-- Corridor balancer: called by nothing
-- Backing verifier: called by nothing
-- FX module: not in the settlement path
-- Rebalance endpoint: returns `{ rebalanced: true }` without rebalancing
+> **Audit grade: B−.** Three issues pull it down. This roadmap fixes them
+> in the order the auditor specified, with the "no orphans" and "no
+> contamination" principles from v3 enforced throughout.
 
 ---
 
-## W — Wiring (do this first, all of it)
+## The three issues (confirmed by import graph)
 
-### W1 · Backing verifier in front of every mint — IN PROGRESS
-- **Files:** `src/protocol/treasury-v2/backing.ts`, `src/runtime/dispatcher/handlers.ts`
-- `backing.ts` implements the 1:1 `TWIN<CCY>` ≥ `<CCY>` reserve invariant as a
-  `preMintHook` gate. Nothing calls it. The handler emits `twin.minted` with no check.
-- Route every `twin.minted` event through the verifier's hooks.
-- **Acceptance:** a mint against insufficient reserves is rejected with the shortfall named.
+### Issue 1 — S3 went the wrong direction: two parallel routing rules
 
-### W2 · Netting in the settlement path — TODO · **Depends:** W1
-- **Files:** `src/protocol/settlement/net-settlement.ts`, `src/runtime/dispatcher/handlers.ts`
-- Cross-border plans should record corridor obligations and settle net on a cycle,
-  not gross per payment. This is the largest cost lever in the system.
-- **Acceptance:** balanced corridor (KE→GH 1.2M, GH→KE 1.15M) moves 50k, not 2.35M.
+**Evidence:**
+- `policy-engine.ts:289-312` — `selectStrategy()` is still a hand-written boolean matrix on `hasFiatReserve`. Zero imports from `settlement-waterfall.ts`.
+- `handlers.ts:30,336,343` — the live dispatcher calls `selectSettlementSource()` + `resolvePayment()` from the waterfall directly. Never calls `.compile()` or `.selectStrategy()`.
+- 7 call sites use the planner's `compile()`/`selectStrategy()`: `settlement-simulator.ts:179`, `economic-simulation.ts:220`, `planner/index.ts:327`, `platform/engine.ts:66,477`, `showcase/route.ts:836`, `compiler-explorer.tsx:246`.
+- The `settlement-waterfall.ts:2` docstring claims "the ONLY routing rule" — that's false.
 
-### W3 · Persist corridor obligations — TODO · **Depends:** W2
-- **Files:** `src/protocol/settlement/net-settlement.ts`
-- `NetSettlementEngine` is an in-memory `Map`. Unsettled obligations are money owed.
-- **Acceptance:** kill process mid-cycle; obligations reconstruct from event log.
+**Consequence:** the simulator and production can disagree on strategy for the same input. The I2 decision (no twin mint on LOCAL_RAIL) was applied to both paths by hand — they're kept in sync manually and will diverge.
 
-### W4 · Fix `netVolume()` dedupe key — TODO · **Depends:** W3
-- **Files:** `src/protocol/settlement/net-settlement.ts:86-95`
-- Key omits currency — multi-currency corridors collapse to one key.
-- **Acceptance:** GH↔NG in GHS and USD reports two nets, not one.
+### Issue 2 — F2 makes F3 produce wrong numbers: FX exposure at rate:1
 
-### W5 · Make rebalance endpoint actually rebalance — TODO · **Depends:** W2
-- **Files:** `src/app/api/treasury/rebalance/route.ts`, `src/protocol/treasury-v2/balancing.ts`
-- Either invoke `CorridorBalancer` or stop returning `{ rebalanced: true }`.
-- **Acceptance:** response reports amount moved + donor corridor, or `{ rebalanced: false, reason }`.
+**Evidence:**
+- `handlers.ts:227` — `fxExposureService.openPosition({ rate: 1, ... })` (pre-flight, no comment).
+- `handlers.ts:592` — `fxExposureService.openPosition({ rate: 1, // simplified })` (tier-5 path).
+- Zero imports of `@/kernel/fx` or `@/protocol/connectors-v2/fx-rate` in `src/runtime/`.
+- Rate sources DO exist: `kernel/fx.ts:35` (`fxEngine.quote()` with real USD-indexed rates) and `connectors-v2/fx-rate.ts:58` (`FxRateConnector`). They're wired into `optimization-engine` and the connector registry, just not into the dispatcher.
+- The simulator/planner also hardcode `fxRate: 1` (`settlement-simulator.ts:170`, `planner/index.ts:333`).
 
----
+**Consequence:** a GHS→NGN payment books FX exposure as though 1 GHS = 1 NGN. The exposure dashboard reads confidently wrong. Worse than absent FX.
 
-## F — FX (the gap the two-layer framing hides)
+### Issue 3 — W2 records but never nets; W3 doesn't persist
 
-### F1 · Give the intent two currencies — TODO
-- **Files:** `src/runtime/liquidity/types.ts`, `src/runtime/liquidity/settlement-waterfall.ts`
-- Split `currency` into `sourceCurrency`/`destinationCurrency`; add `convert_fx` action.
-- **Acceptance:** GHS→NGN intent compiles with explicit FX action + quoted rate.
+**Evidence:**
+- Zero calls to `netSettlementEngine.settle()` anywhere in `src/`.
+- `wireNetSettleInputs()` is never called → E6 closed-loop timer fires every 5 min but always records `skipped: net_settle_inputs_not_wired`.
+- `corridors` Map at `net-settlement.ts:24` is in-memory only. No rehydrate.
+- `corridor.obligation.recorded` events ARE written durably (`handlers.ts:517`) but nothing reads them back.
+- `corridor.obligation.settled` event type does not exist.
 
-### F2 · Wire FX modules into the planner — TODO · **Depends:** F1
-- **Files:** `src/kernel/fx.ts`, `src/protocol/connectors-v2/fx-rate.ts`, `src/runtime/liquidity/settlement-waterfall.ts`
-- Pass the quote in via inputs (keep planner pure — same quote → same plan).
-- **Acceptance:** `compile()` stays deterministic with FX.
-
-### F3 · FX risk owner — TODO · **Depends:** F2
-- **Files:** `src/protocol/treasury-v2/limits.ts`, `src/protocol/treasury-v2/stress-test.ts`
-- Decide: PaySwap wears it (limit + hedge), LP wears it (priced in fee), or sender wears it (re-quote on expiry).
-- **Acceptance:** open FX exposure per corridor is a number with a limit.
+**Consequence:** obligations accumulate but nothing settles them. Not one unit of liquidity movement has been saved. On restart, the Map is empty.
 
 ---
 
-## S — The waterfall as the per-leg resolver
+## The fix — in the auditor's order
 
-### S1 · Add FIAT as an asset type — TODO
-- **Files:** `src/runtime/liquidity/types.ts:49-56` (`LiquidityAction`)
-- `assetType` is `'twin_token' | 'stablecoin'`. There is no FIAT. Tier 2 is unrepresentable.
-- Add `'fiat'` + action semantics (external debit against LP-held account, mandate, limits, reversal).
-- **Acceptance:** a plan can express "debit LP X's Ghanaian bank account for 50,000 GHS."
+### Phase A — Delete one of the two rules (S3)
 
-### S2 · Tier 2 needs a mandate — TODO · **Depends:** S1
-- **Files:** new LP mandate model, `src/protocol/lp-lifecycle-manager.ts`
-- Debiting external bank accounts requires standing authorisation + reversal reserve.
-- **Acceptance:** LP without active mandate never appears at tier 2.
+**Decision: make `LiquidityPolicyEngine.selectStrategy()` delegate to `resolvePayment()` from the waterfall.**
 
-### S3 · Derive strategy from per-leg waterfall — TODO · **Depends:** S1, F1
-- **Files:** `src/runtime/liquidity/settlement-waterfall.ts`, `src/runtime/dispatcher/handlers.ts`
-- Replace pre-decided booleans with `resolveLeg(country, currency, amount) → { tier, source }`.
-- Strategy name = label on pair of leg results. Record skipped tiers + reasons.
-- **Acceptance:** five strategy names still produced, same inputs, no hand-written branch.
+Why this direction (not the reverse):
+- The planner is the codebase's best property — pure, replayable, deterministic. Retiring it would lose that.
+- Making `selectStrategy()` call `resolvePayment()` means simulators (which call `compile()` → `selectStrategy()`) now derive strategy from the waterfall. Production (which calls the waterfall directly) is unchanged. ONE rule, both paths.
+- The planner's `compile()` still produces the detailed `LiquidityExecutionPlan` (treasury/liquidity/settlement actions). Only the strategy SELECTION is delegated — the rest of the plan stays as-is, keyed off the waterfall-derived strategy name.
 
-### S4 · Resolve LP at compile time — TODO · **Depends:** S3
-- **Files:** `src/runtime/liquidity/policy-engine.ts:168,176,184,188`
-- Every bandwidth action carries `lpId: 'auto_select'`. Select LP in the planner.
-- **Acceptance:** identical inputs → identical `lpId`s.
+**Acceptance:**
+- `selectStrategy()` calls `resolvePayment()` — no hand-written boolean matrix.
+- `policy-engine.ts` imports from `settlement-waterfall.ts`.
+- Simulators and production produce the same strategy for the same input.
 
-### S5 · Wire tier 5 (marketplace auction) — TODO · **Depends:** S3
-- **Files:** `src/protocol/settlement/auctions.ts`, `src/protocol/liquidity/marketplace.ts`
-- Tier 5 is async — parks in `marketplace` state, resumes on fill, refunds on timeout.
-- Consider committed facilities (pre-agreed size/price) as tier 4.5.
-- **Acceptance:** settlement reaching tier 5 parks, resumes, or refunds — never hangs.
+### Phase B — Connect a rate source or stop recording exposure (F2)
 
----
+**Decision: wire `fxEngine.quote()` into the dispatcher. If no rate is available, emit `fx.rate_missing` and refuse to open the position.**
 
-## I — The invariant, per location
+Why not "stop recording":
+- Rate sources exist (`fxEngine` with real USD-indexed rates). The fix is to thread them in, not to disable the feature.
+- But: if a corridor isn't in the rate table, the system must NOT open a position at rate:1. It must emit `fx.rate_missing` and skip the position opening.
 
-### I1 · Should RESERVE_TO_RESERVE balance in-plan? — TODO · **Depends:** W2, W5
-- **Files:** `src/runtime/liquidity/policy-engine.ts:122-126`
-- Plan credits sender reserve + mints twin at destination, no debit on destination.
-- Choose: settle location in-plan (simpler, more movement) or accumulate + rebalance (less movement, requires W2+W5 loop).
-- **Acceptance:** per-country reserve drift is a monitored number with an alarm threshold.
+**Acceptance:**
+- `handlers.ts` imports `fxEngine` from `@/kernel/fx`.
+- `openPosition()` calls use `fxEngine.quote(from, to).effectiveRate` — never `1`.
+- If the rate isn't available (unknown currency), emit `fx.rate_missing` and don't open the position.
+- The FX exposure dashboard reads real rates.
 
-### I2 · What do twin tokens do on LOCAL_RAIL? — TODO
-- **Files:** `src/runtime/liquidity/policy-engine.ts:116-120`
-- GHS→GHS mints tGHS — what does tGHS do locally that a ledger entry doesn't?
-- Decide: mint-on-deposit (simple invariant, off payment path) vs mint-on-corridor-entry (supply tied to utility).
-- **Acceptance:** written decision + if minting stays, one sentence naming tGHS's local job.
+### Phase C — Call settle() on a cycle + event-source the corridor map (W2+W3)
 
----
+**Decision: wire `wireNetSettleInputs()` at startup, emit `corridor.obligation.settled` events, rehydrate the Map from the event log.**
 
-## D — The long-term direction
+Three changes:
+1. `netSettlementEngine.settle()` emits a `corridor.obligation.settled` event (via callback, since the engine is kernel-frozen and can't import the event engine directly — use a pluggable callback).
+2. `wireNetSettleInputs()` is called from `instrumentation.ts` with a `settleCorridor` callback that calls `netSettlementEngine.settle()` and emits the event.
+3. A projection replays `corridor.obligation.recorded` + `corridor.obligation.settled` events into the Map on startup.
 
-### D1 · Measure stablecoin→twin shift — TODO · **Depends:** W1
-- **Files:** `src/protocol/treasury-v2/backing.ts`, `src/runtime/liquidity/types.ts:209-215`
-- Surface % stablecoin vs % twin of crypto-tier capacity, per corridor.
-- **Acceptance:** treasury dashboard shows the ratio + trend per corridor.
-
-### D2 · Propose migrations, don't execute — TODO · **Depends:** D1, W5
-- **Files:** `src/protocol/treasury-v2/balancing.ts`, `src/runtime/settlement-orchestrator/autonomous.ts`
-- When FIAT reserves cross threshold, propose converting stablecoin → twin for that corridor.
-- **Acceptance:** opening NGN FIAT reserve produces a proposal with corridor, amount, composition.
+**Acceptance:**
+- `netSettlementEngine.settle()` is called by the E6 cycle every 5 minutes.
+- `corridor.obligation.settled` events are emitted and visible in the event store.
+- On restart, the corridor Map is rehydrated from the event log.
+- A balanced corridor (KE→GH 1.2M, GH→KE 1.15M) settles 50K net, not 2.35M gross.
 
 ---
 
-## Ordering
+## Implementation order
 
-**W1–W5 first.** Small wiring tickets. Until they land, the system reports outcomes
-it doesn't produce — making every later measurement untrustworthy.
+1. **Phase A** (unify the rule) — the biggest risk, do it first.
+2. **Phase B** (FX rate source) — independent of A, quick win.
+3. **Phase C** (net settlement cycle + event-sourced Map) — the headline cost lever.
 
-**F1–F3 next.** FX changes the shape of `LiquidityIntent` and `TreasuryAction`.
-Every S ticket touches those types. Doing S first means doing it twice.
-
-**S1–S5 then.** Waterfall is a refactor of a working planner, provable by snapshot
-equality against today's plans.
-
-**I and D last.** Decisions, easier once W and F make consequences visible.
-
----
-
-## Fee model (by waterfall tier)
-
-| Tier | Fee | Split | Description |
-|------|-----|-------|-------------|
-| 1 | 80bps | 100% PaySwap | PaySwap FIAT reserves |
-| 2 | 100bps | 60% PS, 40% LP | LP FIAT bandwidth |
-| 3 | 120bps | 100% PaySwap | PaySwap crypto (twin token or stablecoin) |
-| 4 | 150bps | 20% PS, 80% LP | LP crypto bandwidth |
-| 5 | 200bps+ | 10% PS, 90% LP | Marketplace auction |
+Each phase ends with: lint clean, test scenarios pass, browser-verified.

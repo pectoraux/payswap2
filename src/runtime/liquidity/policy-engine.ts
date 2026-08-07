@@ -12,15 +12,17 @@
  *   - fallbackGraph (deterministic fallback branches)
  *   - rollbackPlan (how to reverse if something fails)
  *
- * Strategy selection is deterministic:
- *   1. Same country → LOCAL_RAIL
- *   2. Both countries have fiat reserves → RESERVE_TO_RESERVE
- *   3. Sender has reserve, receiver doesn't → RESERVE_TO_MARKET
- *   4. Sender doesn't, receiver has reserve → MARKET_TO_RESERVE
- *   5. Neither has reserve → MARKET_TO_MARKET
+ * S3 FIX: Strategy selection is now DELEGATED to the settlement waterfall's
+ * `resolvePayment()` — the SAME rule the live dispatcher uses. Previously
+ * `selectStrategy()` was a hand-written boolean matrix that could diverge
+ * from the waterfall. Now there is ONE rule: both the simulator (which calls
+ * `compile()` → `selectStrategy()`) and production (which calls the waterfall
+ * directly) derive strategy from the same per-leg resolution.
  *
  * All output is deterministic — same input + same reserve state = same plan.
  */
+
+import { resolvePayment } from './settlement-waterfall';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -283,32 +285,56 @@ export class LiquidityPolicyEngine {
   // ─── Strategy Selection ───────────────────────────────────────────────────
 
   /**
-   * Select the settlement strategy based on reserve availability.
+   * Select the settlement strategy by DELEGATING to the settlement waterfall's
+   * per-leg resolver.
+   *
+   * S3 FIX: Previously this was a hand-written boolean matrix on
+   * `hasFiatReserve` — a parallel rule to the waterfall used by the live
+   * dispatcher. The simulator (which calls `compile()` → `selectStrategy()`)
+   * and production (which calls the waterfall directly) could disagree on
+   * strategy for the same input. Now there is ONE rule: both paths derive
+   * strategy from `resolvePayment()`.
+   *
+   * The planner stays pure and deterministic (same input → same strategy).
+   * The waterfall is the internal implementation of that derivation.
+   *
    * Deterministic: same input = same strategy.
    */
   selectStrategy(input: PolicyEngineInput): SettlementStrategy {
-    // Strategy 1: Same country → LOCAL_RAIL
-    if (input.fromCountry === input.toCountry) {
-      return 'LOCAL_RAIL';
-    }
+    // Map the planner's input shape to the waterfall's input shape.
+    // The planner tracks LP bandwidth as BandwidthPosition[]; the waterfall
+    // wants aggregate available amounts. Sum them here.
+    const senderLpFiat = input.senderBandwidth
+      .filter(bw => bw.assetType === 'fiat' && bw.status === 'active')
+      .reduce((s, bw) => s + bw.available, 0);
+    const receiverLpFiat = input.receiverBandwidth
+      .filter(bw => bw.assetType === 'fiat' && bw.status === 'active')
+      .reduce((s, bw) => s + bw.available, 0);
+    const lpCrypto = [...input.senderBandwidth, ...input.receiverBandwidth]
+      .filter(bw => bw.assetType === 'stablecoin' && bw.status === 'active')
+      .reduce((s, bw) => s + bw.available, 0);
+    const payswapStablecoin = input.treasuryStablecoins
+      .find(s => s.currency === 'USDC')?.amount ?? 0;
 
-    // Strategy 2: Both countries have fiat reserves → RESERVE_TO_RESERVE
-    if (input.senderReserve.hasFiatReserve && input.receiverReserve.hasFiatReserve) {
-      return 'RESERVE_TO_RESERVE';
-    }
+    // Delegate to the waterfall — ONE rule for both simulator and production.
+    const resolution = resolvePayment({
+      originCountry: input.fromCountry,
+      destinationCountry: input.toCountry,
+      sourceCurrency: input.fromCurrency,
+      destinationCurrency: input.toCurrency,
+      amount: input.amount,
+      senderHasFiatReserve: input.senderReserve.hasFiatReserve,
+      senderFiatReserveAmount: input.senderReserve.fiatReserveAmount,
+      receiverHasFiatReserve: input.receiverReserve.hasFiatReserve,
+      receiverFiatReserveAmount: input.receiverReserve.fiatReserveAmount,
+      senderLpFiatAvailable: senderLpFiat,
+      receiverLpFiatAvailable: receiverLpFiat,
+      payswapStablecoinAvailable: payswapStablecoin,
+      payswapTwinTokenAvailable: input.receiverReserve.fiatReserveAmount, // twin mirror of FIAT reserve
+      lpCryptoAvailable: lpCrypto,
+    });
 
-    // Strategy 3: Sender has reserve, receiver doesn't → RESERVE_TO_MARKET
-    if (input.senderReserve.hasFiatReserve && !input.receiverReserve.hasFiatReserve) {
-      return 'RESERVE_TO_MARKET';
-    }
-
-    // Strategy 4: Sender doesn't have reserve, receiver does → MARKET_TO_RESERVE
-    if (!input.senderReserve.hasFiatReserve && input.receiverReserve.hasFiatReserve) {
-      return 'MARKET_TO_RESERVE';
-    }
-
-    // Strategy 5: Neither has reserve → MARKET_TO_MARKET
-    return 'MARKET_TO_MARKET';
+    return resolution.strategy as SettlementStrategy;
   }
 
   // ─── Strategy 1: LOCAL_RAIL ───────────────────────────────────────────────

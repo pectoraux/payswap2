@@ -27,6 +27,7 @@ import type { RuntimeCommand } from '@/runtime/dispatcher/types';
 import type { DispatchResult } from '@/runtime/dispatcher/dispatcher';
 import { runtime } from '@/runtime';
 import { liquidityPolicyEngine, type LiquidityExecutionPlan } from '@/runtime/liquidity';
+import { fxEngine } from '@/kernel/fx';
 
 // H-1 fix: import the persisted event store to flush after every dispatch.
 // This ensures events are written to the DB before the API returns,
@@ -330,7 +331,7 @@ class ExecutionPlanner {
             fromCurrency,
             toCurrency,
             amount,
-            fxRate: 1, // simplified — in production, use real FX rates
+            fxRate: fxEngine.rate(fromCurrency as any, toCurrency as any),
             senderReserve: {
               country: fromCountry,
               currency: fromCurrency,

@@ -35,6 +35,7 @@ import { netSettlementEngine } from '../../protocol/settlement/net-settlement';
 import { lpMandateService } from '../liquidity/lp-mandate-service';
 import { fxExposureService } from '../liquidity/fx-exposure-service';
 import { auctionEngine } from '../../protocol/settlement/auctions';
+import { fxEngine } from '../../kernel/fx';
 import type {
   CreatePaymentCommand,
   CreatePaymentPayload,
@@ -216,15 +217,44 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
     // This is the "act" that was previously missing: the FX exposure was
     // computed (and a limit_breached event emitted) but the payment
     // continued as if nothing happened.
+    //
+    // F2 FIX: the FX rate now comes from `fxEngine.quote()` (real
+    // USD-indexed rates), NOT hardcoded `rate: 1`. If the corridor isn't in
+    // the rate table, emit `fx.rate_missing` and skip the position opening —
+    // a wrong number that looks authoritative is worse than a gap.
     let fxBlockBreached: { corridor: string; reason: string } | null = null;
-    if (success && (payload.sourceCurrency ?? payload.currency) !== (payload.destinationCurrency ?? payload.currency)) {
-      const srcCcy = payload.sourceCurrency ?? payload.currency;
-      const dstCcy = payload.destinationCurrency ?? payload.currency;
+    const srcCcy = payload.sourceCurrency ?? payload.currency;
+    const dstCcy = payload.destinationCurrency ?? payload.currency;
+    const isCrossCurrency = success && srcCcy !== dstCcy;
+    let fxQuote: { rate: number; midRate: number; spreadBps: number } | null = null;
+
+    if (isCrossCurrency) {
+      // F2: get a REAL rate from the FX engine.
+      try {
+        const quote = fxEngine.quote(payload.amount, srcCcy as any, dstCcy as any);
+        fxQuote = { rate: quote.effectiveRate, midRate: quote.midRate, spreadBps: quote.spreadBps };
+      } catch {
+        // Rate not available for this corridor — emit fx.rate_missing and
+        // refuse to open a position. Do NOT fall back to rate: 1.
+        events.push({
+          type: 'fx.rate_missing',
+          streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
+          payload: {
+            paymentId, fromCurrency: srcCcy, toCurrency: dstCcy,
+            reason: `No FX rate available for ${srcCcy}:${dstCcy} — position not opened`,
+            ts: now,
+          } as unknown as Record<string, unknown>,
+        });
+        fxQuote = null;
+      }
+    }
+
+    if (isCrossCurrency && fxQuote) {
       // Pre-flight: would opening this position breach the limit?
       const projectedPosition = fxExposureService.openPosition({
         fromCurrency: srcCcy,
         toCurrency: dstCcy,
-        rate: 1,
+        rate: fxQuote.rate,
         sourceAmount: payload.amount,
         destinationAmount: netAmount,
         paymentId,
@@ -240,6 +270,7 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
             paymentId, corridor: fxBlockBreached.corridor, reason: fxBlockBreached.reason,
             blockedAt: now, closedLoop: 'E7_fx_block', closedLoopActionId: blockAction.id,
             paymentBlocked: true, preFlight: true,
+            rate: fxQuote.rate, midRate: fxQuote.midRate,
           } as unknown as Record<string, unknown>,
         });
       } else {
@@ -585,28 +616,46 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
           payload: { contractId: `sc_${paymentId}`, fundedAt: now } as unknown as Record<string, unknown>,
         });
         // F3: Record FX exposure for cross-currency auctions
+        // F2 FIX: use the REAL rate from fxEngine, not rate: 1.
         if (fromCcy !== toCcy) {
-          const fxPosition = fxExposureService.openPosition({
-            fromCurrency: fromCcy,
-            toCurrency: toCcy,
-            rate: 1, // simplified — real rate from FxQuote
-            sourceAmount: payload.amount,
-            destinationAmount: netAmount,
-            paymentId,
-          });
-          if (fxPosition) {
+          let tier5Rate = 1;
+          let tier5RateAvailable = false;
+          try {
+            const tier5Quote = fxEngine.quote(payload.amount, fromCcy as any, toCcy as any);
+            tier5Rate = tier5Quote.effectiveRate;
+            tier5RateAvailable = true;
+          } catch {
+            // Rate not available — emit fx.rate_missing, don't open a position.
             events.push({
-              type: 'fx.position_opened',
+              type: 'fx.rate_missing',
               streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
-              payload: { paymentId, positionId: fxPosition.id, corridor: fxPosition.corridor, sourceAmount: payload.amount, rate: 1, openedAt: now } as unknown as Record<string, unknown>,
+              payload: {
+                paymentId, fromCurrency: fromCcy, toCurrency: toCcy,
+                reason: `No FX rate available for ${fromCcy}:${toCcy} at tier 5 — position not opened`,
+                tier: 5, ts: now,
+              } as unknown as Record<string, unknown>,
             });
           }
-          // E7 NOTE: the FX limit breach case is handled by the pre-flight
-          // check above (before payment.completed). If we reach this point,
-          // the pre-flight passed and the position was opened successfully.
-          // The duplicate block here was removed because it would have
-          // emitted payment.failed AFTER payment.completed, creating an
-          // inconsistent lifecycle.
+          if (tier5RateAvailable) {
+            const fxPosition = fxExposureService.openPosition({
+              fromCurrency: fromCcy,
+              toCurrency: toCcy,
+              rate: tier5Rate,
+              sourceAmount: payload.amount,
+              destinationAmount: netAmount,
+              paymentId,
+            });
+            if (fxPosition) {
+              events.push({
+                type: 'fx.position_opened',
+                streamId: `${env}:fx:${paymentId}`, streamType: 'fx', kind: 'domain',
+                payload: { paymentId, positionId: fxPosition.id, corridor: fxPosition.corridor, sourceAmount: payload.amount, rate: tier5Rate, openedAt: now } as unknown as Record<string, unknown>,
+              });
+            }
+            // E7 NOTE: the FX limit breach case is handled by the pre-flight
+            // check above (before payment.completed). If we reach this point,
+            // the pre-flight passed and the position was opened successfully.
+          }
         }
       }
 

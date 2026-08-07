@@ -6006,3 +6006,58 @@ Stage Summary:
 - The "computed but not acted on" gap is closed for 6 of 10 observers (D1-D10 in the audit). Remaining: D8 (`RuntimeHost` bypassed by production — Phase 1), D9 (`CorridorBalancer` only manual — now auto via E1/E2/E6), D10 (`AuctionEngine` no auto-award — Phase 0.6/E8 wires timeout refund, but auto-award on bid is still pending).
 - Test scenarios: 21/21 pass (100%).
 - tsc: 0 errors in new files | lint: 0 errors (339 pre-existing warnings) | browser-verified: ✅ | closed-loops wired: ✅
+
+---
+Task ID: ROADMAP-V4-UNIFY-RULE
+Agent: main (Z.ai Code)
+Task: User audited the roadmap tickets by import graph and found 3 issues: S3 (waterfall is parallel, not replacement), F2 (FX exposure at rate:1), W2 (settle() never called) + W3 (corridor Map not persisted). Implement all three fixes.
+
+Work Log:
+- Verified all 3 findings by import graph (Explore subagent):
+  • S3 CONFIRMED: policy-engine.ts:289-312 is a hand-written boolean matrix, zero imports from settlement-waterfall.ts. 7 call sites use the planner's compile()/selectStrategy(), not the waterfall. The settlement-waterfall.ts:2 docstring "the ONLY routing rule" is false.
+  • F2 CONFIRMED: handlers.ts:227 and :592 both hardcode rate:1. Zero imports of @/kernel/fx in src/runtime/. Rate sources DO exist (kernel/fx.ts:fxEngine, connectors-v2/fx-rate.ts:FxRateConnector) but aren't wired into the dispatcher. The auditor's nuance: the rate source exists, the wiring is missing at the call site.
+  • W2 CONFIRMED: zero calls to netSettlementEngine.settle() in src/. wireNetSettleInputs() has zero callers. E6 timer runs every 5 min but always records "skipped: net_settle_inputs_not_wired". corridor.obligation.settled event type does not exist. corridors Map is in-memory only.
+
+- Phase A (S3 fix — unify the routing rule):
+  • Replaced LiquidityPolicyEngine.selectStrategy() — was a hand-written boolean matrix on hasFiatReserve, now delegates to resolvePayment() from the settlement waterfall.
+  • Added `import { resolvePayment } from './settlement-waterfall'` to policy-engine.ts.
+  • The planner stays pure and deterministic (same input → same output), but the strategy is now DERIVED from the waterfall's per-leg resolution. Simulators (which call compile() → selectStrategy()) and production (which calls the waterfall directly) now use the SAME rule.
+  • Mapped the planner's input shape (BandwidthPosition[], treasuryStablecoins[]) to the waterfall's input shape (senderLpFiatAvailable, payswapStablecoinAvailable, etc.) by summing bandwidth positions.
+  • Also fixed the simulator's fxRate:1 (settlement-simulator.ts:170 → fxEngine.rate()) and the planner's fxRate:1 (planner/index.ts:333 → fxEngine.rate()) — same bug pattern as F2, fixed in the same pass.
+
+- Phase B (F2 fix — wire real FX rates):
+  • Added `import { fxEngine } from '../../kernel/fx'` to handlers.ts.
+  • Pre-flight FX check (before payment.completed): calls fxEngine.quote(srcCcy, dstCcy) to get a real rate. If the rate isn't available (unknown currency), emits `fx.rate_missing` event and refuses to open a position — does NOT fall back to rate:1.
+  • Tier-5 FX position: same fix — fxEngine.quote() for the real rate, fx.rate_missing if unavailable.
+  • The fx.limit_breached event now carries `rate` and `midRate` from the real quote, so the exposure dashboard reads real numbers.
+  • Principle enforced: "a wrong number that looks authoritative is worse than a gap." If we don't have a rate, we say so — we don't record a wrong exposure.
+
+- Phase C (W2+W3 fix — call settle() + event-source the corridor Map):
+  • NetSettlementEngine.settle() now fires an onSettle callback (pluggable, set via setOnSettle()). The caller wires this to emit a `corridor.obligation.settled` event.
+  • Added rehydrateFromEvents(events: ObligationEvent[]) to NetSettlementEngine — rebuilds the corridor Map from replayed corridor.obligation.recorded + corridor.obligation.settled events on startup.
+  • Added corridorPairs() to NetSettlementEngine — returns unique corridor pair keys for the settlement cycle to iterate.
+  • instrumentation.ts now:
+    1. Calls netSettlementEngine.setOnSettle() with a callback that emits corridor.obligation.settled via eventEngine.
+    2. Replays corridor.obligation.* events from the persistence event store into netSettlementEngine.rehydrateFromEvents() on startup (W3). (Best-effort — catches DB errors and continues.)
+    3. Calls wireNetSettleInputs() with callbacks that call netSettlementEngine.corridorPairs() and netSettlementEngine.settle().
+  • Fixed Next.js dev-mode module duplication: moved netSettleInputs, rebalanceInputs, proposalInputs, auctionInputs to globalThis-backed storage. Without this, instrumentation.ts and API routes saw different module instances, and wireNetSettleInputs() in one wasn't visible to the other. Also moved netSettlementEngine itself to globalThis-backed singleton.
+  • The E6 closed-loop now ACTUALLY settles: runNetSettlementCycle() calls netSettlementEngine.settle() for each corridor with obligations, which fires the onSettle callback, which emits corridor.obligation.settled.
+
+Verification (curl + Agent Browser):
+- tsc: 0 errors in my files. Pre-existing errors in handlers.ts (ReserveState 'available' property + auctionEngine.open() arg count) unchanged.
+- lint: 0 errors, 344 warnings (339 pre-existing + 5 new for the globalThis declarations, all auto-fixable).
+- Dev server startup log confirms: "[closed-loops] 8 controllers wired (E1-E8): ... net-settle cycle (W2+W3: settle() called, events emitted, Map rehydrated) ..."
+- Cross-border GHS→NGN simulation: 200 OK, 8 events, corridor.obligation.recorded emitted with amount=1984 NGN.
+- Net settlement cycle (manual trigger): `result: "acted"`, `amount: 1984`, `corridor: "Ghana:Nigeria:NGN"`. The settle() call ran, the obligation was netted, the corridor.obligation.settled event was emitted. W2 is closed.
+- Test scenarios: 21/21 pass (100%).
+- Homepage: renders, theme toggle works (light↔dark), no console errors.
+
+Stage Summary:
+- **S3 FIXED**: One routing rule. policy-engine.ts imports from settlement-waterfall.ts and delegates selectStrategy() to resolvePayment(). The simulator and production now use the SAME rule. The settlement-waterfall.ts:2 docstring "the ONLY routing rule" is now true.
+- **F2 FIXED**: Real FX rates from fxEngine.quote() are used in both the pre-flight check and the tier-5 path. If no rate is available, fx.rate_missing is emitted and no position is opened. The exposure dashboard reads real numbers, not rate:1. Also fixed the simulator's and planner's fxRate:1 in the same pass.
+- **W2 FIXED**: netSettlementEngine.settle() is called by the E6 cycle every 5 minutes. corridor.obligation.settled events are emitted and visible in the event store. The headline cost lever is now realized — a balanced corridor settles the net, not the gross.
+- **W3 FIXED**: The corridor Map is rehydrated from the event log on startup via rehydrateFromEvents(). Obligation data is durable.
+- The E6 closed-loop is no longer dead — it runs, it acts, it emits events, and it's audited.
+- All three "computed but not acted on" gaps the auditor identified are now closed. The system computes the right number AND acts on it.
+- Test scenarios: 21/21 pass (100%).
+- tsc: 0 errors in new files | lint: 0 errors (344 warnings) | browser-verified: ✅

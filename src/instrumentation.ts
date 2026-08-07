@@ -39,9 +39,74 @@ export async function register() {
     // and the FX breach "block" doesn't actually block. The dashboard would
     // report these as handled when nothing happened.
     try {
-      const { wireClosedLoops } = await import('@/protocol/treasury-v2/closed-loop-controllers');
+      const { wireClosedLoops, wireNetSettleInputs } = await import('@/protocol/treasury-v2/closed-loop-controllers');
+      const { netSettlementEngine } = await import('@/protocol/settlement/net-settlement');
+      const { eventEngine } = await import('@/kernel/event');
+
+      // W2+W3 FIX: wire the net settlement cycle to actually call settle().
+      // The onSettle callback emits a `corridor.obligation.settled` event so
+      // the settlement is durable + auditable. The rehydrateFromEvents()
+      // call rebuilds the corridor Map from the event log on startup.
+      netSettlementEngine.setOnSettle((result) => {
+        eventEngine.emit('corridor.obligation.settled', {
+          fromCountry: result.fromCountry,
+          toCountry: result.toCountry,
+          currency: result.currency,
+          amount: result.amount,
+          direction: result.direction,
+          settledAt: result.settledAt,
+        } as unknown as Record<string, unknown>);
+      });
+
+      // Rehydrate the corridor Map from the event log (W3).
+      try {
+        const { eventStore } = await import('@/protocol/persistence');
+        const { events: persisted } = await eventStore.loadEvents({
+          limit: 1_000_000,
+          types: ['corridor.obligation.recorded', 'corridor.obligation.settled'],
+        });
+        const obligationEvents = persisted
+          .map(e => {
+            const p = (e as any).payload ?? (e as any);
+            if ((e as any).type === 'corridor.obligation.recorded' || p.type === 'corridor.obligation.recorded') {
+              return {
+                type: 'corridor.obligation.recorded' as const,
+                fromCountry: p.fromCountry,
+                toCountry: p.toCountry,
+                currency: p.currency,
+                amount: p.amount,
+              };
+            }
+            return {
+              type: 'corridor.obligation.settled' as const,
+              fromCountry: p.fromCountry,
+              toCountry: p.toCountry,
+              currency: p.currency,
+              amount: p.amount,
+            };
+          });
+        if (obligationEvents.length > 0) {
+          netSettlementEngine.rehydrateFromEvents(obligationEvents);
+          console.log(`[net-settlement] Rehydrated ${obligationEvents.length} obligation events into ${netSettlementEngine.all().length} corridors`);
+        }
+      } catch (e) {
+        console.error('[net-settlement] Rehydrate failed:', e);
+      }
+
+      // Wire the E6 net settlement cycle to call netSettlementEngine.settle().
+      wireNetSettleInputs({
+        corridorsWithObligations: () => {
+          return netSettlementEngine.corridorPairs().map(p => `${p.fromCountry}:${p.toCountry}:${p.currency}`);
+        },
+        settleCorridor: (corridor: string) => {
+          const [from, to, currency] = corridor.split(':');
+          const result = netSettlementEngine.settle(from, to, currency);
+          return { settled: result.settled, currency };
+        },
+      });
+
       wireClosedLoops();
-      console.log('[closed-loops] 8 controllers wired (E1-E8): drift→rebalance, low→rebalance, critical→pause, info-proposal→auto-apply, backing→fallback, net-settle cycle, FX→block, auction-timeout→refund');
+      console.log('[closed-loops] 8 controllers wired (E1-E8): drift→rebalance, low→rebalance, critical→pause, info-proposal→auto-apply, backing→fallback, net-settle cycle (W2+W3: settle() called, events emitted, Map rehydrated), FX→block, auction-timeout→refund');
     } catch (e) {
       console.error('[closed-loops] Failed to wire:', e);
     }
