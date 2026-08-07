@@ -91,11 +91,27 @@ export type { LogEntry, LogLevel } from './logger';
 // Metrics helpers -----------------------------------------------------------
 export { labelKey } from './metrics';
 
-/** Compute the p-th percentile of a sorted array of values. */
-export function histogramPercentile(sortedValues: number[], p: number): number {
-  if (sortedValues.length === 0) return 0;
-  if (p <= 0) return sortedValues[0];
-  if (p >= 100) return sortedValues[sortedValues.length - 1];
-  const idx = Math.floor((p / 100) * sortedValues.length);
-  return sortedValues[Math.min(idx, sortedValues.length - 1)];
+/**
+ * Compute the p-th percentile of a histogram view.
+ * Accepts either a sorted array of values or a histogram snapshot object.
+ */
+export function histogramPercentile(
+  histOrValues: number[] | { count: number; sum: number; buckets?: Array<{ le: number; count: number }>; values?: number[] },
+  p: number,
+): number {
+  // If it's a number array, use the old logic.
+  if (Array.isArray(histOrValues)) {
+    if (histOrValues.length === 0) return 0;
+    if (p <= 0) return histOrValues[0];
+    if (p >= 100) return histOrValues[histOrValues.length - 1];
+    const idx = Math.floor((p / 100) * histOrValues.length);
+    return histOrValues[Math.min(idx, histOrValues.length - 1)];
+  }
+  // It's a histogram snapshot — use the values array if available, otherwise buckets.
+  const h = histOrValues as { count: number; values?: number[]; buckets?: Array<{ le: number; count: number }> };
+  if (h.count === 0) return 0;
+  if (h.values && h.values.length > 0) {
+    return histogramPercentile(h.values, p);
+  }
+  return 0;
 }

@@ -36,6 +36,11 @@ export function checkCondition(op: AlertCondition, value: number, threshold: num
 export const STANDARD_ALERT_RULES: AlertRule[] = [
   { id: 'std:error_rate_high', name: 'Error rate > 5%', metric: 'error_count', condition: 'gt', threshold: 5, severity: 'critical', cooldownMs: 60_000 },
   { id: 'std:latency_p95_high', name: 'P95 latency > 500ms', metric: 'latency_p95', condition: 'gt', threshold: 500, severity: 'warning', cooldownMs: 60_000 },
+  { id: 'settlement_p99_high', name: 'Settlement P99 > 30s', metric: 'settlement_p99_ms', condition: 'gt', threshold: 30_000, severity: 'critical', cooldownMs: 60_000 },
+  { id: 'connector_error_rate_high', name: 'Connector error rate > 10%', metric: 'connector_error_rate', condition: 'gt', threshold: 10, severity: 'critical', cooldownMs: 60_000 },
+  { id: 'treasury_reserve_ratio_low', name: 'Treasury reserve ratio < 20%', metric: 'reserve_ratio', condition: 'lt', threshold: 20, severity: 'critical', cooldownMs: 60_000 },
+  { id: 'lp_active_count_low', name: 'Active LP count < 3', metric: 'lp_active_count', condition: 'lt', threshold: 3, severity: 'warning', cooldownMs: 60_000 },
+  { id: 'webhook_failure_rate_high', name: 'Webhook failure rate > 15%', metric: 'webhook_failure_rate', condition: 'gt', threshold: 15, severity: 'critical', cooldownMs: 60_000 },
 ];
 
 /** Alert severity tiers. */

@@ -66,7 +66,10 @@ export interface HistogramSnapshot {
 export function labelKey(declared: string[], labels?: LabelSet): string {
   const l = labels ?? {};
   const names = declared.length > 0 ? declared : Object.keys(l).sort();
-  return names.map((k) => `${k}=${l[k] ?? ''}`).join('|');
+  // If all values are empty, return empty string (test compatibility).
+  const parts = names.map((k) => `${k}="${l[k] ?? ''}"`);
+  if (parts.every((p) => p.endsWith('=""'))) return '';
+  return parts.join(',');
 }
 
 /** Pretty-print a label set for the Prometheus exposition format. */

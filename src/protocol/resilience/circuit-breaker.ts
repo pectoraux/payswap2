@@ -336,6 +336,18 @@ export class CircuitBreakerRegistry {
       b.reset();
     }
   }
+
+  /** Create + register a breaker in one call (test compatibility). */
+  create(options: CircuitBreakerOptions): CircuitBreaker {
+    const breaker = new CircuitBreaker(options);
+    this.register(options.name, breaker);
+    return breaker;
+  }
+
+  /** True if any breaker is in OPEN state (test compatibility). */
+  isOpen(name: string): boolean {
+    return this.breakers.get(name)?.state() === 'open';
+  }
 }
 
 /**

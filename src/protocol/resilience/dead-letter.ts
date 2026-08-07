@@ -56,6 +56,8 @@ export interface DeadLetterEntry {
   replayedAt?: number;
   /** If replayed, the outcome of the replay attempt. */
   replayOutcome?: { ok: true } | { ok: false; message: string };
+  /** Whether the entry can be replayed (test compatibility). */
+  replayable?: boolean;
 }
 
 /** Optional filter passed to `list()`. All fields are optional. */
@@ -104,6 +106,7 @@ export class DeadLetterQueue {
       firstAttemptTs: input.firstAttemptTs ?? ts,
       dlqAt: ts,
       status: 'pending_review',
+      replayable: true,
     };
     this.entries.set(id, entry);
     this.order.push(id);
@@ -151,6 +154,9 @@ export class DeadLetterQueue {
   ): Promise<DeadLetterEntry | undefined> {
     const entry = this.entries.get(id);
     if (!entry) return undefined;
+    if (entry.status === 'discarded') {
+      throw new Error(`Cannot replay entry ${id}: entry has been discarded`);
+    }
     const replayedAt = nowTs();
     try {
       await replayFn({ ...entry });
@@ -168,12 +174,16 @@ export class DeadLetterQueue {
     return { ...entry };
   }
 
-  /** Mark an entry as discarded with a human-readable reason. */
+  /** Mark an entry as discarded with a human-readable reason. Throws if already replayed. */
   discard(id: string, reason: string): DeadLetterEntry | undefined {
     const entry = this.entries.get(id);
     if (!entry) return undefined;
+    if (entry.status === 'replayed') {
+      throw new Error(`Cannot discard entry ${id}: already replayed`);
+    }
     entry.status = 'discarded';
     entry.discardReason = reason;
+    entry.replayable = false;
     return { ...entry };
   }
 
