@@ -27,7 +27,7 @@ import type { UncommittedEvent } from '../events';
 import type { RuntimeSnapshot } from '../invariants';
 import type { Environment } from '../types';
 import { uid } from '../types';
-import { LiquidityPolicyEngine, type PolicyEngineInput, type ReserveState } from '../liquidity/policy-engine';
+import { selectSettlementSource, isLocal, twinTokenSymbol, type WaterfallInput, type WaterfallResult, type SettlementTier, TIER_FEES, TIER_NAMES } from '../liquidity/settlement-waterfall';
 import type {
   CreatePaymentCommand,
   CreatePaymentPayload,
@@ -224,16 +224,15 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
         } as unknown as Record<string, unknown>,
       });
 
-      // ── ROUTING VIA THE ACTUAL LIQUIDITY POLICY ENGINE ──────────────
-      // The PaymentCommandHandler uses the SAME LiquidityPolicyEngine that the
-      // simulation and settlement simulator use. This ensures every payment —
-      // whether demo (sandbox) or real (live) — is routed through the same
-      // policy logic. No hardcoded heuristics.
+      // ── ROUTING VIA THE SETTLEMENT WATERFALL (2-layer model) ─────────
+      // The PaymentCommandHandler uses the settlement waterfall — the ONLY
+      // routing rule. Two layers, five tiers, deterministic priority:
+      //   LOCAL: tier 1 (PaySwap FIAT) → 2 (LP FIAT) → 5 (auction)
+      //   CROSS-BORDER: tier 3 (PaySwap crypto) → 4 (LP crypto) → 5 (auction)
       const corridorParts = corridor.split('-');
       const fromCcy = corridorParts[0] ?? payload.currency;
       const toCcy = corridorParts[1] ?? payload.currency;
 
-      // Map currency → country for reserve lookup
       const currencyToCountry: Record<string, string> = {
         GHS: 'Ghana', XOF: 'Togo', KES: 'Kenya', NGN: 'Nigeria',
         ZAR: 'South Africa', UGX: 'Uganda', RWF: 'Rwanda', USD: 'United States',
@@ -241,53 +240,42 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
       const fromCountryName = currencyToCountry[fromCcy] ?? fromCcy;
       const toCountryName = currencyToCountry[toCcy] ?? toCcy;
 
-      // Actual reserve states (matching the real PaySwap world state)
-      // Ghana has $50K fiat + $20K stablecoin; others have none.
-      const RESERVE_STATES: Record<string, ReserveState> = {
-        Ghana: { country: 'Ghana', currency: 'GHS', hasFiatReserve: true, fiatReserveAmount: 50_000, hasStablecoinReserve: true, stablecoinReserveAmount: 20_000, maturity: 'mostly_fiat' },
-        Togo: { country: 'Togo', currency: 'XOF', hasFiatReserve: false, fiatReserveAmount: 0, hasStablecoinReserve: false, stablecoinReserveAmount: 0, maturity: 'stablecoin_only' },
-        Kenya: { country: 'Kenya', currency: 'KES', hasFiatReserve: false, fiatReserveAmount: 0, hasStablecoinReserve: false, stablecoinReserveAmount: 0, maturity: 'stablecoin_only' },
-        Nigeria: { country: 'Nigeria', currency: 'NGN', hasFiatReserve: false, fiatReserveAmount: 0, hasStablecoinReserve: false, stablecoinReserveAmount: 0, maturity: 'stablecoin_only' },
+      // Reserve states (matching the PaySwap world state)
+      const RESERVE_STATES: Record<string, { hasFiatReserve: boolean; fiatReserveAmount: number; stablecoinReserveAmount: number }> = {
+        Ghana: { hasFiatReserve: true, fiatReserveAmount: 50_000, stablecoinReserveAmount: 20_000 },
+        Togo: { hasFiatReserve: false, fiatReserveAmount: 0, stablecoinReserveAmount: 0 },
+        Kenya: { hasFiatReserve: false, fiatReserveAmount: 0, stablecoinReserveAmount: 0 },
+        Nigeria: { hasFiatReserve: false, fiatReserveAmount: 0, stablecoinReserveAmount: 0 },
       };
 
-      const senderReserve = RESERVE_STATES[fromCountryName] ?? {
-        country: fromCountryName, currency: fromCcy, hasFiatReserve: false,
-        fiatReserveAmount: 0, hasStablecoinReserve: false, stablecoinReserveAmount: 0, maturity: 'stablecoin_only' as const,
-      };
-      const receiverReserve = RESERVE_STATES[toCountryName] ?? {
-        country: toCountryName, currency: toCcy, hasFiatReserve: false,
-        fiatReserveAmount: 0, hasStablecoinReserve: false, stablecoinReserveAmount: 0, maturity: 'stablecoin_only' as const,
-      };
+      const senderState = RESERVE_STATES[fromCountryName] ?? { hasFiatReserve: false, fiatReserveAmount: 0, stablecoinReserveAmount: 0 };
+      const receiverState = RESERVE_STATES[toCountryName] ?? { hasFiatReserve: false, fiatReserveAmount: 0, stablecoinReserveAmount: 0 };
 
-      // Build the policy engine input and compile the plan
-      const policyEngine = new LiquidityPolicyEngine();
-      const policyInput: PolicyEngineInput = {
-        fromCountry: fromCountryName,
-        toCountry: toCountryName,
-        fromCurrency: fromCcy,
-        toCurrency: toCcy,
+      // LP bandwidth (would come from BandwidthEngine in production)
+      const lpFiatAvailable = 30_000; // LP FIAT in destination country
+      const lpCryptoAvailable = 110_000; // LP crypto bandwidth
+
+      // Run the waterfall
+      const waterfallInput: WaterfallInput = {
         amount: payload.amount,
-        fxRate: 1,
-        senderReserve,
-        receiverReserve,
-        senderBandwidth: [], // LP bandwidth is resolved separately
-        receiverBandwidth: [],
-        treasuryStablecoins: [{ currency: 'USDC', amount: 20_000 }],
+        originCountry: fromCountryName,
+        destinationCountry: toCountryName,
+        sourceCurrency: fromCcy,
+        destinationCurrency: toCcy,
+        senderReserve: { country: fromCountryName, currency: fromCcy, tier: 'FIAT', ownership: 'PAYSWAP', assetKind: 'FIAT', ...senderState },
+        receiverReserve: { country: toCountryName, currency: toCcy, tier: 'FIAT', ownership: 'PAYSWAP', assetKind: 'FIAT', ...receiverState },
+        lpFiatAvailable,
+        lpCryptoAvailable,
+        payswapStablecoinAvailable: 20_000,
+        payswapTwinTokenAvailable: 50_000, // tGHS minted for Ghana
       };
 
-      let plan;
-      try {
-        plan = policyEngine.compile(policyInput);
-      } catch {
-        // If the policy engine fails, fall back to LOCAL_RAIL
-        plan = null;
-      }
-
-      const strategy = plan?.strategy ?? (fromCcy === toCcy ? 'LOCAL_RAIL' : 'MARKET_TO_MARKET');
+      const waterfall = selectSettlementSource(waterfallInput);
       const treasuryStreamId = `${env}:treasury:${paymentId}`;
-      const isDomestic = fromCcy === toCcy;
+      const local = isLocal({ originCountry: fromCountryName, destinationCountry: toCountryName, sourceCurrency: fromCcy, destinationCurrency: toCcy });
+      const twinSymbol = twinTokenSymbol(toCcy);
 
-      // Emit a routing.decision event so the pipeline is fully transparent
+      // Emit routing.decision with the waterfall result
       events.push({
         type: 'routing.decision',
         streamId: `${env}:routing:${paymentId}`,
@@ -295,285 +283,123 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
         kind: 'domain',
         payload: {
           paymentId,
-          strategy,
+          model: 'two-reserve-waterfall',
+          isLocal: local,
+          tier: waterfall.tier,
+          tierName: waterfall.tierName,
+          source: waterfall.source,
+          feeBps: waterfall.feeBps,
+          payswapSharePct: waterfall.payswapSharePct,
+          lpSharePct: waterfall.lpSharePct,
           fromCountry: fromCountryName,
           toCountry: toCountryName,
           fromCurrency: fromCcy,
           toCurrency: toCcy,
-          senderHasReserve: senderReserve.hasFiatReserve,
-          receiverHasReserve: receiverReserve.hasFiatReserve,
-          requiredBandwidth: plan?.requiredBandwidth ?? [],
-          requiredEscrow: plan?.requiredEscrow ?? [],
-          stablecoinUsage: plan?.stablecoinUsage ?? { required: false, amount: 0, currency: 'USDC', source: 'treasury' },
-          feeModel: plan?.feeModel ?? { totalFeeBps: 80, lpSharePercent: 0, payswapSharePercent: 100 },
-          settlementActions: plan?.settlementActions?.map((a: { type: string; reason: string }) => ({ type: a.type, reason: a.reason })) ?? [],
-          compiledBy: 'LiquidityPolicyEngine',
+          senderHasFiatReserve: senderState.hasFiatReserve,
+          receiverHasFiatReserve: receiverState.hasFiatReserve,
+          twinTokenSymbol: twinSymbol,
+          skipped: waterfall.skipped,
+          explanation: waterfall.explanation,
+          compiledBy: 'SettlementWaterfall',
           compiledAt: now,
         } as unknown as Record<string, unknown>,
       });
 
-      // ── Strategy-specific events (driven by the policy engine plan) ──
-      if (strategy === 'LOCAL_RAIL') {
-        // LOCAL_RAIL: credit fiat reserve + mint twin tokens
+      // ── Tier-specific events (driven by the waterfall) ──
+      if (waterfall.tier === 1) {
+        // Tier 1: PaySwap FIAT reserve — credit reserve + mint twin token
         events.push({
           type: 'treasury.account.credited',
-          streamId: treasuryStreamId,
-          streamType: 'treasury',
-          kind: 'domain',
-          payload: {
-            accountId: `reserve:${fromCcy}`,
-            amount: payload.amount,
-            currency: fromCcy,
-            reason: `LOCAL_RAIL: Credit fiat reserve for ${paymentId}`,
-            counterparty: payload.merchantId,
-            creditedAt: now,
-          } as unknown as Record<string, unknown>,
+          streamId: treasuryStreamId, streamType: 'treasury', kind: 'domain',
+          payload: { accountId: `reserve:${fromCcy}`, amount: payload.amount, currency: fromCcy, reason: `Tier 1: PaySwap FIAT reserve for ${paymentId}`, counterparty: payload.merchantId, creditedAt: now } as unknown as Record<string, unknown>,
         });
-
+        // Mint twin token (FIAT deposit → twin token mint, core invariant)
         events.push({
           type: 'twin.minted',
-          streamId: `${env}:twin:${paymentId}`,
-          streamType: 'twin_token',
-          kind: 'domain',
-          payload: {
-            accountId: `custodial:${payload.customerId ?? payload.merchantId}`,
-            tokenType: 'claim',
-            currency: fromCcy,
-            amount: payload.amount,
-            backed: true,
-            mintedAtFrame: now,
-            memo: `LOCAL_RAIL: Mint twin tokens for ${paymentId}`,
-          } as unknown as Record<string, unknown>,
+          streamId: `${env}:twin:${paymentId}`, streamType: 'twin_token', kind: 'domain',
+          payload: { accountId: `custodial:${payload.customerId ?? payload.merchantId}`, tokenType: 'claim', currency: fromCcy, amount: payload.amount, backed: true, mintedAtFrame: now, memo: `Tier 1: Mint ${twinSymbol} for ${paymentId}` } as unknown as Record<string, unknown>,
         });
-
         events.push({
           type: 'twin.backed',
-          streamId: `${env}:twin:${paymentId}`,
-          streamType: 'twin_token',
-          kind: 'domain',
-          payload: {
-            settlementAccountId: `reserve:${fromCcy}`,
-            currency: fromCcy,
-            amount: payload.amount,
-            backedAtFrame: now,
-          } as unknown as Record<string, unknown>,
+          streamId: `${env}:twin:${paymentId}`, streamType: 'twin_token', kind: 'domain',
+          payload: { settlementAccountId: `reserve:${fromCcy}`, currency: fromCcy, amount: payload.amount, backedAtFrame: now } as unknown as Record<string, unknown>,
         });
 
-      } else if (strategy === 'RESERVE_TO_RESERVE') {
-        // RESERVE_TO_RESERVE: credit reserve A, mint twin tokens B
-        events.push({
-          type: 'treasury.account.credited',
-          streamId: treasuryStreamId,
-          streamType: 'treasury',
-          kind: 'domain',
-          payload: {
-            accountId: `reserve:${fromCcy}`,
-            amount: payload.amount,
-            currency: fromCcy,
-            reason: `RESERVE_TO_RESERVE: Credit sender reserve for ${paymentId}`,
-            counterparty: payload.merchantId,
-            creditedAt: now,
-          } as unknown as Record<string, unknown>,
-        });
-
-        events.push({
-          type: 'twin.minted',
-          streamId: `${env}:twin:${paymentId}`,
-          streamType: 'twin_token',
-          kind: 'domain',
-          payload: {
-            accountId: `custodial:${payload.customerId ?? payload.merchantId}`,
-            tokenType: 'claim',
-            currency: toCcy,
-            amount: netAmount,
-            backed: true,
-            mintedAtFrame: now,
-            memo: `RESERVE_TO_RESERVE: Mint twin tokens for ${paymentId}`,
-          } as unknown as Record<string, unknown>,
-        });
-
-        events.push({
-          type: 'twin.backed',
-          streamId: `${env}:twin:${paymentId}`,
-          streamType: 'twin_token',
-          kind: 'domain',
-          payload: {
-            settlementAccountId: `reserve:${fromCcy}`,
-            currency: fromCcy,
-            amount: payload.amount,
-            backedAtFrame: now,
-          } as unknown as Record<string, unknown>,
-        });
-
-      } else if (strategy === 'RESERVE_TO_MARKET') {
-        // RESERVE_TO_MARKET: credit reserve A, resolve stablecoin liquidity (PaySwap treasury first), lock escrow
-        events.push({
-          type: 'treasury.account.credited',
-          streamId: treasuryStreamId,
-          streamType: 'treasury',
-          kind: 'domain',
-          payload: {
-            accountId: `reserve:${fromCcy}`,
-            amount: payload.amount,
-            currency: fromCcy,
-            reason: `RESERVE_TO_MARKET: Credit sender reserve for ${paymentId}`,
-            counterparty: payload.merchantId,
-            creditedAt: now,
-          } as unknown as Record<string, unknown>,
-        });
-
-        // Liquidity resolution: PaySwap treasury first (0bps), then LP bandwidth (80bps)
-        const payswapTreasuryAvail = 20_000;
-        const fromTreasury = Math.min(netAmount, payswapTreasuryAvail);
-        const fromLP = Math.max(0, netAmount - fromTreasury);
+      } else if (waterfall.tier === 2) {
+        // Tier 2: LP FIAT bandwidth — LP extends PaySwap's fiat capacity
         events.push({
           type: 'liquidity.resolved',
-          streamId: `${env}:liquidity:${paymentId}`,
-          streamType: 'liquidity',
-          kind: 'domain',
-          payload: {
-            paymentId, strategy: 'RESERVE_TO_MARKET',
-            liquidityPlan: [
-              { source: 'payswap_treasury', assetType: 'stablecoin', amount: fromTreasury, priority: 1, feeBps: 0 },
-              { source: 'lp_bandwidth', assetType: 'stablecoin', amount: fromLP, priority: 2, feeBps: fromLP > 0 ? 80 : 0 },
-            ],
-            totalFromTreasury: fromTreasury, totalFromLP: fromLP,
-            reason: `PaySwap treasury covered ${fromTreasury}, LP bandwidth covered ${fromLP}`,
-            resolvedAt: now,
-          } as unknown as Record<string, unknown>,
+          streamId: `${env}:liquidity:${paymentId}`, streamType: 'liquidity', kind: 'domain',
+          payload: { paymentId, tier: 2, source: 'lp_fiat', amount: payload.amount, lpFiatAvailable, feeBps: waterfall.feeBps, lpSharePct: waterfall.lpSharePct, reason: `Tier 2: LP FIAT bandwidth used for ${paymentId}`, resolvedAt: now } as unknown as Record<string, unknown>,
         });
 
+      } else if (waterfall.tier === 3) {
+        // Tier 3: PaySwap crypto reserves — twin token (if dest has FIAT) or stablecoin
+        const destHasFiat = receiverState.hasFiatReserve;
+        const cryptoAsset = destHasFiat ? twinSymbol : 'USDC';
+        events.push({
+          type: 'treasury.account.credited',
+          streamId: treasuryStreamId, streamType: 'treasury', kind: 'domain',
+          payload: { accountId: destHasFiat ? `twin:${twinSymbol}` : 'stablecoin:USDC', amount: payload.amount, currency: destHasFiat ? toCcy : 'USDC', reason: `Tier 3: PaySwap ${cryptoAsset} for ${paymentId}`, counterparty: payload.merchantId, creditedAt: now } as unknown as Record<string, unknown>,
+        });
+        if (destHasFiat) {
+          // Destination has FIAT reserve → mint twin token (FIAT deposit → mint)
+          events.push({
+            type: 'twin.minted',
+            streamId: `${env}:twin:${paymentId}`, streamType: 'twin_token', kind: 'domain',
+            payload: { accountId: `custodial:${payload.customerId ?? payload.merchantId}`, tokenType: 'claim', currency: toCcy, amount: netAmount, backed: true, mintedAtFrame: now, memo: `Tier 3: Mint ${twinSymbol} for ${paymentId}` } as unknown as Record<string, unknown>,
+          });
+          events.push({
+            type: 'twin.backed',
+            streamId: `${env}:twin:${paymentId}`, streamType: 'twin_token', kind: 'domain',
+            payload: { settlementAccountId: `reserve:${toCcy}`, currency: toCcy, amount: payload.amount, backedAtFrame: now } as unknown as Record<string, unknown>,
+          });
+        }
+        // Settlement contract for cross-border escrow
         events.push({
           type: 'settlement.contract.created',
-          streamId: `${env}:settlement:${paymentId}`,
-          streamType: 'settlement_contract',
-          kind: 'domain',
-          payload: {
-            contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy,
-            amount: netAmount, escrowAmount: netAmount, escrowCurrency: 'USDC',
-            strategy: 'RESERVE_TO_MARKET', createdAt: now,
-          } as unknown as Record<string, unknown>,
+          streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
+          payload: { contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy, amount: netAmount, escrowAmount: netAmount, escrowCurrency: 'USDC', strategy: `Tier 3: ${cryptoAsset}`, createdAt: now } as unknown as Record<string, unknown>,
         });
-
         events.push({
           type: 'settlement.contract.funded',
-          streamId: `${env}:settlement:${paymentId}`,
-          streamType: 'settlement_contract',
-          kind: 'domain',
+          streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
           payload: { contractId: `sc_${paymentId}`, fundedAt: now } as unknown as Record<string, unknown>,
         });
 
-      } else if (strategy === 'MARKET_TO_RESERVE') {
-        // MARKET_TO_RESERVE: obtain stablecoins (PaySwap treasury first), mint twin tokens B
-        events.push({
-          type: 'treasury.account.credited',
-          streamId: treasuryStreamId,
-          streamType: 'treasury',
-          kind: 'domain',
-          payload: {
-            accountId: `stablecoin:USDC`,
-            amount: payload.amount, currency: 'USDC',
-            reason: `MARKET_TO_RESERVE: Credit stablecoin reserve for ${paymentId}`,
-            counterparty: lpId, creditedAt: now,
-          } as unknown as Record<string, unknown>,
-        });
-
-        const payswapTreasuryAvailMTR = 20_000;
-        const fromTreasuryMTR = Math.min(netAmount, payswapTreasuryAvailMTR);
-        const fromLPMTR = Math.max(0, netAmount - fromTreasuryMTR);
+      } else if (waterfall.tier === 4) {
+        // Tier 4: LP crypto bandwidth
         events.push({
           type: 'liquidity.resolved',
-          streamId: `${env}:liquidity:${paymentId}`,
-          streamType: 'liquidity',
-          kind: 'domain',
-          payload: {
-            paymentId, strategy: 'MARKET_TO_RESERVE',
-            liquidityPlan: [
-              { source: 'payswap_treasury', assetType: 'stablecoin', amount: fromTreasuryMTR, priority: 1, feeBps: 0 },
-              { source: 'lp_bandwidth', assetType: 'stablecoin', amount: fromLPMTR, priority: 2, feeBps: fromLPMTR > 0 ? 60 : 0 },
-            ],
-            totalFromTreasury: fromTreasuryMTR, totalFromLP: fromLPMTR,
-            reason: `PaySwap treasury covered ${fromTreasuryMTR}, LP bandwidth covered ${fromLPMTR}`,
-            resolvedAt: now,
-          } as unknown as Record<string, unknown>,
+          streamId: `${env}:liquidity:${paymentId}`, streamType: 'liquidity', kind: 'domain',
+          payload: { paymentId, tier: 4, source: 'lp_crypto', amount: payload.amount, lpCryptoAvailable, feeBps: waterfall.feeBps, lpSharePct: waterfall.lpSharePct, reason: `Tier 4: LP crypto bandwidth used for ${paymentId}`, resolvedAt: now } as unknown as Record<string, unknown>,
         });
-
         events.push({
-          type: 'twin.minted',
-          streamId: `${env}:twin:${paymentId}`,
-          streamType: 'twin_token',
-          kind: 'domain',
-          payload: {
-            accountId: `custodial:${payload.customerId ?? payload.merchantId}`,
-            tokenType: 'claim', currency: toCcy, amount: netAmount,
-            backed: true, mintedAtFrame: now,
-            memo: `MARKET_TO_RESERVE: Mint twin tokens for ${paymentId}`,
-          } as unknown as Record<string, unknown>,
+          type: 'settlement.contract.created',
+          streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
+          payload: { contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy, amount: netAmount, escrowAmount: netAmount, escrowCurrency: 'USDC', strategy: 'Tier 4: LP crypto', createdAt: now } as unknown as Record<string, unknown>,
         });
-
         events.push({
-          type: 'twin.backed',
-          streamId: `${env}:twin:${paymentId}`,
-          streamType: 'twin_token',
-          kind: 'domain',
-          payload: {
-            settlementAccountId: `stablecoin:USDC`,
-            currency: 'USDC', amount: payload.amount, backedAtFrame: now,
-          } as unknown as Record<string, unknown>,
+          type: 'settlement.contract.funded',
+          streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
+          payload: { contractId: `sc_${paymentId}`, fundedAt: now } as unknown as Record<string, unknown>,
         });
 
       } else {
-        // MARKET_TO_MARKET: obtain stablecoins (PaySwap treasury first), lock escrow
-        events.push({
-          type: 'treasury.account.credited',
-          streamId: treasuryStreamId,
-          streamType: 'treasury',
-          kind: 'domain',
-          payload: {
-            accountId: `stablecoin:USDC`,
-            amount: payload.amount, currency: 'USDC',
-            reason: `MARKET_TO_MARKET: Credit stablecoin reserve for ${paymentId}`,
-            counterparty: lpId, creditedAt: now,
-          } as unknown as Record<string, unknown>,
-        });
-
-        const payswapTreasuryAvailMM = 20_000;
-        const fromTreasuryMM = Math.min(netAmount, payswapTreasuryAvailMM);
-        const fromLPMM = Math.max(0, netAmount - fromTreasuryMM);
+        // Tier 5: Marketplace auction
         events.push({
           type: 'liquidity.resolved',
-          streamId: `${env}:liquidity:${paymentId}`,
-          streamType: 'liquidity',
-          kind: 'domain',
-          payload: {
-            paymentId, strategy: 'MARKET_TO_MARKET',
-            liquidityPlan: [
-              { source: 'payswap_treasury', assetType: 'stablecoin', amount: fromTreasuryMM, priority: 1, feeBps: 0 },
-              { source: 'lp_bandwidth', assetType: 'stablecoin', amount: fromLPMM, priority: 2, feeBps: fromLPMM > 0 ? 90 : 0 },
-            ],
-            totalFromTreasury: fromTreasuryMM, totalFromLP: fromLPMM,
-            reason: `PaySwap treasury covered ${fromTreasuryMM}, LP bandwidth covered ${fromLPMM}`,
-            resolvedAt: now,
-          } as unknown as Record<string, unknown>,
+          streamId: `${env}:liquidity:${paymentId}`, streamType: 'liquidity', kind: 'domain',
+          payload: { paymentId, tier: 5, source: 'marketplace', amount: payload.amount, feeBps: waterfall.feeBps, lpSharePct: waterfall.lpSharePct, reason: `Tier 5: Marketplace auction required for ${paymentId}`, resolvedAt: now } as unknown as Record<string, unknown>,
         });
-
         events.push({
           type: 'settlement.contract.created',
-          streamId: `${env}:settlement:${paymentId}`,
-          streamType: 'settlement_contract',
-          kind: 'domain',
-          payload: {
-            contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy,
-            amount: netAmount, escrowAmount: netAmount, escrowCurrency: 'USDC',
-            strategy: 'MARKET_TO_MARKET', createdAt: now,
-          } as unknown as Record<string, unknown>,
+          streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
+          payload: { contractId: `sc_${paymentId}`, fromCountry: fromCcy, toCountry: toCcy, amount: netAmount, escrowAmount: netAmount, escrowCurrency: 'USDC', strategy: 'Tier 5: Auction', createdAt: now } as unknown as Record<string, unknown>,
         });
-
         events.push({
           type: 'settlement.contract.funded',
-          streamId: `${env}:settlement:${paymentId}`,
-          streamType: 'settlement_contract',
-          kind: 'domain',
+          streamId: `${env}:settlement:${paymentId}`, streamType: 'settlement_contract', kind: 'domain',
           payload: { contractId: `sc_${paymentId}`, fundedAt: now } as unknown as Record<string, unknown>,
         });
       }
