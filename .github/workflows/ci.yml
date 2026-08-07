@@ -1,0 +1,248 @@
+# PaySwap CI
+#
+# Two-tier design, deliberately:
+#
+#   gate       — MUST stay green. Blocks merge. Contains ONLY what passes today.
+#   reporting  — the known-red areas (333 type errors, 8 failing test files).
+#                Non-blocking, but ratcheted: the budget only ever goes DOWN.
+#
+# Why not one job that runs everything? Because typecheck and most of the test
+# suite are red right now. A CI that is red on day one gets ignored, then
+# disabled. Lock in what works, block regressions, shrink the red set.
+#
+# Every budget below was measured against commit 88768aa. Verify before
+# changing — they are meant to be lowered, never raised.
+#
+# Part 0 contract: routing.golden + single-rule-invariant + money.property are
+# the crown jewels. They prove the settlement waterfall behaves identically
+# after the money migration (MON-3) and the scale work (SCALE-2). They gate.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # bun skips devDependencies when NODE_ENV=production, which silently drops
+  # typescript and eslint — `typecheck` then fails with "tsc: command not
+  # found" (exit 127) instead of a real type error. Pin it.
+  NODE_ENV: development
+
+jobs:
+  # ══ Tier 1: blocking. Verified green at time of writing. ═══════════════
+  gate:
+    name: Gate (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: bun run db:generate
+        env:
+          # Provider is postgresql. A sqlite URL here is a lie that bites any
+          # command that actually connects. generate does not connect, but keep
+          # the scheme honest so nothing downstream inherits it.
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/payswap
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/payswap
+
+      # eslint currently exits 0 with 556 warnings and 0 errors, so it gates.
+      # --max-warnings pins the count so the warning debt cannot grow.
+      - name: Lint
+        run: bunx eslint . --max-warnings 556
+
+      # ── Part 0 contract — the routing identity ──
+      # Must never change without a deliberate, reviewed routing change.
+      - name: Contract — golden routing
+        run: bun test tests/routing.golden.test.ts
+
+      - name: Contract — single routing rule
+        run: bun test tests/single-rule-invariant.test.ts
+
+      - name: Contract — money invariants
+        run: bun test tests/money.property.test.ts
+
+      # ── Suites green today. Promoting a file here is the ratchet. ──
+      - name: Green suites
+        run: |
+          set -e
+          bun test tests/production3/liquidity-network.test.ts
+          bun test tests/production3/replay-determinism.test.ts
+
+      # ── SEC-2: every PUBLIC_ROUTES entry is an unauthenticated endpoint ──
+      - name: Public API route budget
+        run: |
+          COUNT=$(grep -cE "^\s*'/api/" src/middleware.ts || true)
+          BUDGET=16
+          echo "PUBLIC_ROUTES entries: $COUNT (budget $BUDGET)"
+          if [ "$COUNT" -gt "$BUDGET" ]; then
+            echo "::error::PUBLIC_ROUTES grew to $COUNT. Each entry is an endpoint reachable without a session — justify in the PR and raise this budget deliberately."
+            exit 1
+          fi
+
+  # ══ Tier 2: known-red, reported, ratcheting ════════════════════════════
+  typecheck:
+    name: Typecheck (ratchet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run db:generate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/payswap
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/payswap
+
+      # tsconfig includes **/*.ts and excludes only node_modules, so this
+      # covers tests/, scripts/, certification/, skills/ and examples/ too.
+      # Measured breakdown at 88768aa: 167 tests, 118 src, 31 scripts,
+      # 9 certification, 4 developer, 2 skills, 2 examples = 333.
+      - name: Count type errors
+        id: tsc
+        run: |
+          bunx tsc --noEmit > tsc.log 2>&1 || true
+          COUNT=$(grep -cE "error TS" tsc.log || true)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "### Type errors: $COUNT" >> "$GITHUB_STEP_SUMMARY"
+          grep -oE "^src/[a-z-]+/" tsc.log | sort | uniq -c | sort -rn | head -10 >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Ratchet — type errors must not increase
+        run: |
+          BUDGET=333
+          ACTUAL=${{ steps.tsc.outputs.count }}
+          echo "Type errors: $ACTUAL (budget $BUDGET)"
+          if [ "$ACTUAL" -gt "$BUDGET" ]; then
+            echo "::error::Type errors rose to $ACTUAL (budget $BUDGET)."
+            exit 1
+          fi
+          if [ "$ACTUAL" -lt "$BUDGET" ]; then
+            echo "::notice::Type errors down to $ACTUAL — lower BUDGET to $ACTUAL in this workflow."
+          fi
+
+  suite:
+    name: Full suite (ratchet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run db:generate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/payswap
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/payswap
+
+      # `bun test` discovers only a subset of tests/ — it ran 2 of 13 files in
+      # local reproduction, and a DIFFERENT 2 on a later run. Until that is
+      # fixed, iterate explicitly so every file is executed and counted.
+      - name: Run every test file
+        id: suite
+        run: |
+          FAILED=0
+          FAILING=""
+          for f in $(find tests -name '*.test.ts' | sort); do
+            echo "::group::$f"
+            if bun test "$f"; then echo "PASS $f"; else
+              echo "FAIL $f"; FAILED=$((FAILED + 1)); FAILING="$FAILING $f"
+            fi
+            echo "::endgroup::"
+          done
+          echo "failing=$FAILED" >> "$GITHUB_OUTPUT"
+          echo "### Failing files: $FAILED" >> "$GITHUB_STEP_SUMMARY"
+          for f in $FAILING; do echo "- \`$f\`" >> "$GITHUB_STEP_SUMMARY"; done
+
+      # Failing at 88768aa: chains, connectors-v2, ledger, ops, property,
+      # resilience, security, treasury-v2 = 8 files (~60 individual failures).
+      # security.test.ts fails to import next/server even with deps installed.
+      - name: Ratchet — failing files must not increase
+        run: |
+          BUDGET=8
+          ACTUAL=${{ steps.suite.outputs.failing }}
+          echo "Failing files: $ACTUAL (budget $BUDGET)"
+          if [ "$ACTUAL" -gt "$BUDGET" ]; then
+            echo "::error::Failing files rose to $ACTUAL (budget $BUDGET) — a previously-passing suite broke."
+            exit 1
+          fi
+          if [ "$ACTUAL" -lt "$BUDGET" ]; then
+            echo "::notice::Failing files down to $ACTUAL — lower BUDGET, and promote the fixed file into the gate job."
+          fi
+
+  # ══ Schema drift: a REAL check ═════════════════════════════════════════
+  # The previous version diffed prisma/schema.prisma against itself (always
+  # empty) and swallowed errors with `|| echo`. It could never fail.
+  schema-drift:
+    name: Schema drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: shadow
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+
+      # Committed migrations must fully describe the schema. --exit-code makes
+      # a non-empty diff exit 2 instead of printing and passing.
+      - name: Migrations match schema
+        run: |
+          if [ ! -d prisma/migrations ]; then
+            echo "::warning::No prisma/migrations directory — drift check skipped. Add migrations to enable it."
+            exit 0
+          fi
+          bunx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url postgresql://postgres:postgres@localhost:5432/shadow \
+            --exit-code
