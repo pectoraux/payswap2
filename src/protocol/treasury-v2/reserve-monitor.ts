@@ -278,6 +278,16 @@ export class ReserveMonitor {
     account.available += amount;
     account.lastReconciledTs = nowTs();
   }
+
+  /** Reset all reserve state (for tests). */
+  reset(): void {
+    this.reserves.clear();
+  }
+
+  /** Refresh backing ratios (test compatibility — no-op, ratios computed on set). */
+  refreshBackingRatios(): void {
+    // No-op — backing ratios are computed when setReserve is called.
+  }
 }
 
 // ---------------------------------------------------------------------------

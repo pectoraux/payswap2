@@ -395,6 +395,32 @@ export class TreasuryEngine {
     }
     return () => clearInterval(interval);
   }
+
+  /** Reset all treasury state (for tests). Stops timers + clears singletons. */
+  reset(): void {
+    for (const stop of this.timers) {
+      try { stop(); } catch { /* best-effort */ }
+    }
+    this.timers = [];
+    this.initialised = false;
+    // Reset dependent singletons.
+    try { reserveMonitor.reset(); } catch { /* may not exist */ }
+    try { backingVerifier.reset(); } catch { /* may not exist */ }
+    try { mintLimitEngine.reset(); } catch { /* may not exist */ }
+    try { burnLimitEngine.reset(); } catch { /* may not exist */ }
+  }
+
+  /** Record a successful mint (test compatibility — delegates to backing verifier + limit engine). */
+  recordMint(assetCode: string, amount: number): void {
+    mintLimitEngine.recordMint(assetCode, amount);
+    backingVerifier.recordMint(assetCode, amount);
+  }
+
+  /** Record a successful burn (test compatibility). */
+  recordBurn(assetCode: string, amount: number): void {
+    burnLimitEngine.recordBurn(assetCode, amount);
+    backingVerifier.recordBurn(assetCode, amount);
+  }
 }
 
 // ---------------------------------------------------------------------------

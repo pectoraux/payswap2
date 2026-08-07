@@ -113,6 +113,12 @@ export class ChainRegistry {
   has(chain: string): boolean {
     return this.adapters.has(chain);
   }
+
+  /** Reset all registered adapters (for tests). */
+  reset(): void {
+    this.adapters.clear();
+    this.defaultChain = STELLAR_CHAIN;
+  }
 }
 
 /** Singleton registry instance. */

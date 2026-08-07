@@ -73,13 +73,16 @@ export class MintLimitEngine {
   private limits = new Map<string, MintLimit>();
 
   /** Configure (or reconfigure) the mint limit for an asset. */
-  configure(assetCode: string, config: MintLimitConfig): MintLimit {
+  configure(assetCodeOrConfig: string | (MintLimitConfig & { assetCode: string }), config?: MintLimitConfig): MintLimit {
+    // Accept both (assetCode, config) and ({assetCode, ...config}) signatures.
+    const assetCode = typeof assetCodeOrConfig === 'string' ? assetCodeOrConfig : assetCodeOrConfig.assetCode;
+    const cfg = typeof assetCodeOrConfig === 'string' ? config! : assetCodeOrConfig;
     const existing = this.limits.get(assetCode);
     const limit: MintLimit = {
       assetCode,
-      dailyLimit: config.dailyLimit,
-      perTxLimit: config.perTxLimit,
-      cooldownMs: config.cooldownMs ?? 0,
+      dailyLimit: cfg.dailyLimit,
+      perTxLimit: cfg.perTxLimit,
+      cooldownMs: cfg.cooldownMs ?? 0,
       dailyUsed: existing?.dailyUsed ?? 0,
       windowStartTs: existing?.windowStartTs ?? nowTs(),
       lastMintTs: existing?.lastMintTs ?? 0,
