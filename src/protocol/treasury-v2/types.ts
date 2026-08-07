@@ -433,6 +433,9 @@ export interface TimeRange {
 /** The minimum backing ratio for a twin token to be considered fully backed (1.0 = 100%). */
 export const MIN_BACKING_RATIO = 1.0;
 
+/** The protocol's share of fees (0.0-1.0). The remainder goes to LPs. */
+export const PROTOCOL_FEE_SHARE = 0.20;
+
 /** The scope of an emergency freeze (kill switch). */
 export type FreezeScope = 'account' | 'asset' | 'corridor' | 'currency' | 'tier' | 'lp' | 'global';
 

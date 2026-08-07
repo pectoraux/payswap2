@@ -113,3 +113,30 @@ export function auditLogSize(): number {
 export function clearAuditLog(): void {
   buffer.length = 0;
 }
+
+// Singleton instance for convenience (used by tests + dashboard).
+export const auditLogInstance = {
+  log: auditLog,
+  size: auditLogSize,
+  clear: clearAuditLog,
+  query: getAuditLog,
+};
+
+/**
+ * Build attestation evidence for a connector response.
+ * Used by compliance flows to prove a connector interaction occurred.
+ */
+export function buildAttestationEvidence(params: {
+  connectorId: string;
+  requestHash: string;
+  responseHash: string;
+  ts: number;
+}): { type: 'connector_attestation'; connectorId: string; requestHash: string; responseHash: string; ts: number } {
+  return {
+    type: 'connector_attestation',
+    connectorId: params.connectorId,
+    requestHash: params.requestHash,
+    responseHash: params.responseHash,
+    ts: params.ts,
+  };
+}

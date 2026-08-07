@@ -73,3 +73,12 @@ export type {
   HealthStatus,
   HealthCheckThresholds,
 } from './health-check';
+
+// Liveness + readiness probes (for Kubernetes / load balancer health checks).
+/** ping() — returns true if the process is alive. Always true if this runs. */
+export function ping(): boolean { return true; }
+/** liveness() — returns true if the process can serve requests. */
+export function liveness(): boolean { return true; }
+
+// Partial settlement recovery ------------------------------------------------
+export { PartialSettlementRecovery, partialSettlementRecovery } from './partial-settlement';

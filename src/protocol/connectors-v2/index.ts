@@ -58,6 +58,8 @@ export {
   getAuditLog,
   auditLogSize,
   clearAuditLog,
+  auditLogInstance,
+  buildAttestationEvidence,
 } from './audit';
 export type { ConnectorAuditEntry, AuditLogFilter } from './audit';
 
@@ -75,3 +77,12 @@ export {
   productionConnectorRegistry,
 } from './registry';
 export type { AnyProductionConnector } from './registry';
+
+// Shared singletons (used by tests + dashboard).
+import { HealthMonitor } from './health';
+import { MetricsCollector } from './metrics';
+export const sharedHealthMonitor = new HealthMonitor();
+export const sharedMetricsCollector = new MetricsCollector();
+
+// Re-export DEFAULT_RETRY_POLICY as defaultRetryPolicy (test compatibility).
+export { DEFAULT_RETRY_POLICY as defaultRetryPolicy } from './retry';

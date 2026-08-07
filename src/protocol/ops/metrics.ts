@@ -63,7 +63,7 @@ export interface HistogramSnapshot {
  * Canonical serialization key for a label set. Uses the metric's declared
  * label names when available so missing labels sort deterministically.
  */
-function labelKey(declared: string[], labels?: LabelSet): string {
+export function labelKey(declared: string[], labels?: LabelSet): string {
   const l = labels ?? {};
   const names = declared.length > 0 ? declared : Object.keys(l).sort();
   return names.map((k) => `${k}=${l[k] ?? ''}`).join('|');

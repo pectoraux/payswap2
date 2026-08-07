@@ -38,7 +38,7 @@ export type {
 } from './metrics';
 
 // Alerts --------------------------------------------------------------------
-export { AlertManager, alertManager } from './alerts';
+export { AlertManager, alertManager, checkCondition, STANDARD_ALERT_RULES } from './alerts';
 export type {
   AlertRule,
   Alert,
@@ -69,3 +69,33 @@ export type {
   TreasuryDashboard,
   OpsSnapshot,
 } from './dashboards';
+
+// Correlation + tracing (used by tests + middleware) -----------------------
+export { withCorrelation, currentCorrelation } from './correlation';
+export type { CorrelationContext } from './correlation';
+
+// Tracing (span-based) ------------------------------------------------------
+export {
+  withSpan,
+  withSpanAsync,
+  inMemorySpanExporter,
+  TracerProvider,
+  tracerProvider,
+} from './tracing';
+export type { Span, SpanContext, SpanKind, SpanStatus } from './tracing';
+
+// Logger --------------------------------------------------------------------
+export { logger, sharedLogBuffer } from './logger';
+export type { LogEntry, LogLevel } from './logger';
+
+// Metrics helpers -----------------------------------------------------------
+export { labelKey } from './metrics';
+
+/** Compute the p-th percentile of a sorted array of values. */
+export function histogramPercentile(sortedValues: number[], p: number): number {
+  if (sortedValues.length === 0) return 0;
+  if (p <= 0) return sortedValues[0];
+  if (p >= 100) return sortedValues[sortedValues.length - 1];
+  const idx = Math.floor((p / 100) * sortedValues.length);
+  return sortedValues[Math.min(idx, sortedValues.length - 1)];
+}

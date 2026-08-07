@@ -47,6 +47,12 @@ export interface BurnLimitConfig {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Default per-transaction mint limit (used as a fallback for unknown assets). */
+export const DEFAULT_PER_TX_MINT_LIMIT = 50_000;
+
+/** Default daily mint limit (used as a fallback for unknown assets). */
+export const DEFAULT_DAILY_MINT_LIMIT = 100_000;
+
 /** Default mint limits per asset code. */
 export const DEFAULT_MINT_LIMITS: Record<string, MintLimitConfig> = {
   TWINGHS: { dailyLimit: 100_000, perTxLimit: 50_000, cooldownMs: 0 },

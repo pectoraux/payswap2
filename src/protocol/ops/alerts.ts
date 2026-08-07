@@ -18,7 +18,25 @@ import type { MetricsRegistry, AnyMetric, Counter, Gauge, Histogram } from './me
 import { METRIC_NAMES } from './metrics';
 
 /** Comparison operators supported by alert rules. */
-export type AlertCondition = 'gt' | 'lt' | 'gte' | 'lte';
+export type AlertCondition = 'gt' | 'lt' | 'gte' | 'lte' | 'eq';
+
+/** Check a condition between a value and a threshold. */
+export function checkCondition(op: AlertCondition, value: number, threshold: number): boolean {
+  switch (op) {
+    case 'gt': return value > threshold;
+    case 'lt': return value < threshold;
+    case 'gte': return value >= threshold;
+    case 'lte': return value <= threshold;
+    case 'eq': return value === threshold;
+    default: return false;
+  }
+}
+
+/** Standard built-in alert rules. */
+export const STANDARD_ALERT_RULES: AlertRule[] = [
+  { id: 'std:error_rate_high', name: 'Error rate > 5%', metric: 'error_count', condition: 'gt', threshold: 5, severity: 'critical', cooldownMs: 60_000 },
+  { id: 'std:latency_p95_high', name: 'P95 latency > 500ms', metric: 'latency_p95', condition: 'gt', threshold: 500, severity: 'warning', cooldownMs: 60_000 },
+];
 
 /** Alert severity tiers. */
 export type AlertSeverity = 'info' | 'warning' | 'critical';
@@ -100,6 +118,7 @@ function formatMessage(rule: AlertRule, value: number): string {
     lt: '<',
     gte: '>=',
     lte: '<=',
+    eq: '==',
   };
   return `${rule.name}: ${rule.metric}=${round6(value)} ${op[rule.condition]} ${rule.threshold}`;
 }

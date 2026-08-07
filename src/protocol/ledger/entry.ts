@@ -16,6 +16,20 @@
  */
 import { uid, nowTs, round } from '@/kernel/support';
 
+/** Helper: create a debit leg. */
+export function debit(accountCode: string, amount: number, currency: string, memo?: string): {
+  accountCode: string; debit: number; credit: number; currency: string; memo?: string;
+} {
+  return { accountCode, debit: amount, credit: 0, currency, memo };
+}
+
+/** Helper: create a credit leg. */
+export function credit(accountCode: string, amount: number, currency: string, memo?: string): {
+  accountCode: string; debit: number; credit: number; currency: string; memo?: string;
+} {
+  return { accountCode, debit: 0, credit: amount, currency, memo };
+}
+
 /** A single debit or credit against one account. Exactly one of debit/credit is non-zero. */
 export interface LedgerEntry {
   /** Unique id of this leg. */

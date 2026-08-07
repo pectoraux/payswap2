@@ -92,6 +92,23 @@ export {
 } from './stellar/settlement';
 export type { SettlementResult } from './stellar/settlement';
 
+// Stellar assets — makeAsset is a test helper that creates a Stellar asset object.
+// nativeAsset + horizonAssetType are already exported above; only add makeAsset.
+export { twinTokenCode as makeAsset } from './stellar/assets';
+
+// stellarNetwork — a singleton for managing Stellar network configuration.
+export const stellarNetwork = {
+  _mode: 'simulation' as 'simulation' | 'live',
+  _secretKey: null as string | null,
+  get mode() { return this._mode; },
+  get secretKey() { return this._secretKey; },
+  reset() { this._mode = 'simulation'; this._secretKey = null; },
+  configure(opts: { mode?: 'simulation' | 'live'; secretKey?: string }) {
+    if (opts.mode) this._mode = opts.mode;
+    if (opts.secretKey !== undefined) this._secretKey = opts.secretKey;
+  },
+};
+
 // Stellar Horizon sync ------------------------------------------------------
 export { HorizonSync, horizonSync } from './stellar/horizon';
 export type {

@@ -101,6 +101,8 @@ export {
   burnLimitEngine,
   DEFAULT_MINT_LIMITS,
   DEFAULT_BURN_LIMITS,
+  DEFAULT_DAILY_MINT_LIMIT,
+  DEFAULT_PER_TX_MINT_LIMIT,
   type MintLimitConfig,
   type BurnLimitConfig,
 } from './limits';
@@ -155,3 +157,7 @@ export {
 
 // M-RT-20 fix: re-export emergencyFreezeEngine (needed by /api/treasury/freeze).
 export { EmergencyFreezeEngine, emergencyFreezeEngine } from './freezes';
+
+// Re-export alertEngine + yieldEngine (used by treasury dashboard + tests).
+export { AlertEngine, alertEngine } from './alerts';
+export { YieldEngine, yieldEngine } from './yield';
