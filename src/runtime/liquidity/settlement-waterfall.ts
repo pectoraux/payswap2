@@ -86,6 +86,21 @@ export function isLocal(params: {
     && params.sourceCurrency === params.destinationCurrency;
 }
 
+// ── MON-3d: exact integer comparison helper ──
+//
+// The waterfall's tier selection depends on `available >= amount` comparisons.
+// With floating-point, `0.1 + 0.2 !== 0.3` — a payment could go to the wrong
+// tier by a cent. This helper rounds both sides to integer cents (1e-2) and
+// compares exactly. The routing decision is now deterministic.
+//
+// Why cents (1e-2) and not micro-units (1e-6)? The waterfall inputs are
+// reserve balances and bandwidth amounts — they're always in major units
+// with 2 decimal places. Micro-unit precision would be false precision here.
+
+function sufficientCents(available: number, needed: number): boolean {
+  return Math.round(available * 100) >= Math.round(needed * 100);
+}
+
 // ── The waterfall ──
 
 export interface WaterfallInput {
@@ -139,7 +154,7 @@ export function selectSettlementSource(input: WaterfallInput): WaterfallResult {
     // ── LOCAL: try tiers 1, 2, 5 ──
 
     // Tier 1: PaySwap FIAT reserves
-    if (input.senderReserve.hasFiatReserve && input.senderReserve.fiatReserveAmount >= input.amount) {
+    if (input.senderReserve.hasFiatReserve && sufficientCents(input.senderReserve.fiatReserveAmount, input.amount)) {
       return {
         tier: 1, tierName: TIER_NAMES[1], source: 'payswap_fiat',
         amount: input.amount, available: input.senderReserve.fiatReserveAmount,
@@ -153,7 +168,7 @@ export function selectSettlementSource(input: WaterfallInput): WaterfallResult {
       : `No FIAT reserve in ${input.originCountry}` });
 
     // Tier 2: LP FIAT bandwidth
-    if (input.lpFiatAvailable >= input.amount) {
+    if (sufficientCents(input.lpFiatAvailable, input.amount)) {
       return {
         tier: 2, tierName: TIER_NAMES[2], source: 'lp_fiat',
         amount: input.amount, available: input.lpFiatAvailable,
@@ -182,9 +197,9 @@ export function selectSettlementSource(input: WaterfallInput): WaterfallResult {
     ? input.payswapTwinTokenAvailable
     : input.payswapStablecoinAvailable;
   const cryptoSource = destHasFiat ? 'payswap_twin_token' : 'payswap_stablecoin';
-  const cryptoAssetKind = destHasFiat ? 'twin token (t' + input.destinationCurrency + ')' : 'stablecoin (USDC)';
+  const cryptoAssetKind = destHasFiat ? 'twin token (TWIN' + input.destinationCurrency + ')' : 'stablecoin (USDC)';
 
-  if (cryptoAvailable >= destAmount) {
+  if (sufficientCents(cryptoAvailable, destAmount)) {
     return {
       tier: 3, tierName: TIER_NAMES[3], source: cryptoSource,
       amount: destAmount, available: cryptoAvailable,
@@ -196,7 +211,7 @@ export function selectSettlementSource(input: WaterfallInput): WaterfallResult {
   skipped.push({ tier: 3, reason: `Insufficient ${cryptoAssetKind}: need ${destAmount}, have ${cryptoAvailable}` });
 
   // Tier 4: LP crypto bandwidth
-  if (input.lpCryptoAvailable >= destAmount) {
+  if (sufficientCents(input.lpCryptoAvailable, destAmount)) {
     return {
       tier: 4, tierName: TIER_NAMES[4], source: 'lp_crypto',
       amount: destAmount, available: input.lpCryptoAvailable,
@@ -287,7 +302,7 @@ export function resolveLeg(params: {
   const skipped: SkipReason[] = [];
 
   // Try FIAT tiers first (1, 2)
-  if (params.hasFiatReserve && params.fiatReserveAmount >= params.amount) {
+  if (params.hasFiatReserve && sufficientCents(params.fiatReserveAmount, params.amount)) {
     return { tier: 1, source: 'payswap_fiat', served: true, skipped };
   }
   if (params.hasFiatReserve) {
@@ -296,18 +311,18 @@ export function resolveLeg(params: {
     skipped.push({ tier: 1, reason: `No FIAT reserve in ${params.country}` });
   }
 
-  if (params.lpFiatAvailable >= params.amount) {
+  if (sufficientCents(params.lpFiatAvailable, params.amount)) {
     return { tier: 2, source: 'lp_fiat', served: true, skipped };
   }
   skipped.push({ tier: 2, reason: `Insufficient LP FIAT: need ${params.amount}, have ${params.lpFiatAvailable}` });
 
   // Try crypto tiers (3, 4)
-  if (params.payswapCryptoAvailable >= params.amount) {
+  if (sufficientCents(params.payswapCryptoAvailable, params.amount)) {
     return { tier: 3, source: 'payswap_crypto', served: true, skipped };
   }
   skipped.push({ tier: 3, reason: `Insufficient crypto: need ${params.amount}, have ${params.payswapCryptoAvailable}` });
 
-  if (params.lpCryptoAvailable >= params.amount) {
+  if (sufficientCents(params.lpCryptoAvailable, params.amount)) {
     return { tier: 4, source: 'lp_crypto', served: true, skipped };
   }
   skipped.push({ tier: 4, reason: `Insufficient LP crypto: need ${params.amount}, have ${params.lpCryptoAvailable}` });
