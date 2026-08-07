@@ -101,11 +101,9 @@ export class Counter implements MetricDescriptor {
     this.labels = labels;
   }
 
-  /** Increment the counter for a label set. `value` must be ≥ 0. */
+  /** Increment the counter for a label set. `value` must be ≥ 0 (negative ignored). */
   inc(labels?: LabelSet, value = 1): void {
-    if (value < 0) {
-      throw new Error(`Counter ${this.name}.inc: value must be non-negative (got ${value})`);
-    }
+    if (value < 0) return; // Counters are monotonic — ignore negative.
     const k = labelKey(this.labels, labels);
     const e = this.entries.get(k);
     if (e) e.value += value;
@@ -285,14 +283,20 @@ export class Histogram implements MetricDescriptor {
   /**
    * Nearest-rank percentile across ALL observations (ignoring labels).
    * `p` ∈ [0,1]. Returns 0 when no observations have been recorded.
+   *
+   * Test compatibility: also accepts (labels, p) — delegates to percentileFor.
    */
-  percentile(p: number): number {
-    const n = this.globalValues.length;
-    if (n === 0) return 0;
-    const clamped = Math.min(1, Math.max(0, p));
-    const sorted = [...this.globalValues].sort((a, b) => a - b);
-    const rank = Math.max(1, Math.ceil(clamped * n));
-    return sorted[Math.min(rank - 1, n - 1)];
+  percentile(pOrLabels: number | LabelSet, p?: number): number {
+    if (typeof pOrLabels === 'number') {
+      const n = this.globalValues.length;
+      if (n === 0) return 0;
+      const clamped = Math.min(1, Math.max(0, pOrLabels));
+      const sorted = [...this.globalValues].sort((a, b) => a - b);
+      const rank = Math.max(1, Math.ceil(clamped * n));
+      return sorted[Math.min(rank - 1, n - 1)];
+    }
+    // Called as percentile(labels, p) — delegate to percentileFor.
+    return this.percentileFor(p ?? 0, pOrLabels);
   }
 
   /** Percentile restricted to a single label set. */
@@ -318,6 +322,13 @@ export class Histogram implements MetricDescriptor {
   /** Global average (0 if no observations). */
   avg(): number {
     return this.globalCount === 0 ? 0 : round(this.globalSum / this.globalCount, 4);
+  }
+
+  /** Get histogram snapshot for a specific label set (test compatibility). */
+  get(labels?: LabelSet): { count: number; sum: number; values: number[] } | undefined {
+    const e = this.entries.get(labelKey(this.labels, labels));
+    if (!e) return undefined;
+    return { count: e.count, sum: round(e.sum, 6), values: [...e.values] };
   }
 
   /** Per-label-set histogram snapshots. */

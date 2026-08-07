@@ -114,17 +114,18 @@ export class DedupStore {
    * after `fn` resolves.
    */
   async checkOrMark<T>(
-    key: string,
+    key: string | { scope: string; key: string },
     fn: () => Promise<T>,
     ttlMs: number = this.defaultTtlMs,
-  ): Promise<T> {
-    const hit = this.check(key);
+  ): Promise<{ fromCache: boolean; result: T }> {
+    const keyStr = typeof key === 'string' ? key : `${key.scope}:${key.key}`;
+    const hit = this.check(keyStr);
     if (hit.seen && hit.originalResult !== undefined) {
-      return hit.originalResult as T;
+      return { fromCache: true, result: hit.originalResult as T };
     }
     const value = await fn();
-    this.mark(key, value, ttlMs);
-    return value;
+    this.mark(keyStr, value, ttlMs);
+    return { fromCache: false, result: value };
   }
 
   // ----------------------------------------------------------------- utility

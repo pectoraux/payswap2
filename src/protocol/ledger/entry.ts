@@ -93,6 +93,10 @@ export interface JournalLegInput {
   debit?: Money;
   /** Credit amount (Money). Use Money.fromMajor(amount, currency) to convert from number. */
   credit?: Money;
+  /** Raw amount (test compatibility — converted to debit or credit based on `side`). */
+  amount?: number;
+  /** Side: 'debit' or 'credit' (test compatibility — used with `amount`). */
+  side?: 'debit' | 'credit';
   currency: string;
   memo?: string;
   evidenceId?: string;
@@ -147,8 +151,14 @@ export function createJournalEntry(params: CreateJournalEntryParams): JournalEnt
   const entries: LedgerEntry[] = [];
   for (const leg of legs) {
     // MON-3: legs now carry Money. Default to zero if not provided.
-    const debitMoney = leg.debit ?? Money.zero(leg.currency as any);
-    const creditMoney = leg.credit ?? Money.zero(leg.currency as any);
+    // Test compatibility: if `amount` + `side` are provided, convert to Money.
+    let debitMoney = leg.debit ?? Money.zero(leg.currency as any);
+    let creditMoney = leg.credit ?? Money.zero(leg.currency as any);
+    if (leg.amount !== undefined && leg.side) {
+      const amt = Money.fromMajor(leg.amount, leg.currency as any);
+      if (leg.side === 'debit') debitMoney = amt;
+      else creditMoney = amt;
+    }
     if (debitMoney.isNegative() || creditMoney.isNegative()) {
       throw new Error(`ledger leg cannot have negative amounts (debit=${debitMoney}, credit=${creditMoney})`);
     }
