@@ -195,16 +195,24 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
       if (!assetCode || amount <= 0) {
         return { eventId: event.id, type: event.type, journals, skipped: 'invalid_release_payload' };
       }
-      // Release moves tokens from escrow to a recipient wallet.
-      const creditAccount = to ? userWalletAccount(to) : circulatingAccount(assetCode);
+      // Release moves escrowed tokens BACK INTO the circulating pool.
+      //   DR twintoken:circulating:TWINxxx  (release increases circulating)
+      //   CR twintoken:escrowed:TWINxxx     (release decreases escrowed)
+      //
+      // The recipient wallet credit is a SEPARATE concern — it is recorded
+      // by a parallel `wallet.credited` (or `twintoken.transferred`) event
+      // in the same transaction, not by this projection. Coupling the
+      // recipient-wallet credit to the release would double-count: the
+      // circulating aggregate would not reflect the un-escrowed amount.
+      void to;  // recipient is informational on the release event itself
       journals.push(
         createJournalEntry({
           txId,
           ts,
           frame,
-          description: `Release ${amount} ${assetCode} from escrow to ${to || 'circulating'}`,
+          description: `Release ${amount} ${assetCode} from escrow back to circulating${to ? ` (recipient=${to})` : ''}`,
           legs: [
-            { accountCode: creditAccount, debit: amount, currency, memo: `release to ${to || 'circulating'}` },
+            { accountCode: circulatingAccount(assetCode), debit: amount, currency, memo: `release — back to circulating${to ? ` for ${to}` : ''}` },
             { accountCode: escrowedAccount(assetCode), credit: amount, currency, memo: 'release — reduce escrowed' },
           ],
         }),

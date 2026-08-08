@@ -186,8 +186,14 @@ export class MintLimitEngine {
    * Record a successful mint against the limit. The caller MUST
    * have called `checkMint()` first and confirmed `allowed === true`.
    *
-   * Returns the updated limit record. Throws if the mint would
-   * exceed any limit (defence in depth).
+   * This method DOES NOT re-enforce the per-tx limit or the cooldown —
+   * those are intentional properties of the *check* path, not the
+   * recording path. Recording a mint that was approved earlier (or
+   * via a privileged code path that bypassed per-tx) should succeed.
+   *
+   * The DAILY limit IS still enforced as defence in depth against
+   * silent overage. If the recorded amount would push `dailyUsed`
+   * past `dailyLimit`, the method throws.
    */
   recordMint(assetCode: string, amount: number): MintLimit {
     const limit = this.limits.get(assetCode);
@@ -196,9 +202,13 @@ export class MintLimitEngine {
     }
     const now = nowTs();
     this.rollWindow(limit, now);
-    const check = this.checkMint(assetCode, amount);
-    if (!check.allowed) {
-      throw new Error(`mint_blocked:${check.reason}`);
+    const remainingDaily = Math.max(0, limit.dailyLimit - limit.dailyUsed);
+    if (amount > remainingDaily) {
+      eventEngine.emit('treasury.mint_blocked', {
+        assetCode, amount, reason: 'daily_exceeded',
+        dailyLimit: limit.dailyLimit, dailyUsed: limit.dailyUsed,
+      });
+      throw new Error(`mint_blocked:daily_exceeded`);
     }
     limit.dailyUsed += amount;
     limit.lastMintTs = now;

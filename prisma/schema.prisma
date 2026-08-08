@@ -628,6 +628,29 @@ model AuditLog {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// IDEMPOTENCY (H-2 fix — P1-4)
+// ═══════════════════════════════════════════════════════════════════════════
+// Persists the { status, response } of an idempotent money-out request
+// keyed by the client-supplied Idempotency-Key header. A retry with the
+// same key (within expiresAt) returns the cached response without
+// re-running the side effect. Survives process restarts and works across
+// instances because the unique constraint on `key` is enforced by Postgres.
+
+model IdempotencyRecord {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  route     String
+  method    String
+  status    Int
+  response  String   @db.Text
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([key])
+  @@index([expiresAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // LEGACY (keep for backward compat with existing simulation engine)
 // ═══════════════════════════════════════════════════════════════════════════
 

@@ -61,6 +61,47 @@ export class Money {
     return new Money(BigInt(json.minorUnits), json.currency);
   }
 
+  // ─── Currency-specific static factories ────────────────────────────────
+  // Convenience constructors so call-sites read as `Money.usd(100)` rather
+  // than `Money.fromMajor(100, 'USD')`. Identical semantics.
+
+  /** Construct a USD value from a major-unit amount (e.g. `Money.usd(12.34)`). */
+  static usd(amount: number | string): Money { return Money.fromMajor(amount, 'USD'); }
+  /** Construct a GHS value from a major-unit amount. */
+  static ghs(amount: number | string): Money { return Money.fromMajor(amount, 'GHS'); }
+  /** Construct a NGN value from a major-unit amount. */
+  static ngn(amount: number | string): Money { return Money.fromMajor(amount, 'NGN'); }
+  /** Construct a KES value from a major-unit amount. */
+  static kes(amount: number | string): Money { return Money.fromMajor(amount, 'KES'); }
+  /** Construct a XOF value from a major-unit amount. */
+  static xof(amount: number | string): Money { return Money.fromMajor(amount, 'XOF'); }
+  /** Construct a USDC value from a major-unit amount (6 decimal places). */
+  static usdc(amount: number | string): Money { return Money.fromMajor(amount, 'USDC'); }
+  /** Construct an EUR value from a major-unit amount. */
+  static eur(amount: number | string): Money { return Money.fromMajor(amount, 'EUR'); }
+  /** Construct a GBP value from a major-unit amount. */
+  static gbp(amount: number | string): Money { return Money.fromMajor(amount, 'GBP'); }
+
+  /**
+   * Compute a fee as `money * bps / 10_000`, returning a NEW Money whose
+   * minor units are always an integer (truncated towards zero — same
+   * rounding as `multiply`). `bps` is basis points (e.g. 80 = 0.80%).
+   *
+   * This is the canonical fee primitive — used by the property test
+   * `MON-4: fee + netAmount == grossAmount` to prove fee/net arithmetic
+   * is exact for any random gross.
+   */
+  static mulBps(money: Money, bps: number): Money {
+    if (!Number.isFinite(bps)) {
+      throw new Error(`Money.mulBps: bps is not finite: ${bps}`);
+    }
+    // Compute fee_minor = (money.minorUnits * bps) / 10_000 — integer division.
+    // BigInt division truncates toward zero, which matches the multiply() mode.
+    const scaledBps = BigInt(Math.round(bps));
+    const feeMinor = (money.minorUnits * scaledBps) / BigInt(10_000);
+    return new Money(feeMinor, money.currency);
+  }
+
   add(other: Money): Money {
     this.assertSameCurrency(other);
     return new Money(this.minorUnits + other.minorUnits, this.currency);
@@ -123,7 +164,19 @@ export class Money {
     if (this.minorUnits > other.minorUnits) return 1;
     return 0;
   }
-  equals(other: Money): boolean { return this.compare(other) === 0; }
+  /**
+   * Equality check. Returns false (NOT throws) when the currencies differ —
+   * $100 USD is plainly not equal to ₵100 GHS, and a boolean is the more
+   * useful answer at call sites that already handle "not equal" gracefully.
+   *
+   * `assertSameCurrency` lives on `compare()`/`add()`/`subtract()` —
+   * operations that genuinely cannot proceed across currencies — but
+   * `equals()` is a predicate, so we answer the question rather than throw.
+   */
+  equals(other: Money): boolean {
+    if (this.currency !== other.currency) return false;
+    return this.minorUnits === other.minorUnits;
+  }
   greaterThan(other: Money): boolean { return this.compare(other) > 0; }
   lessThan(other: Money): boolean { return this.compare(other) < 0; }
   greaterThanOrEqual(other: Money): boolean { return this.compare(other) >= 0; }

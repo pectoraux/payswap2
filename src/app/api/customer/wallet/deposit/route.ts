@@ -4,7 +4,7 @@ import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
 import { runtime as runtimeKernel } from '@/runtime';
 import type { Environment } from '@/runtime';
-import { getIdempotencyKey } from '@/lib/idempotency';
+import { getIdempotencyKey, withIdempotency } from '@/lib/idempotency';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,7 +22,9 @@ const SOURCES = new Set(['BANK_CARD', 'MOBILE_MONEY', 'BANK_TRANSFER']);
  * not via direct Prisma write. The constitution verifies the wallet
  * invariant (balance non-negative) before the event is appended.
  *
- * Idempotency: Pass an `Idempotency-Key` header to safely retry.
+ * Idempotency (H-2 fix — P1-4): Pass an `Idempotency-Key` header to
+ * safely retry. A retry with the same key returns the cached response
+ * with `cached: true` and does NOT credit the wallet twice.
  *
  * Body: { amount, currency, source, reference? }
  */
@@ -64,9 +66,15 @@ export async function POST(req: NextRequest) {
       ? body.reference.trim().slice(0, 200)
       : null;
 
+  // H-2 fix: Use the client-supplied Idempotency-Key for dedup.
+  // If no header was sent, `key` is null — process as unique (backwards
+  // compat) and skip the wrapper.
   const idempotencyKey = getIdempotencyKey(req);
 
-  try {
+  // The side-effect (dispatch + wallet update + transaction + audit log)
+  // is wrapped in withIdempotency so a retry with the same key returns the
+  // cached response without crediting the wallet twice.
+  const runDeposit = async (): Promise<{ status: number; body: any }> => {
     // Dispatch through the runtime kernel — the wallet.credit handler
     // produces a wallet.credited event + ledger.entry.posted event.
     // The constitution verifies invariants before appending.
@@ -83,16 +91,16 @@ export async function POST(req: NextRequest) {
       metadata: {
         actor: { id: ctx.userId, role: 'CUSTOMER' },
         environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
-        correlationId: idempotencyKey,
+        correlationId: idempotencyKey ?? `dep_${Date.now().toString(36)}`,
         source: 'api',
       },
     });
 
     if (!dispatchResult.success) {
-      return NextResponse.json(
-        { ok: false, error: dispatchResult.error ?? dispatchResult.message },
-        { status: 500 },
-      );
+      return {
+        status: 500,
+        body: { ok: false, error: dispatchResult.error ?? dispatchResult.message },
+      };
     }
 
     // Update the wallet balance as a PROJECTION of the event.
@@ -144,16 +152,39 @@ export async function POST(req: NextRequest) {
       });
     } catch { /* ignore */ }
 
-    return NextResponse.json({
-      ok: true,
-      wallet: { id: wallet.id, currency: wallet.currency, balance: wallet.balance },
-      transaction: {
-        id: txn.id, type: txn.type, amount: txn.amount,
-        currency: txn.currency, counterparty: txn.counterparty,
-        reference: txn.reference, createdAt: txn.createdAt,
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        wallet: { id: wallet.id, currency: wallet.currency, balance: wallet.balance },
+        transaction: {
+          id: txn.id, type: txn.type, amount: txn.amount,
+          currency: txn.currency, counterparty: txn.counterparty,
+          reference: txn.reference, createdAt: txn.createdAt,
+        },
+        idempotencyKey,
       },
-      idempotencyKey,
-    });
+    };
+  };
+
+  try {
+    if (idempotencyKey) {
+      const result = await withIdempotency(
+        idempotencyKey,
+        '/api/customer/wallet/deposit',
+        runDeposit,
+      );
+      return NextResponse.json(
+        { ...result.body, cached: result.cached },
+        { status: result.status },
+      );
+    }
+    // No idempotency key — process as unique (backwards compat).
+    const result = await runDeposit();
+    return NextResponse.json(
+      { ...result.body, cached: false },
+      { status: result.status },
+    );
   } catch (e) {
     return NextResponse.json(
       { ok: false, error: e instanceof Error ? e.message : 'Deposit failed' },

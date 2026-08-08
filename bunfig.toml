@@ -1,0 +1,4 @@
+# Bun configuration — loads .env (with override) before tests run.
+# See tests/setup.ts for why override is required.
+[test]
+preload = ["./tests/setup.ts"]

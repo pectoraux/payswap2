@@ -35,6 +35,7 @@ import { liquidityForecaster } from './forecasting';
 import { corridorFundingService } from './corridor-funding';
 import { lpProfitabilityService } from './lp-profitability';
 import { stressTestService } from './stress-test';
+import { emergencyFreezeEngine } from './freezes';
 
 /** A treasury report generator — pure functions of treasury state. */
 export class TreasuryReports {
@@ -58,14 +59,47 @@ export class TreasuryReports {
     this.frozenAssets.delete(assetCode);
   }
 
-  /** Is an asset currently frozen? */
+  /**
+   * Is an asset currently frozen?
+   *
+   * Returns true iff EITHER:
+   *   - the asset is in this generator's own `frozenAssets` map (set via
+   *     `freezeAsset()`), OR
+   *   - the `emergencyFreezeEngine` has an active asset-scope freeze for
+   *     the same code (set via `emergencyFreezeEngine.freezeAsset()`).
+   *
+   * The second branch is what makes the pre-mint / pre-burn / pre-transfer
+   * hooks honor emergency freezes — they all call `treasuryReports.isFrozen()`.
+   */
   isFrozen(assetCode: string): boolean {
-    return this.frozenAssets.has(assetCode);
+    if (this.frozenAssets.has(assetCode)) return true;
+    return emergencyFreezeEngine.isFrozen('asset', assetCode);
   }
 
-  /** All currently-frozen assets. */
+  /**
+   * All currently-frozen assets.
+   *
+   * Merges this generator's own `frozenAssets` map with the active
+   * asset-scope freezes in `emergencyFreezeEngine` so the daily report
+   * shows every frozen asset regardless of which API the caller used.
+   */
   frozenAssetList(): FrozenAsset[] {
-    return [...this.frozenAssets.values()];
+    const out = new Map<string, FrozenAsset>();
+    // Own freezes (set via `freezeAsset()`).
+    for (const f of this.frozenAssets.values()) {
+      out.set(f.assetCode, f);
+    }
+    // Emergency freezes (set via `emergencyFreezeEngine.freezeAsset()`).
+    for (const ef of emergencyFreezeEngine.activeFreezes()) {
+      if (ef.scope === 'asset' && !out.has(ef.target)) {
+        out.set(ef.target, {
+          assetCode: ef.target,
+          reason: ef.reason,
+          frozenAt: ef.initiatedAt,
+        });
+      }
+    }
+    return [...out.values()];
   }
 
   /** Push an alert into the in-memory log. */
@@ -94,7 +128,7 @@ export class TreasuryReports {
     const reserves: ReserveAccount[] = reserveMonitor.allReserves();
 
     // Backing verification (per tracked asset).
-    const backingVerified = backingVerifier.all().map((state) => {
+    const backingResults = backingVerifier.all().map((state) => {
       const currency = state.assetCode.startsWith('TWIN')
         ? state.assetCode.slice(4)
         : state.assetCode;
@@ -110,6 +144,10 @@ export class TreasuryReports {
         discrepancy,
       };
     });
+    // Top-level boolean: true iff every tracked asset is verified.
+    const backingVerified: boolean = backingResults.length === 0
+      ? true
+      : backingResults.every((r) => r.verified);
 
     // Mint / burn usage.
     const mintUsage: LimitUsageSummary[] = mintLimitEngine.all().map((l) => ({
@@ -151,18 +189,25 @@ export class TreasuryReports {
     const totalDeployed = corridorFundingService.totalDeployed();
     const totalReserves = reserves.reduce((acc, r) => acc + r.balance, 0);
     const idleCapital = Math.max(0, totalReserves - totalDeployed);
-    const capitalEfficiency: CapitalEfficiencySummary = {
+    const capitalEfficiencySummary: CapitalEfficiencySummary = {
       totalCapitalDeployed: totalDeployed,
       idleCapital,
       efficiencyRatio: totalReserves > 0 ? totalDeployed / totalReserves : 0,
       averageUtilization: liquidityForecaster.averageUtilization(),
     };
+    // TreasuryReport.capitalEfficiency is typed as an array (one row per
+    // corridor in the dashboard). The daily report surfaces a single
+    // platform-wide summary row.
+    const capitalEfficiency: CapitalEfficiencySummary[] = [capitalEfficiencySummary];
 
     // Corridor reserves.
     const corridors: CorridorReserve[] = corridorFundingService.allCorridorReserves();
 
     // Frozen assets.
-    const frozenAssets = this.frozenAssetList();
+    const frozenAssetDetails = this.frozenAssetList();
+    // `frozenAssets` is the asset-code string array (parallel to
+    // `frozenAssetDetails` which carries the full records).
+    const frozenAssets: string[] = frozenAssetDetails.map((f) => f.assetCode);
 
     // LP profitability (top 20 by volume).
     const lpProfitability = lpProfitabilityService.getTopLPs('volume', 20);
@@ -174,6 +219,7 @@ export class TreasuryReports {
       asOfTs,
       reserves,
       backingVerified,
+      backingResults,
       mintUsage,
       burnUsage,
       alerts,
@@ -181,6 +227,7 @@ export class TreasuryReports {
       capitalEfficiency,
       corridors,
       frozenAssets,
+      frozenAssetDetails,
       lpProfitability,
       stressTestResults,
     };

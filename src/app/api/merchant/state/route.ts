@@ -4,14 +4,27 @@ import { payoutService } from '@/protocol/payouts/payout-service';
 import { webhookEngine } from '@/protocol/webhooks/engine';
 import { twinTokenEngine } from '@/protocol/twin-token/engine';
 import { eventEngine } from '@/kernel/event';
+import { requireSession, requireMerchantOwnership } from '@/lib/merchant-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** GET /api/merchant/state?merchantId=... — full dashboard state. */
+/** GET /api/merchant/state?merchantId=... — full dashboard state.
+ *
+ * Auth (C-6 / P1-2 fix): the blanket middleware already requires a valid
+ * NextAuth JWT for every non-public `/api/*` route. On top of that, this
+ * handler verifies the caller actually owns the target `merchantId` —
+ * otherwise any logged-in merchant could read another merchant's API
+ * keys, invoices, customers, refunds, and webhook deliveries.
+ */
 export async function GET(req: NextRequest) {
   const merchantId = req.nextUrl.searchParams.get('merchantId');
   if (!merchantId) return NextResponse.json({ error: 'missing_merchantId' }, { status: 400 });
+
+  const { session, error } = await requireSession();
+  if (error) return error;
+  const forbidden = await requireMerchantOwnership(merchantId, session);
+  if (forbidden) return forbidden;
 
   const merchant = merchantPlatform.getMerchant(merchantId);
   if (!merchant) return NextResponse.json({ error: 'merchant_not_found' }, { status: 404 });

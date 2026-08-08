@@ -19,6 +19,7 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
+import { requireNextAuthSecret } from '@/lib/secrets';
 
 interface KeyEntry {
   id: string;
@@ -40,8 +41,8 @@ class KeyRotationManager {
   getActiveJwtSecret(): string {
     const active = Array.from(this.jwtKeys.values()).find(k => k.status === 'active');
     if (active) return active.key;
-    // Fall back to env var
-    return process.env.NEXTAUTH_SECRET || 'fallback';
+    // No rotated key active — require the env secret (fail closed if missing).
+    return requireNextAuthSecret();
   }
 
   /**
@@ -56,8 +57,8 @@ class KeyRotationManager {
       return true;
     });
     if (valid.length === 0) {
-      // Fall back to env var
-      return [process.env.NEXTAUTH_SECRET || 'fallback'];
+      // No rotated keys valid — require the env secret (fail closed if missing).
+      return [requireNextAuthSecret()];
     }
     return valid.map(k => k.key);
   }

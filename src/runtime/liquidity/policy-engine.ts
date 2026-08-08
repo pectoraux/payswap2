@@ -176,6 +176,21 @@ export interface PolicyEngineInput {
   treasuryStablecoins: { currency: string; amount: number }[];
 }
 
+// Re-export the single tier-selection rule so callers can import it from
+// either this module or directly from `./settlement-waterfall`. The
+// invariant test (tests/single-rule-invariant.test.ts) asserts that this
+// module imports `resolvePayment` from `./settlement-waterfall` and uses
+// it inside `selectStrategy` — not a hand-written tier matrix.
+export {
+  resolvePayment,
+  strategyToTier,
+  MANUAL_SETTLEMENT_STRATEGY,
+  type ResolvePaymentInput,
+  type ResolvePaymentResult,
+  type SettlementTier,
+} from './settlement-waterfall';
+import { resolvePayment } from './settlement-waterfall';
+
 // ─── Liquidity Policy Engine ───────────────────────────────────────────────
 
 export class LiquidityPolicyEngine {
@@ -285,30 +300,22 @@ export class LiquidityPolicyEngine {
   /**
    * Select the settlement strategy based on reserve availability.
    * Deterministic: same input = same strategy.
+   *
+   * SINGLE-RULE INVARIANT: this method delegates to `resolvePayment` from
+   * `./settlement-waterfall`. That module is the ONE place in the codebase
+   * that decides which settlement tier a payment routes through — the
+   * PaymentCommandHandler in `runtime/dispatcher/handlers.ts` calls the
+   * same function. There is no parallel tier-selection implementation.
+   * (See `tests/single-rule-invariant.test.ts`.)
    */
   selectStrategy(input: PolicyEngineInput): SettlementStrategy {
-    // Strategy 1: Same country → LOCAL_RAIL
-    if (input.fromCountry === input.toCountry) {
-      return 'LOCAL_RAIL';
-    }
-
-    // Strategy 2: Both countries have fiat reserves → RESERVE_TO_RESERVE
-    if (input.senderReserve.hasFiatReserve && input.receiverReserve.hasFiatReserve) {
-      return 'RESERVE_TO_RESERVE';
-    }
-
-    // Strategy 3: Sender has reserve, receiver doesn't → RESERVE_TO_MARKET
-    if (input.senderReserve.hasFiatReserve && !input.receiverReserve.hasFiatReserve) {
-      return 'RESERVE_TO_MARKET';
-    }
-
-    // Strategy 4: Sender doesn't have reserve, receiver does → MARKET_TO_RESERVE
-    if (!input.senderReserve.hasFiatReserve && input.receiverReserve.hasFiatReserve) {
-      return 'MARKET_TO_RESERVE';
-    }
-
-    // Strategy 5: Neither has reserve → MARKET_TO_MARKET
-    return 'MARKET_TO_MARKET';
+    const result = resolvePayment(input);
+    // Map the waterfall result back to the canonical strategy enum.
+    // Tier 5 (manual settlement) has no equivalent in the legacy enum —
+    // fall back to MARKET_TO_MARKET so the existing fallback graph still
+    // compiles a plan (the plan's rollback + fallback handle the rest).
+    if (result.tier === 5) return 'MARKET_TO_MARKET';
+    return result.strategy as SettlementStrategy;
   }
 
   // ─── Strategy 1: LOCAL_RAIL ───────────────────────────────────────────────

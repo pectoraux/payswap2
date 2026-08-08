@@ -46,6 +46,10 @@ export class ReserveMonitor {
   private defaultThreshold = 0.20;
   /** Optional chain-sync adapter (production wires this up). */
   private chainSyncFn: ((currency: string) => Promise<{ balance: number; reserved: number } | null>) | null = null;
+  /** Optional twin-token engine reference (for live backing-ratio computation). */
+  private twinTokenEngine: {
+    getAsset(code: string): { circulating?: number; escrowed?: number; totalSupply?: number } | undefined;
+  } | null = null;
 
   /** Default low-reserve threshold (fraction). */
   setDefaultThreshold(fraction: number): void {
@@ -76,6 +80,7 @@ export class ReserveMonitor {
     const backingRatio = opts?.backingRatio ?? prev?.backingRatio ?? 1.0;
     const account: ReserveAccount = {
       currency,
+      assetCode: `TWIN${currency}`,  // mirror the TWIN<CCY> convention
       balance,
       reserved,
       available,
@@ -277,6 +282,52 @@ export class ReserveMonitor {
     account.balance += amount;
     account.available += amount;
     account.lastReconciledTs = nowTs();
+  }
+
+  /**
+   * Re-compute the backing ratio for every tracked reserve. Called after
+   * twin-token supply changes (mint/burn/escrow) so the cached
+   * `backingRatio` field reflects the current liability picture.
+   *
+   * If a TwinTokenEngine is bound (via `bindTwinTokenEngine`), the ratio
+   * is computed live from the engine's circulating/escrowed numbers.
+   * Otherwise the existing `backingRatio` is preserved (the verifier
+   * recomputes it independently when called).
+   */
+  refreshBackingRatios(): void {
+    for (const account of this.reserves.values()) {
+      if (this.twinTokenEngine) {
+        const assetCode = account.assetCode ?? `TWIN${account.currency}`;
+        const asset = this.twinTokenEngine.getAsset(assetCode) as
+          | { circulating?: number; escrowed?: number; totalSupply?: number }
+          | undefined;
+        const circulating = asset?.circulating ?? asset?.totalSupply ?? 0;
+        if (circulating > 0) {
+          account.backingRatio = account.available / circulating;
+        } else {
+          account.backingRatio = 1.0;
+        }
+      }
+      account.lastReconciledTs = nowTs();
+    }
+  }
+
+  /**
+   * Bind a Twin Token engine so `refreshBackingRatios` can read live
+   * circulating/escrowed numbers without a separate sync call.
+   */
+  bindTwinTokenEngine(engine: {
+    getAsset(code: string): { circulating?: number; escrowed?: number; totalSupply?: number } | undefined;
+  }): void {
+    this.twinTokenEngine = engine;
+  }
+
+  /** Reset all reserve state. Test helper. */
+  reset(): void {
+    this.reserves.clear();
+    this.thresholds.clear();
+    this.twinTokenEngine = null;
+    this.chainSyncFn = null;
   }
 }
 

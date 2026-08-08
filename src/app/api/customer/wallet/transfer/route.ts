@@ -4,7 +4,7 @@ import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
 import { runtime as runtimeKernel } from '@/runtime';
 import type { Environment } from '@/runtime';
-import { getIdempotencyKey } from '@/lib/idempotency';
+import { getIdempotencyKey, withIdempotency } from '@/lib/idempotency';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,7 +24,11 @@ const CURRENCIES = new Set(['GHS', 'KES', 'NGN', 'USD', 'EUR', 'ZAR']);
  * - Records a DEBIT on sender and a CREDIT on recipient.
  * - For MERCHANT recipients the merchant's settlement wallet is used.
  *
- * Returns `{ ok: true, senderTransaction, recipientTransaction }`.
+ * Idempotency (H-2 fix — P1-4): Pass an `Idempotency-Key` header to
+ * safely retry. A retry with the same key returns the cached response
+ * with `cached: true` and does NOT move money twice.
+ *
+ * Returns `{ ok: true, senderTransaction, recipientTransaction, cached }`.
  */
 export async function POST(req: NextRequest) {
   const ctx = await resolveCustomer();
@@ -98,11 +102,6 @@ export async function POST(req: NextRequest) {
     recipientLabel = merchant.name;
   }
 
-  // NH-2 FIX: Dispatch wallet.debit + wallet.credit through the runtime kernel
-  // BEFORE updating Prisma. This produces events + ledger entries that are
-  // verified by the constitution. The Prisma transaction below is a projection
-  // of the events (the event store is the source of truth).
-  //
   // NC-1 FIX: Check balance BEFORE dispatching to avoid orphaned events.
   const senderWalletCheck = await db.wallet.findFirst({
     where: { accountId: ctx.account.id, currency },
@@ -114,173 +113,211 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'INSUFFICIENT_FUNDS' }, { status: 400 });
   }
 
+  // H-2 fix: Use the client-supplied Idempotency-Key for dedup.
   const idempotencyKey = getIdempotencyKey(req);
   const env = await getEnvironment();
 
-  // Dispatch sender debit through the runtime
-  const debitResult = await runtimeKernel.dispatcher.dispatch({
-    type: 'wallet.debit',
-    payload: {
-      walletId: `${ctx.account.id}:${currency}`,
-      accountId: ctx.account.id,
-      currency,
-      amount,
-      description: note ?? `Transfer to ${recipientLabel}`,
-      reference: `xf_${Date.now().toString(36)}`,
-    },
-    metadata: {
-      actor: { id: ctx.userId, role: 'CUSTOMER' },
-      environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
-      correlationId: idempotencyKey,
-      source: 'api',
-    },
-  });
+  // ── P1-3 FIX: Collapse the dual-write pattern to a SINGLE writer ──────
+  // Previously this route dispatched wallet.debit + wallet.credit through
+  // the runtime kernel, THEN separately ran a Prisma $transaction to update
+  // balances — two uncoordinated writes with no shared transaction and no
+  // compensation logic. A failure between them left the event log and the
+  // spendable balance permanently diverged.
+  //
+  // Now: the Prisma $transaction is the SINGLE authoritative writer. The
+  // runtime dispatch happens AFTER the transaction commits, as a best-effort
+  // log (for event-sourced projections + audit). If the dispatch fails, the
+  // transfer still succeeded — the events are a projection, not a gate.
+  // No compensating transaction is needed because debit+credit are atomic.
+  const runTransfer = async (): Promise<{ status: number; body: any }> => {
+    // ── SINGLE WRITER: atomic debit + credit in one transaction ────────
+    const result = await db.$transaction(async (tx) => {
+      const senderWallet = await tx.wallet.findFirst({
+        where: { accountId: ctx.account.id, currency },
+      });
+      if (!senderWallet) throw new Error('NO_SENDER_WALLET');
 
-  if (!debitResult.success) {
+      // Find or create recipient wallet for that currency.
+      let recipientWallet = await tx.wallet.findFirst({
+        where: { accountId: recipientAccountId!, currency },
+      });
+      if (!recipientWallet) {
+        recipientWallet = await tx.wallet.create({
+          data: {
+            accountId: recipientAccountId!,
+            name: `${currency} Wallet`,
+            currency,
+            balance: 0,
+            isDefault: false,
+          },
+        });
+      }
+
+      // Atomic conditional decrement — only decrements if balance >= amount
+      // at update time. No TOCTOU race possible.
+      const debitResult = await tx.wallet.updateMany({
+        where: { id: senderWallet.id, balance: { gte: amount } },
+        data: { balance: { decrement: amount } },
+      });
+
+      if (debitResult.count === 0) {
+        throw new Error('INSUFFICIENT_FUNDS');
+      }
+
+      // Credit recipient (safe — increment always succeeds)
+      const recipientUpdated = await tx.wallet.update({
+        where: { id: recipientWallet.id },
+        data: { balance: { increment: amount } },
+      });
+
+      const senderTxn = await tx.walletTransaction.create({
+        data: {
+          walletId: senderWallet.id,
+          type: 'DEBIT',
+          amount: -Math.abs(amount),
+          currency,
+          counterparty: recipientLabel,
+          reference: note ?? `TRANSFER→${recipientLabel}`,
+          txHash: `xf_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        },
+      });
+      const recipientTxn = await tx.walletTransaction.create({
+        data: {
+          walletId: recipientWallet.id,
+          type: 'CREDIT',
+          amount,
+          currency,
+          counterparty: senderLabel,
+          reference: note ?? `TRANSFER←${senderLabel}`,
+          txHash: senderTxn.txHash,
+        },
+      });
+
+      return { senderWallet: senderWallet, recipientWallet: recipientUpdated, senderTxn, recipientTxn };
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : 'UNKNOWN';
+      return { error: msg };
+    });
+
+    if ('error' in result) {
+      if (result.error === 'NO_SENDER_WALLET') {
+        return {
+          status: 404,
+          body: { ok: false, error: `No ${currency} wallet found on your account` },
+        };
+      }
+      if (result.error === 'INSUFFICIENT_FUNDS') {
+        return { status: 422, body: { ok: false, error: 'Insufficient funds' } };
+      }
+      return { status: 500, body: { ok: false, error: 'Transfer failed' } };
+    }
+
+    // ── POST-COMMIT LOG: fire runtime events as a best-effort projection ──
+    // The transaction above is the source of truth. These events feed the
+    // event-sourced ledger + constitution audit trail. If they fail, the
+    // transfer still succeeded — no compensation needed (the money moved
+    // atomically). We log failures for ops visibility but do NOT block.
+    try {
+      await runtimeKernel.dispatcher.dispatch({
+        type: 'wallet.debit',
+        payload: {
+          walletId: `${ctx.account.id}:${currency}`,
+          accountId: ctx.account.id,
+          currency,
+          amount,
+          description: note ?? `Transfer to ${recipientLabel}`,
+          reference: result.senderTxn.txHash,
+        },
+        metadata: {
+          actor: { id: ctx.userId, role: 'CUSTOMER' },
+          environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
+          correlationId: idempotencyKey ?? result.senderTxn.txHash,
+          source: 'api',
+        },
+      });
+      await runtimeKernel.dispatcher.dispatch({
+        type: 'wallet.credit',
+        payload: {
+          walletId: `${recipientAccountId}:${currency}`,
+          accountId: recipientAccountId!,
+          currency,
+          amount,
+          description: `Transfer from ${ctx.customer.name}`,
+          reference: result.senderTxn.txHash,
+        },
+        metadata: {
+          actor: { id: ctx.userId, role: 'CUSTOMER' },
+          environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
+          correlationId: idempotencyKey ?? result.senderTxn.txHash,
+          source: 'api',
+        },
+      });
+    } catch (dispatchErr) {
+      // Best-effort log — the transfer succeeded, the event projection failed.
+      console.error('[wallet/transfer] Post-commit event dispatch failed (transfer succeeded):', dispatchErr);
+    }
+
+    try {
+      await db.auditLog.create({
+        data: {
+          userId: ctx.userId,
+          action: 'CUSTOMER_WALLET_TRANSFER',
+          resourceType: 'Wallet',
+          resourceId: result.senderWallet.id,
+          result: 'SUCCESS',
+          details: JSON.stringify({
+            amount, currency, recipientType, recipientId,
+            recipientLabel, environment: env,
+            senderTxnId: result.senderTxn.id,
+            recipientTxnId: result.recipientTxn.id,
+          }),
+        },
+      });
+    } catch {
+      // ignore — audit log is best-effort
+    }
+
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        recipient: { type: recipientType, id: recipientId, label: recipientLabel },
+        senderTransaction: {
+          id: result.senderTxn.id,
+          type: result.senderTxn.type,
+          amount: result.senderTxn.amount,
+          currency: result.senderTxn.currency,
+          counterparty: result.senderTxn.counterparty,
+          reference: result.senderTxn.reference,
+          createdAt: result.senderTxn.createdAt,
+        },
+        idempotencyKey,
+      },
+    };
+  };
+
+  try {
+    if (idempotencyKey) {
+      const result = await withIdempotency(
+        idempotencyKey,
+        '/api/customer/wallet/transfer',
+        runTransfer,
+      );
+      return NextResponse.json(
+        { ...result.body, cached: result.cached },
+        { status: result.status },
+      );
+    }
+    // No idempotency key — process as unique (backwards compat).
+    const result = await runTransfer();
     return NextResponse.json(
-      { ok: false, error: debitResult.error ?? debitResult.message },
+      { ...result.body, cached: false },
+      { status: result.status },
+    );
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, error: e instanceof Error ? e.message : 'Transfer failed' },
       { status: 500 },
     );
   }
-
-  // Dispatch recipient credit through the runtime
-  const creditResult = await runtimeKernel.dispatcher.dispatch({
-    type: 'wallet.credit',
-    payload: {
-      walletId: `${recipientAccountId}:${currency}`,
-      accountId: recipientAccountId!,
-      currency,
-      amount,
-      description: `Transfer from ${ctx.customer.name}`,
-      reference: `xf_${Date.now().toString(36)}`,
-    },
-    metadata: {
-      actor: { id: ctx.userId, role: 'CUSTOMER' },
-      environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
-      correlationId: idempotencyKey,
-      source: 'api',
-    },
-  });
-
-  if (!creditResult.success) {
-    // TODO: In production, this should trigger a compensating transaction
-    // to reverse the debit. For now, log the error.
-    console.error('[wallet/transfer] Credit failed after debit succeeded — manual reconciliation needed');
-  }
-
-  // Run the ledger atomically — H-8 FIX: use atomic conditional decrement
-  // to prevent TOCTOU race. The decrement only succeeds if balance >= amount
-  // at update time, eliminating the race between the balance check and the
-  // decrement.
-  const result = await db.$transaction(async (tx) => {
-    const senderWallet = await tx.wallet.findFirst({
-      where: { accountId: ctx.account.id, currency },
-    });
-    if (!senderWallet) throw new Error('NO_SENDER_WALLET');
-
-    // Find or create recipient wallet for that currency.
-    let recipientWallet = await tx.wallet.findFirst({
-      where: { accountId: recipientAccountId!, currency },
-    });
-    if (!recipientWallet) {
-      recipientWallet = await tx.wallet.create({
-        data: {
-          accountId: recipientAccountId!,
-          name: `${currency} Wallet`,
-          currency,
-          balance: 0,
-          isDefault: false,
-        },
-      });
-    }
-
-    // H-8 FIX: Atomic conditional decrement — only decrements if
-    // balance >= amount at update time. No TOCTOU race possible.
-    const debitResult = await tx.wallet.updateMany({
-      where: { id: senderWallet.id, balance: { gte: amount } },
-      data: { balance: { decrement: amount } },
-    });
-
-    if (debitResult.count === 0) {
-      throw new Error('INSUFFICIENT_FUNDS');
-    }
-
-    // Credit recipient (safe — increment always succeeds)
-    const recipientUpdated = await tx.wallet.update({
-      where: { id: recipientWallet.id },
-      data: { balance: { increment: amount } },
-    });
-
-    const senderTxn = await tx.walletTransaction.create({
-      data: {
-        walletId: senderWallet.id,
-        type: 'DEBIT',
-        amount: -Math.abs(amount),
-        currency,
-        counterparty: recipientLabel,
-        reference: note ?? `TRANSFER→${recipientLabel}`,
-        txHash: `xf_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
-      },
-    });
-    const recipientTxn = await tx.walletTransaction.create({
-      data: {
-        walletId: recipientWallet.id,
-        type: 'CREDIT',
-        amount,
-        currency,
-        counterparty: senderLabel,
-        reference: note ?? `TRANSFER←${senderLabel}`,
-        txHash: senderTxn.txHash,
-      },
-    });
-
-    return { senderWallet: senderWallet, recipientWallet: recipientUpdated, senderTxn, recipientTxn };
-  }).catch((err: unknown) => {
-    const msg = err instanceof Error ? err.message : 'UNKNOWN';
-    return { error: msg };
-  });
-
-  if ('error' in result) {
-    if (result.error === 'NO_SENDER_WALLET') {
-      return NextResponse.json({ ok: false, error: `No ${currency} wallet found on your account` }, { status: 404 });
-    }
-    if (result.error === 'INSUFFICIENT_FUNDS') {
-      return NextResponse.json({ ok: false, error: 'Insufficient funds' }, { status: 422 });
-    }
-    return NextResponse.json({ ok: false, error: 'Transfer failed' }, { status: 500 });
-  }
-
-  try {
-    await db.auditLog.create({
-      data: {
-        userId: ctx.userId,
-        action: 'CUSTOMER_WALLET_TRANSFER',
-        resourceType: 'Wallet',
-        resourceId: result.senderWallet.id,
-        result: 'SUCCESS',
-        details: JSON.stringify({
-          amount, currency, recipientType, recipientId,
-          recipientLabel, environment: env,
-          senderTxnId: result.senderTxn.id,
-          recipientTxnId: result.recipientTxn.id,
-        }),
-      },
-    });
-  } catch {
-    // ignore — audit log is best-effort
-  }
-
-  return NextResponse.json({
-    ok: true,
-    recipient: { type: recipientType, id: recipientId, label: recipientLabel },
-    senderTransaction: {
-      id: result.senderTxn.id,
-      type: result.senderTxn.type,
-      amount: result.senderTxn.amount,
-      currency: result.senderTxn.currency,
-      counterparty: result.senderTxn.counterparty,
-      reference: result.senderTxn.reference,
-      createdAt: result.senderTxn.createdAt,
-    },
-  });
 }

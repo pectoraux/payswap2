@@ -52,6 +52,11 @@
  */
 export interface ReserveAccount {
   currency: string;
+  /** Mirror of the TWIN<CCY> asset code (e.g. TWINGHS). Optional —
+   * populated by the v2 reserve-monitor for convenience, omitted by the
+   * legacy reserve.ts implementation. Callers should not rely on this
+   * field being present; derive it via `TWIN${currency}` when absent. */
+  assetCode?: string;
   balance: number;
   reserved: number;
   available: number;

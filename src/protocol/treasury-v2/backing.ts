@@ -52,6 +52,12 @@ export interface BackingVerification {
   required: number;
   /** Available reserve observed. */
   reserveAvailable: number;
+  /** Alias for `required` — the circulating supply at verification time. */
+  circulating: number;
+  /** Escrowed supply at verification time (still backed, just committed). */
+  escrowed: number;
+  /** Alias for `reserveAvailable` — the field name alerts.ts expects. */
+  reserve: number;
   ts: number;
 }
 
@@ -65,6 +71,29 @@ export interface BackingAssetInput {
 
 /** A function that resolves the available reserve for an asset. */
 export type ReserveResolver = (assetCode: string) => number;
+
+/** Structural shape the backing verifier accepts in place of a TwinTokenEngine. */
+type TwinTokenLike = {
+  getAsset?(code: string): {
+    circulating?: number;
+    escrowed?: number;
+    totalSupply?: number;
+    currency?: string;
+  } | undefined;
+  allAssets?(): Array<{
+    code: string;
+    currency?: string;
+    circulating?: number;
+    escrowed?: number;
+    totalSupply?: number;
+  }>;
+};
+
+/** Structural shape the backing verifier accepts in place of a ReserveMonitor. */
+type ReserveMonitorLike = {
+  available?(currency: string): number;
+  getReserve?(currency: string): { available?: number; balance?: number; reserved?: number } | undefined;
+};
 
 /**
  * Backing verifier — owns the per-asset circulating supply projection
@@ -190,6 +219,11 @@ export class BackingVerifier {
       discrepancy,
       required: circulating,
       reserveAvailable: reserve,
+      // Aliases populated for downstream consumers (alerts.ts reads
+      // `circulating` / `escrowed` / `reserve` directly off the result).
+      circulating,
+      escrowed,
+      reserve,
       ts: nowTs(),
     };
 
@@ -216,16 +250,57 @@ export class BackingVerifier {
   /**
    * Verify backing for all assets in one call. Returns the per-asset
    * verifications + an overall flag (true iff every asset verified).
+   *
+   * Two overloads:
+   *   1. `verifyAll(assets: BackingAssetInput[])` — caller supplies the
+   *      per-asset circulating/escrowed/reserve numbers explicitly.
+   *   2. `verifyAll(twinTokenEngine, reserveMonitor)` — caller supplies
+   *      the engines; this method derives the inputs from them. Returns
+   *      `{ allVerified, results }` (the `allVerified` field name matches
+   *      the test contract; the `overall` field is preserved on the
+   *      first overload for backward compatibility).
    */
-  verifyAll(assets: BackingAssetInput[]): {
+  verifyAll(
+    assetsOrEngine: BackingAssetInput[] | TwinTokenLike,
+    reserveMonitor?: ReserveMonitorLike,
+  ): {
     overall: boolean;
+    /** Mirror of `overall` — the field name downstream tests + alerts expect. */
+    allVerified: boolean;
     results: BackingVerification[];
   } {
-    const results = assets.map((a) =>
+    let inputs: BackingAssetInput[];
+    if (Array.isArray(assetsOrEngine)) {
+      inputs = assetsOrEngine;
+    } else {
+      // Derive inputs from the twin-token engine + reserve monitor.
+      const engine = assetsOrEngine as TwinTokenLike;
+      const assets = (engine.allAssets?.() ?? []) as Array<{
+        code: string;
+        currency?: string;
+        circulating?: number;
+        escrowed?: number;
+        totalSupply?: number;
+      }>;
+      inputs = assets.map((a) => {
+        const code = a.code;
+        const currency = code.startsWith('TWIN') ? code.slice(4) : (a.currency ?? code);
+        const reserveAvailable = reserveMonitor?.available?.(currency)
+          ?? reserveMonitor?.getReserve?.(currency)?.available
+          ?? this.reserveResolver(code);
+        return {
+          assetCode: code,
+          circulating: a.circulating ?? a.totalSupply ?? 0,
+          escrowed: a.escrowed ?? 0,
+          reserveAvailable,
+        };
+      });
+    }
+    const results = inputs.map((a) =>
       this.verifyBacking(a.assetCode, a.circulating, a.escrowed, a.reserveAvailable),
     );
     const overall = results.every((r) => r.verified);
-    return { overall, results };
+    return { overall, allVerified: overall, results };
   }
 
   /**
@@ -236,6 +311,10 @@ export class BackingVerifier {
    *
    * The check uses the *current* circulating supply + the proposed
    * mint amount against the *current* available reserve.
+   *
+   * Reason field: returns `'backing_insufficient'` (NOT a verbose
+   * ratio string) so the test contract + downstream consumers can
+   * pattern-match on the stable reason code.
    */
   onMint(assetCode: string, amount: number): LimitCheckResult {
     if (amount <= 0) {
@@ -252,15 +331,16 @@ export class BackingVerifier {
       eventEngine.emit('treasury.backing_blocked', {
         assetCode,
         amount,
-        reason: 'insufficient_backing',
+        reason: 'backing_insufficient',
         backingRatio: ratio,
         shortfall,
         circulating,
+        escrowed,
         reserveAvailable: reserve,
       });
       return {
         allowed: false,
-        reason: `insufficient_backing:ratio=${ratio.toFixed(4)}<${this.tolerance}`,
+        reason: 'backing_insufficient',
       };
     }
     return { allowed: true };

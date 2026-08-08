@@ -46,6 +46,30 @@ export function isNative(code: string): boolean {
   return code === NATIVE_ASSET_CODE || code === NATIVE_ISSUER;
 }
 
+/**
+ * Is this a local (in-country) settlement? A payment is local iff the
+ * sender and receiver are in the SAME country AND the currency is the
+ * same. The LOCAL_RAIL strategy (tier 1) only applies when `isLocal`
+ * is true — it implies an immediate fiat → twin-token credit with no
+ * cross-currency conversion and no LP involvement.
+ *
+ * Accepts either country names ('Ghana' / 'Kenya') or currency codes
+ * ('GHS' / 'KES'); the comparison is case-insensitive on both axes.
+ */
+export function isLocal(
+  fromCountry: string,
+  toCountry: string,
+  fromCurrency: string,
+  toCurrency: string,
+): boolean {
+  const fc = String(fromCountry ?? '').toLowerCase();
+  const tc = String(toCountry ?? '').toLowerCase();
+  const fcy = String(fromCurrency ?? '').toLowerCase();
+  const tcy = String(toCurrency ?? '').toLowerCase();
+  if (!fc || !tc || !fcy || !tcy) return false;
+  return fc === tc && fcy === tcy;
+}
+
 /** Build a unique string key for an asset — used in maps. Native = 'XLM:native'. */
 export function assetKey(params: { code: string; issuer?: string }): string {
   const { code, issuer } = params;

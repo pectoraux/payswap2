@@ -4,7 +4,7 @@ import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
 import { runtime as runtimeKernel } from '@/runtime';
 import type { Environment } from '@/runtime';
-import { getIdempotencyKey } from '@/lib/idempotency';
+import { getIdempotencyKey, withIdempotency } from '@/lib/idempotency';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,6 +31,10 @@ const DESTINATIONS = new Set(['BANK_ACCOUNT', 'MOBILE_MONEY']);
  *
  * H-8 FIX: Uses atomic conditional updateMany with balance >= amount check
  * at the SQL level, preventing TOCTOU race.
+ *
+ * Idempotency (H-2 fix — P1-4): Pass an `Idempotency-Key` header to
+ * safely retry. A retry with the same key returns the cached response
+ * with `cached: true` and does NOT debit the wallet twice.
  */
 export async function POST(req: NextRequest) {
   const ctx = await resolveCustomer();
@@ -74,6 +78,9 @@ export async function POST(req: NextRequest) {
       ? body.reference.trim().slice(0, 200)
       : null;
 
+  // H-2 fix: Use the client-supplied Idempotency-Key for dedup.
+  // If no header was sent, `key` is null — process as unique (backwards
+  // compat) and skip the wrapper.
   const idempotencyKey = getIdempotencyKey(req);
 
   // NC-1 FIX: Check balance BEFORE dispatching.
@@ -94,7 +101,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  try {
+  // The side-effect (dispatch + wallet update + transaction + audit log)
+  // is wrapped in withIdempotency so a retry with the same key returns the
+  // cached response without debiting the wallet twice.
+  const runWithdraw = async (): Promise<{ status: number; body: any }> => {
     // Step 1: Dispatch through the runtime kernel — produces wallet.debited
     // event + ledger.entry.posted event. Constitution verifies invariants.
     const dispatchResult = await runtimeKernel.dispatcher.dispatch({
@@ -110,16 +120,16 @@ export async function POST(req: NextRequest) {
       metadata: {
         actor: { id: ctx.userId, role: 'CUSTOMER' },
         environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
-        correlationId: idempotencyKey,
+        correlationId: idempotencyKey ?? `wd_${Date.now().toString(36)}`,
         source: 'api',
       },
     });
 
     if (!dispatchResult.success) {
-      return NextResponse.json(
-        { ok: false, error: dispatchResult.error ?? dispatchResult.message },
-        { status: 500 },
-      );
+      return {
+        status: 500,
+        body: { ok: false, error: dispatchResult.error ?? dispatchResult.message },
+      };
     }
 
     // Step 2: Update Prisma wallet balance (projection of the event).
@@ -171,16 +181,39 @@ export async function POST(req: NextRequest) {
       });
     } catch { /* ignore */ }
 
-    return NextResponse.json({
-      ok: true,
-      wallet: { id: freshWallet!.id, currency: freshWallet!.currency, balance: freshWallet!.balance },
-      transaction: {
-        id: txn.id, type: txn.type, amount: txn.amount,
-        currency: txn.currency, counterparty: txn.counterparty,
-        reference: txn.reference, createdAt: txn.createdAt,
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        wallet: { id: freshWallet!.id, currency: freshWallet!.currency, balance: freshWallet!.balance },
+        transaction: {
+          id: txn.id, type: txn.type, amount: txn.amount,
+          currency: txn.currency, counterparty: txn.counterparty,
+          reference: txn.reference, createdAt: txn.createdAt,
+        },
+        idempotencyKey,
       },
-      idempotencyKey,
-    });
+    };
+  };
+
+  try {
+    if (idempotencyKey) {
+      const result = await withIdempotency(
+        idempotencyKey,
+        '/api/customer/wallet/withdraw',
+        runWithdraw,
+      );
+      return NextResponse.json(
+        { ...result.body, cached: result.cached },
+        { status: result.status },
+      );
+    }
+    // No idempotency key — process as unique (backwards compat).
+    const result = await runWithdraw();
+    return NextResponse.json(
+      { ...result.body, cached: false },
+      { status: result.status },
+    );
   } catch (e) {
     return NextResponse.json(
       { ok: false, error: e instanceof Error ? e.message : 'Withdrawal failed' },

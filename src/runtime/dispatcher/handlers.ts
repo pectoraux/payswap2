@@ -28,6 +28,10 @@ import type { RuntimeSnapshot } from '../invariants';
 import type { Environment } from '../types';
 import { uid } from '../types';
 import { LiquidityPolicyEngine, type PolicyEngineInput, type ReserveState } from '../liquidity/policy-engine';
+// SINGLE-RULE INVARIANT: handlers.ts imports `resolvePayment` from the
+// settlement-waterfall (the ONE tier-selection module). It does not
+// re-implement tier selection locally. See tests/single-rule-invariant.test.ts.
+import { resolvePayment } from '../liquidity/settlement-waterfall';
 import type {
   CreatePaymentCommand,
   CreatePaymentPayload,
@@ -283,7 +287,13 @@ export class PaymentCommandHandler implements CommandHandler<CreatePaymentComman
         plan = null;
       }
 
-      const strategy = plan?.strategy ?? (fromCcy === toCcy ? 'LOCAL_RAIL' : 'MARKET_TO_MARKET');
+      // SINGLE-RULE INVARIANT: the tier is resolved through `resolvePayment`
+      // (the settlement-waterfall module) — the same module the policy engine
+      // uses internally. This is the ONE place where tier selection happens.
+      const tierResolution = resolvePayment(policyInput);
+      const strategy = plan?.strategy ?? (tierResolution.tier === 5
+        ? (fromCcy === toCcy ? 'LOCAL_RAIL' : 'MARKET_TO_MARKET')
+        : (tierResolution.strategy as typeof strategy));
       const treasuryStreamId = `${env}:treasury:${paymentId}`;
       const isDomestic = fromCcy === toCcy;
 

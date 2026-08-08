@@ -9,6 +9,7 @@ import type { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { db } from '@/lib/db';
 import bcrypt from 'bcryptjs';
+import { requireNextAuthSecret } from '@/lib/secrets';
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -70,7 +71,11 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  // Use a stable secret. In production on Vercel, set NEXTAUTH_SECRET in the
-  // Vercel dashboard. The fallback is only for local dev.
-  secret: process.env.NEXTAUTH_SECRET || 'payswap-dev-secret-7f8a9b2c4e1d6f3a8b5c9d2e7f4a1b8c',
+  // JWT signing secret — fail closed if missing (C-1 fix).
+  // Evaluated lazily via getter so the module can be imported even before
+  // env vars are fully loaded (Next.js loads .env asynchronously in some
+  // contexts). The secret is checked on first use, not on import.
+  get secret() {
+    return requireNextAuthSecret();
+  },
 };

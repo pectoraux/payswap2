@@ -79,14 +79,38 @@ export class TreasuryEngine {
    * Initialise the treasury engine — wire up cross-service
    * dependencies and start periodic checks.
    *
+   * Accepts either the legacy `TreasuryEngineOptions` shape (scalar
+   * intervals + thresholds) OR the test-friendly shape
+   * `{ twinTokenEngine, intervals: {...}, lowReserveThresholds: {...} }`
+   * that the production3 tests use. The two shapes are not mutually
+   * exclusive — both can be supplied at once.
+   *
    * Returns an array of `stop` functions (one per periodic task).
    * Call each to stop the corresponding periodic check.
    */
-  init(initOpts?: TreasuryEngineOptions): Array<() => void> {
+  init(initOpts?: TreasuryEngineOptions & {
+    /** Twin-token engine to bind to the reserve monitor (for live backing ratios). */
+    twinTokenEngine?: {
+      getAsset(code: string): { circulating?: number; escrowed?: number; totalSupply?: number } | undefined;
+    };
+    /** Named intervals — accepted but treated as a synonym for the legacy scalars. */
+    intervals?: {
+      reserveSyncMs?: number;
+      backingVerifyMs?: number;
+      alertCheckMs?: number;
+      corridorBalanceMs?: number;
+      freezeSweepMs?: number;
+    };
+    /** Per-currency low-reserve thresholds (absolute amount). */
+    lowReserveThresholds?: Record<string, number>;
+  }): Array<() => void> {
     if (initOpts) {
+      // Map the `intervals` block (if supplied) onto the legacy scalars.
+      const alertCheckMs = initOpts.intervals?.alertCheckMs;
+      const forecastIntervalMs = initOpts.intervals?.corridorBalanceMs;
       this.opts = {
-        checkIntervalMs: initOpts.checkIntervalMs ?? this.opts.checkIntervalMs,
-        forecastIntervalMs: initOpts.forecastIntervalMs ?? this.opts.forecastIntervalMs,
+        checkIntervalMs: alertCheckMs ?? initOpts.checkIntervalMs ?? this.opts.checkIntervalMs,
+        forecastIntervalMs: forecastIntervalMs ?? initOpts.forecastIntervalMs ?? this.opts.forecastIntervalMs,
         defaultReserveAlertThreshold: initOpts.defaultReserveAlertThreshold ?? this.opts.defaultReserveAlertThreshold,
         costOfCapitalApr: initOpts.costOfCapitalApr ?? this.opts.costOfCapitalApr,
         opexPerSettlement: initOpts.opexPerSettlement ?? this.opts.opexPerSettlement,
@@ -95,6 +119,25 @@ export class TreasuryEngine {
 
     // Wire up the reserve monitor's threshold default.
     reserveMonitor.setDefaultThreshold(this.opts.defaultReserveAlertThreshold);
+
+    // Bind the twin-token engine (if supplied) so the reserve monitor
+    // can compute live backing ratios in `refreshBackingRatios`.
+    if (initOpts?.twinTokenEngine) {
+      reserveMonitor.bindTwinTokenEngine(initOpts.twinTokenEngine);
+    }
+
+    // Apply per-currency low-reserve thresholds (absolute amount). The
+    // reserve monitor's `setThreshold` takes a FRACTION — we convert
+    // absolute → fraction using the reserve's current balance (or 1 if
+    // unknown, which makes the threshold effectively the absolute amount).
+    if (initOpts?.lowReserveThresholds) {
+      for (const [currency, absThreshold] of Object.entries(initOpts.lowReserveThresholds)) {
+        const r = reserveMonitor.getReserve(currency);
+        const balance = r?.balance ?? absThreshold;
+        const frac = balance > 0 ? absThreshold / balance : 1;
+        reserveMonitor.setThreshold(currency, Math.max(0, Math.min(1, frac)));
+      }
+    }
 
     // Wire up the backing verifier's reserve resolver: for an asset
     // code like `TWINGHS`, the reserve is the available GHS balance.
@@ -162,7 +205,7 @@ export class TreasuryEngine {
     if (frozen) {
       const result: HookResult = {
         allowed: false,
-        reason: `asset_frozen:${assetCode}`,
+        reason: 'asset_frozen',
         checks,
       };
       this.emitMintBlocked(assetCode, amount, result);
@@ -241,7 +284,7 @@ export class TreasuryEngine {
     if (frozen) {
       const result: HookResult = {
         allowed: false,
-        reason: `asset_frozen:${assetCode}`,
+        reason: 'asset_frozen',
         checks,
       };
       this.emitBurnBlocked(assetCode, amount, result);
@@ -273,6 +316,51 @@ export class TreasuryEngine {
     eventEngine.emit('treasury.pre_burn_approved', {
       assetCode, amount,
       remainingDaily: limitCheck.remainingDaily,
+      ts: nowTs(),
+    });
+    return result;
+  }
+
+  /**
+   * Pre-transfer hook — the GATE every twin-token transfer goes through.
+   *
+   * Checks (in order):
+   *   1. asset is not frozen (compliance hold)
+   *
+   * Transfers don't change circulating supply (just move it between
+   * holders), so the backing + limit checks are NOT applied — they're
+   * only relevant for mints/burns. The freeze check IS applied: a
+   * compliance-frozen asset cannot be moved at all.
+   *
+   * Returns `{allowed: true}` if all checks pass; otherwise
+   * `{allowed: false, reason}` with the first failing check's reason.
+   */
+  preTransferHook(assetCode: string, amount: number, recipient?: string): HookResult {
+    const checks: HookResult['checks'] = [];
+
+    const frozen = treasuryReports.isFrozen(assetCode);
+    checks.push({
+      name: 'freeze_status',
+      passed: !frozen,
+      reason: frozen ? 'asset_frozen' : undefined,
+    });
+    if (frozen) {
+      const result: HookResult = {
+        allowed: false,
+        reason: 'asset_frozen',
+        checks,
+      };
+      eventEngine.emit('treasury.pre_transfer_blocked', {
+        assetCode, amount, recipient,
+        reason: 'asset_frozen',
+        ts: nowTs(),
+      });
+      return result;
+    }
+
+    const result: HookResult = { allowed: true, checks };
+    eventEngine.emit('treasury.pre_transfer_approved', {
+      assetCode, amount, recipient,
       ts: nowTs(),
     });
     return result;

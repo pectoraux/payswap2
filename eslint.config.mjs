@@ -53,7 +53,8 @@ const noDirectPrismaReadRule = {
  */
 const WRITE_METHODS = ["create", "update", "delete", "upsert", "createMany", "updateMany", "deleteMany", "createManyAndReturn", "updateManyAndReturn", "deleteManyAndReturn"];
 const WRITE_ALLOWED_PREFIXES = [
-  "src/runtime/", "src/lib/db", "src/lib/auth", "src/app/api/auth",
+  "src/runtime/", "src/lib/db", "src/lib/auth", "src/lib/idempotency",
+  "src/app/api/auth",
   "src/services/", "scripts/", "tests/", "certification/",
 ];
 

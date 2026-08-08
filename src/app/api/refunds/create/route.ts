@@ -8,7 +8,7 @@ import {
 import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
 import { refundService } from '@/services';
-import { getIdempotencyKey } from '@/lib/idempotency';
+import { getIdempotencyKey, withIdempotency } from '@/lib/idempotency';
 import { validateBody, createRefundSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -31,7 +31,10 @@ const REFUND_TYPES = new Set(['FULL', 'PARTIAL']);
  * payment amount), and the ledger is updated with balanced reversal
  * entries.
  *
- * Idempotency: Pass an `Idempotency-Key` header to safely retry.
+ * Idempotency (H-2 fix — P1-4): Pass an `Idempotency-Key` header to
+ * safely retry. A retry with the same key (within 24h) returns the
+ * cached response with `cached: true` and does NOT create a second
+ * refund.
  *
  * Body:
  *   { paymentId, amount, type: 'full' | 'partial', reason? }
@@ -93,10 +96,36 @@ export async function POST(req: NextRequest) {
     amount = parsed;
   }
 
-  // Get idempotency key from header (H-2 fix)
+  // H-2 fix: Use the client-supplied Idempotency-Key for dedup.
+  // If no header was sent, `key` is null — process as unique (backwards
+  // compat) and skip the wrapper.
   const idempotencyKey = getIdempotencyKey(req);
 
   try {
+    if (idempotencyKey) {
+      const result = await withIdempotency(
+        idempotencyKey,
+        '/api/refunds/create',
+        async () => {
+          const refund = await refundService.create({
+            merchantId,
+            paymentId,
+            amount,
+            type,
+            reason: reason ?? '',
+            environment: env,
+            actorId: userId,
+          });
+          return { status: 201, body: { refund, idempotencyKey } };
+        },
+      );
+      return NextResponse.json(
+        { ...result.body, cached: result.cached },
+        { status: result.status },
+      );
+    }
+
+    // No idempotency key — process as unique (backwards compat).
     const refund = await refundService.create({
       merchantId,
       paymentId,
@@ -106,8 +135,10 @@ export async function POST(req: NextRequest) {
       environment: env,
       actorId: userId,
     });
-
-    return NextResponse.json({ refund, idempotencyKey }, { status: 201 });
+    return NextResponse.json(
+      { refund, idempotencyKey: null, cached: false },
+      { status: 201 },
+    );
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'Refund creation failed' },
