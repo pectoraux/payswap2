@@ -18,12 +18,17 @@ const SOURCES = new Set(['BANK_CARD', 'MOBILE_MONEY', 'BANK_TRANSFER']);
 /**
  * POST /api/customer/wallet/deposit
  *
- * Dispatches a `wallet.credit` command through the runtime kernel:
- *   API → executionPlanner → dispatcher → invariants → event store → ledger
- *
- * The wallet balance is updated as a PROJECTION of the event store,
- * not via direct Prisma write. The constitution verifies the wallet
- * invariant (balance non-negative) before the event is appended.
+ * P1-3 FIX (C-2, regrade 2026-08-08): this route used to dispatch
+ * `wallet.credit` through the runtime kernel and THEN separately run an
+ * uncoupled Prisma write to the real balance — two independent writers
+ * with no shared transaction, matching the same dual-write bug already
+ * fixed on transfer/treasury-adjust. Collapsed to the same pattern used
+ * there: the Prisma `$transaction` is the SINGLE authoritative writer,
+ * executed first. The runtime dispatch happens AFTER commit, as a
+ * best-effort log for the event-sourced ledger + audit trail — if it
+ * fails, the deposit still succeeded (no compensation needed, since a
+ * credit-only operation can't leave the ledger in a worse state than
+ * "this credit isn't logged yet").
  *
  * Idempotency (H-2 fix — P1-4): Pass an `Idempotency-Key` header to
  * safely retry. A retry with the same key returns the cached response
@@ -91,68 +96,75 @@ export async function POST(req: NextRequest) {
   // is wrapped in withIdempotency so a retry with the same key returns the
   // cached response without crediting the wallet twice.
   const runDeposit = async (): Promise<{ status: number; body: any }> => {
-    // Dispatch through the runtime kernel — the wallet.credit handler
-    // produces a wallet.credited event + ledger.entry.posted event.
-    // The constitution verifies invariants before appending.
-    const dispatchResult = await runtimeKernel.dispatcher.dispatch({
-      type: 'wallet.credit',
-      payload: {
-        walletId: `${ctx.account.id}:${currency}`,
-        accountId: ctx.account.id,
-        currency,
-        amount,
-        description: note ?? `Deposit via ${source}`,
-        reference: `dep_${Date.now().toString(36)}`,
-      },
-      metadata: {
-        actor: { id: ctx.userId, role: 'CUSTOMER' },
-        environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
-        correlationId: idempotencyKey ?? `dep_${Date.now().toString(36)}`,
-        source: 'api',
-      },
-    });
+    // ── SINGLE WRITER: wallet upsert + transaction row in one transaction ──
+    const result = await db.$transaction(async (tx) => {
+      let wallet = await tx.wallet.findFirst({
+        where: { accountId: ctx.account.id, currency },
+      });
 
-    if (!dispatchResult.success) {
-      return {
-        status: 500,
-        body: { ok: false, error: dispatchResult.error ?? dispatchResult.message },
-      };
-    }
+      if (!wallet) {
+        wallet = await tx.wallet.create({
+          data: {
+            accountId: ctx.account.id,
+            name: `${currency} Wallet`,
+            currency,
+            balance: amount,
+            isDefault: ctx.wallets.length === 0,
+          },
+        });
+      } else {
+        wallet = await tx.wallet.update({
+          where: { id: wallet.id },
+          data: { balance: { increment: amount } },
+        });
+      }
 
-    // Update the wallet balance as a PROJECTION of the event.
-    // Use atomic increment (safe — credit always succeeds).
-    let wallet = await db.wallet.findFirst({
-      where: { accountId: ctx.account.id, currency },
-    });
-
-    if (!wallet) {
-      wallet = await db.wallet.create({
+      const txn = await tx.walletTransaction.create({
         data: {
-          accountId: ctx.account.id,
-          name: `${currency} Wallet`,
+          walletId: wallet.id,
+          type: 'CREDIT',
+          amount,
           currency,
-          balance: amount,
-          isDefault: ctx.wallets.length === 0,
+          counterparty: source,
+          reference: note ?? `DEPOSIT:${source}`,
+          txHash: `dep_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
         },
       });
-    } else {
-      wallet = await db.wallet.update({
-        where: { id: wallet.id },
-        data: { balance: { increment: amount } },
-      });
-    }
 
-    const txn = await db.walletTransaction.create({
-      data: {
-        walletId: wallet.id,
-        type: 'CREDIT',
-        amount,
-        currency,
-        counterparty: source,
-        reference: note ?? `DEPOSIT:${source}`,
-        txHash: `dep_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
-      },
+      return { wallet, txn };
     });
+
+    const { wallet, txn } = result;
+
+    // ── POST-COMMIT LOG: fire the runtime event as a best-effort projection ──
+    // The transaction above is the source of truth. This event feeds the
+    // event-sourced audit trail. If it fails, the deposit still succeeded —
+    // no compensation needed (a credit can't leave the ledger in a worse
+    // state than "not logged yet").
+    try {
+      const dispatchResult = await runtimeKernel.dispatcher.dispatch({
+        type: 'wallet.credit',
+        payload: {
+          walletId: `${ctx.account.id}:${currency}`,
+          accountId: ctx.account.id,
+          currency,
+          amount,
+          description: note ?? `Deposit via ${source}`,
+          reference: txn.txHash,
+        },
+        metadata: {
+          actor: { id: ctx.userId, role: 'CUSTOMER' },
+          environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
+          correlationId: idempotencyKey ?? txn.txHash,
+          source: 'api',
+        },
+      });
+      if (!dispatchResult.success) {
+        console.error('[wallet/deposit] Post-commit event dispatch failed (deposit succeeded):', dispatchResult.error ?? dispatchResult.message);
+      }
+    } catch (dispatchErr) {
+      console.error('[wallet/deposit] Post-commit event dispatch threw (deposit succeeded):', dispatchErr);
+    }
 
     // Best-effort audit log
     try {

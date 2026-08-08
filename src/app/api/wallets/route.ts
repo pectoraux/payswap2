@@ -15,6 +15,22 @@ function initStellar() {
   stellarRegistered = true;
 }
 
+/**
+ * C-10 fix (regrade 2026-08-08): `get_balance`/`list_wallets`/
+ * `transactions` took a client-supplied `walletId`/`accountId` with no
+ * check that it belonged to the caller — any authenticated user could
+ * read any other account's balance or transaction history. This
+ * protocol-layer account has no `userId` link, so ownership is verified
+ * by matching the account's registered email against the session's
+ * email (case-insensitive) — admins bypass the check.
+ */
+function ownsAccount(session: any, accountEmail?: string): boolean {
+  const roles = (session.user as any)?.roles ?? [];
+  if (roles.includes('ADMIN') || roles.includes('SUPER_ADMIN')) return true;
+  const sessionEmail = (session.user as any)?.email;
+  return !!sessionEmail && !!accountEmail && sessionEmail.toLowerCase() === accountEmail.toLowerCase();
+}
+
 /** POST /api/wallets — create account + wallet */
 export async function POST(req: NextRequest) {
   const session = await requireSession();
@@ -42,6 +58,10 @@ export async function POST(req: NextRequest) {
   if (action === 'get_balance') {
     const wallet = walletService.getWallet(body.walletId);
     if (!wallet) return NextResponse.json({ error: 'Wallet not found' }, { status: 404 });
+    const account = walletService.getAccount(wallet.accountId);
+    if (!ownsAccount(session, account?.email)) {
+      return NextResponse.json({ error: 'forbidden: account ownership required' }, { status: 403 });
+    }
     // Get on-chain balance from Stellar
     const stellarAccount = walletService.getBlockchainAccounts(wallet.accountId).find((b) => b.chain === 'stellar');
     if (stellarAccount) {
@@ -55,11 +75,21 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'list_wallets') {
+    const account = walletService.getAccount(body.accountId);
+    if (!ownsAccount(session, account?.email)) {
+      return NextResponse.json({ error: 'forbidden: account ownership required' }, { status: 403 });
+    }
     const wallets = walletService.getWalletsByAccount(body.accountId);
     return NextResponse.json({ wallets });
   }
 
   if (action === 'transactions') {
+    const wallet = walletService.getWallet(body.walletId);
+    if (!wallet) return NextResponse.json({ error: 'Wallet not found' }, { status: 404 });
+    const account = walletService.getAccount(wallet.accountId);
+    if (!ownsAccount(session, account?.email)) {
+      return NextResponse.json({ error: 'forbidden: account ownership required' }, { status: 403 });
+    }
     const txs = walletService.getTransactions(body.walletId);
     return NextResponse.json({ transactions: txs });
   }

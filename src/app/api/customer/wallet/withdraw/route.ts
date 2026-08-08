@@ -18,22 +18,21 @@ const DESTINATIONS = new Set(['BANK_ACCOUNT', 'MOBILE_MONEY']);
 /**
  * POST /api/customer/wallet/withdraw
  *
- * NC-1 FIX: Check balance BEFORE dispatching to the runtime. The previous
- * implementation dispatched first (producing events + ledger entries) then
- * checked balance — a failed withdrawal left orphaned events in the store.
+ * P1-3 FIX (C-2, regrade 2026-08-08): this route previously dispatched
+ * `wallet.debit` through the runtime kernel first, then separately ran a
+ * Prisma `updateMany` on the real balance — two uncoupled writers. The
+ * doc comment used to claim "the projection subscriber updates Prisma
+ * from events" as the safety net for a mismatch; no such subscriber
+ * exists (`src/runtime/engines/wallets/projection.ts` is a pure in-memory
+ * read model with zero `db.wallet` writes), so a race between the two
+ * writes had no real reconciliation.
  *
- * NC-2 FIX: The dispatch and Prisma update are now sequenced correctly:
- *   1. Check balance (atomic read)
- *   2. Dispatch wallet.debit command (produces events + ledger entries)
- *   3. Update Prisma wallet balance (projection of the event)
- *
- * If step 2 succeeds but step 3 fails (crash), the event store has the
- * debit event and the projection will eventually catch up (the projection
- * subscriber updates Prisma from events). The event store is the source
- * of truth — Prisma is a read model.
- *
- * H-8 FIX: Uses atomic conditional updateMany with balance >= amount check
- * at the SQL level, preventing TOCTOU race.
+ * Collapsed to the same single-writer pattern already used on transfer:
+ * the Prisma `$transaction` is the SOLE authoritative writer, with the
+ * balance-sufficiency check done as an atomic conditional `updateMany`
+ * (`balance >= amount`) INSIDE that transaction — no TOCTOU race. The
+ * runtime dispatch happens AFTER commit, as a best-effort log for the
+ * event-sourced ledger + audit trail.
  *
  * Idempotency (H-2 fix — P1-4): Pass an `Idempotency-Key` header to
  * safely retry. A retry with the same key returns the cached response
@@ -121,68 +120,80 @@ export async function POST(req: NextRequest) {
   // is wrapped in withIdempotency so a retry with the same key returns the
   // cached response without debiting the wallet twice.
   const runWithdraw = async (): Promise<{ status: number; body: any }> => {
-    // Step 1: Dispatch through the runtime kernel — produces wallet.debited
-    // event + ledger.entry.posted event. Constitution verifies invariants.
-    const dispatchResult = await runtimeKernel.dispatcher.dispatch({
-      type: 'wallet.debit',
-      payload: {
-        walletId: `${ctx.account.id}:${currency}`,
-        accountId: ctx.account.id,
-        currency,
-        amount,
-        description: note ?? `Withdrawal to ${destination}`,
-        reference: `wd_${Date.now().toString(36)}`,
-      },
-      metadata: {
-        actor: { id: ctx.userId, role: 'CUSTOMER' },
-        environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
-        correlationId: idempotencyKey ?? `wd_${Date.now().toString(36)}`,
-        source: 'api',
-      },
+    // ── SINGLE WRITER: atomic conditional debit in one transaction ────────
+    // H-8: atomic conditional updateMany (balance >= amount) at the SQL
+    // level — no TOCTOU race between the pre-check above and this write.
+    const result = await db.$transaction(async (tx) => {
+      const updated = await tx.wallet.updateMany({
+        where: { id: wallet.id, balance: { gte: amount } },
+        data: { balance: { decrement: amount } },
+      });
+
+      if (updated.count === 0) {
+        throw new Error('INSUFFICIENT_FUNDS');
+      }
+
+      const freshWallet = await tx.wallet.findUnique({ where: { id: wallet.id } });
+      const counterparty = destinationLabel
+        ? `${destination}:${destinationLabel}`
+        : destination;
+
+      const txn = await tx.walletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          type: 'DEBIT',
+          amount: -Math.abs(amount),
+          currency,
+          counterparty,
+          reference: note ?? `WITHDRAW:${destination}`,
+          txHash: `wd_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        },
+      });
+
+      return { freshWallet: freshWallet!, txn };
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : 'UNKNOWN';
+      return { error: msg };
     });
 
-    if (!dispatchResult.success) {
-      return {
-        status: 500,
-        body: { ok: false, error: dispatchResult.error ?? dispatchResult.message },
-      };
+    if ('error' in result) {
+      if (result.error === 'INSUFFICIENT_FUNDS') {
+        return { status: 422, body: { ok: false, error: 'Insufficient funds' } };
+      }
+      return { status: 500, body: { ok: false, error: 'Withdrawal failed' } };
     }
 
-    // Step 2: Update Prisma wallet balance (projection of the event).
-    // H-8 FIX: Atomic conditional decrement — only decrements if
-    // balance >= amount at update time. This handles the race condition
-    // where another concurrent withdrawal reduced the balance between
-    // our check above and this update.
-    const updated = await db.wallet.updateMany({
-      where: { id: wallet.id, balance: { gte: amount } },
-      data: { balance: { decrement: amount } },
-    });
+    const { freshWallet, txn } = result;
 
-    if (updated.count === 0) {
-      // Race condition: balance changed between our check and the update.
-      // The event was already dispatched — the projection subscriber will
-      // handle the reconciliation. Return success (the event is the source
-      // of truth, and the projection will eventually reflect it).
-      // In production, this should trigger a reconciliation alert.
-      console.warn('[wallet/withdraw] Race condition: balance changed after dispatch. Event store is source of truth.');
+    // ── POST-COMMIT LOG: fire the runtime event as a best-effort projection ──
+    // The transaction above is the source of truth. This event feeds the
+    // event-sourced audit trail. If it fails, the withdrawal still
+    // succeeded — no compensation needed (the money already moved
+    // atomically inside the transaction above).
+    try {
+      const dispatchResult = await runtimeKernel.dispatcher.dispatch({
+        type: 'wallet.debit',
+        payload: {
+          walletId: `${ctx.account.id}:${currency}`,
+          accountId: ctx.account.id,
+          currency,
+          amount,
+          description: note ?? `Withdrawal to ${destination}`,
+          reference: txn.txHash,
+        },
+        metadata: {
+          actor: { id: ctx.userId, role: 'CUSTOMER' },
+          environment: (env === 'live' ? 'live' : 'sandbox') as Environment,
+          correlationId: idempotencyKey ?? txn.txHash,
+          source: 'api',
+        },
+      });
+      if (!dispatchResult.success) {
+        console.error('[wallet/withdraw] Post-commit event dispatch failed (withdrawal succeeded):', dispatchResult.error ?? dispatchResult.message);
+      }
+    } catch (dispatchErr) {
+      console.error('[wallet/withdraw] Post-commit event dispatch threw (withdrawal succeeded):', dispatchErr);
     }
-
-    const freshWallet = await db.wallet.findUnique({ where: { id: wallet.id } });
-    const counterparty = destinationLabel
-      ? `${destination}:${destinationLabel}`
-      : destination;
-
-    const txn = await db.walletTransaction.create({
-      data: {
-        walletId: wallet.id,
-        type: 'DEBIT',
-        amount: -Math.abs(amount),
-        currency,
-        counterparty,
-        reference: note ?? `WITHDRAW:${destination}`,
-        txHash: `wd_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
-      },
-    });
 
     try {
       await db.auditLog.create({
