@@ -33,7 +33,17 @@ export interface QRCode {
   encoded: string;
   createdAt: number;
   expiresAt: number | null;
+  // H-6 fix (SEC-007, regrade 2026-08-08): one-shot consumption state.
+  // 'dynamic'/'invoice'/'checkout' QR codes represent a single payment
+  // intent and must not be redeemable twice, whether from a legitimate
+  // double-scan or a captured/replayed payload. 'static'/'donation'/
+  // 'subscription' are reusable by design and are never consumed.
+  consumed: boolean;
+  consumedAt: number | null;
 }
+
+/** QR types that represent a single payment intent — one-shot only. */
+const ONE_SHOT_TYPES: ReadonlySet<QRType> = new Set(['dynamic', 'invoice', 'checkout']);
 
 const DEFAULT_DYNAMIC_EXPIRY_MS = 5 * 60 * 1000;     // 5 minutes
 const DEFAULT_CHECKOUT_EXPIRY_MS = 10 * 60 * 1000;   // 10 minutes
@@ -50,7 +60,7 @@ export class QRService {
     const qr: QRCode = {
       id, type: 'static', merchant, wallet, currency,
       payload, encoded: this.encode(payload),
-      createdAt: nowTs(), expiresAt: null,
+      createdAt: nowTs(), expiresAt: null, consumed: false, consumedAt: null,
     };
     this.codes.set(id, qr);
     return qr;
@@ -70,7 +80,7 @@ export class QRService {
     const qr: QRCode = {
       id, type: 'dynamic', merchant, wallet, currency, amount, reference,
       payload, encoded: this.encode(payload),
-      createdAt, expiresAt,
+      createdAt, expiresAt, consumed: false, consumedAt: null,
     };
     this.codes.set(id, qr);
     return qr;
@@ -91,7 +101,7 @@ export class QRService {
     const qr: QRCode = {
       id, type: 'invoice', merchant, currency, amount, reference,
       payload, encoded: this.encode(payload),
-      createdAt, expiresAt,
+      createdAt, expiresAt, consumed: false, consumedAt: null,
     };
     this.codes.set(id, qr);
     return qr;
@@ -107,7 +117,7 @@ export class QRService {
     const qr: QRCode = {
       id, type: 'donation', merchant, currency, reference,
       payload, encoded: this.encode(payload),
-      createdAt: nowTs(), expiresAt: null,
+      createdAt: nowTs(), expiresAt: null, consumed: false, consumedAt: null,
     };
     this.codes.set(id, qr);
     return qr;
@@ -126,7 +136,7 @@ export class QRService {
     const qr: QRCode = {
       id, type: 'subscription', merchant, currency, amount, reference, interval,
       payload, encoded: this.encode(payload),
-      createdAt: nowTs(), expiresAt: null,
+      createdAt: nowTs(), expiresAt: null, consumed: false, consumedAt: null,
     };
     this.codes.set(id, qr);
     return qr;
@@ -146,7 +156,7 @@ export class QRService {
     const qr: QRCode = {
       id, type: 'checkout', merchant, currency, amount, reference,
       payload, encoded: this.encode(payload),
-      createdAt, expiresAt,
+      createdAt, expiresAt, consumed: false, consumedAt: null,
     };
     this.codes.set(id, qr);
     return qr;
@@ -157,12 +167,39 @@ export class QRService {
 
   get(id: string): QRCode | undefined { return this.codes.get(id); }
 
-  /** True if the QR exists and is still within its validity window. */
+  /**
+   * True if the QR exists, is still within its validity window, AND —
+   * for one-shot types (dynamic/invoice/checkout) — has not already been
+   * consumed. A decoded/replayed one-shot payload is no longer valid
+   * after its first successful redemption.
+   */
   isValid(id: string, now: number = nowTs()): boolean {
     const qr = this.codes.get(id);
     if (!qr) return false;
+    if (ONE_SHOT_TYPES.has(qr.type) && qr.consumed) return false;
     if (qr.expiresAt === null) return true;
     return now < qr.expiresAt;
+  }
+
+  /**
+   * Consume a one-shot QR code (H-6 / SEC-007 fix). Call this exactly
+   * once, at the point a scan actually results in a completed payment —
+   * never at scan/decode time, so a scan that doesn't complete doesn't
+   * burn the code. Idempotent in the sense that a second call always
+   * fails cleanly rather than silently succeeding twice.
+   *
+   * Returns `{ success: false, error: 'already_consumed' | 'expired' |
+   * 'not_found' | 'not_one_shot' }` on any invalid redemption attempt.
+   */
+  consume(id: string, now: number = nowTs()): { success: boolean; error?: string; qr?: QRCode } {
+    const qr = this.codes.get(id);
+    if (!qr) return { success: false, error: 'not_found' };
+    if (!ONE_SHOT_TYPES.has(qr.type)) return { success: false, error: 'not_one_shot' };
+    if (qr.consumed) return { success: false, error: 'already_consumed' };
+    if (qr.expiresAt !== null && now >= qr.expiresAt) return { success: false, error: 'expired' };
+    qr.consumed = true;
+    qr.consumedAt = now;
+    return { success: true, qr };
   }
 
   // ----------------------------------------------------------------- helpers

@@ -136,6 +136,12 @@ export class TwinTokenEngine {
     if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
     const bal = this.getBalanceRecord(from, assetCode);
     if (bal.frozen) return { success: false, error: 'account_frozen' };
+    // H-6 fix (SEC-006, regrade 2026-08-08): only the sender's freeze was
+    // checked — a compliance-frozen account could still RECEIVE funds,
+    // defeating the point of freezing it (e.g. mid-investigation). A
+    // freeze must block both outbound and inbound movement.
+    const destBal = this.getBalanceRecord(to, assetCode);
+    if (destBal.frozen) return { success: false, error: 'destination_account_frozen' };
     const available = bal.balance - bal.escrowed;
     if (available < amount) return { success: false, error: 'insufficient_available_balance' };
     const res = await stellarAdapter.transfer({ assetCode, amount, from, to, memo });

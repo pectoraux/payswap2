@@ -63,6 +63,19 @@ export class WalletProjection implements Projection {
   private eventsAppliedCount = 0;
   /** Last rebuild duration (for health metrics). */
   private lastReplayMs: number | null = null;
+  /**
+   * H-6 fix (SEC-002, regrade 2026-08-08): event IDs already applied to a
+   * *balance-mutating* event (credited/debited/reserved/released). Unlike
+   * `applyCreated` (already idempotent via the `byId.has()` check),
+   * `applyCredited`/`applyDebited`/etc. had no guard against the same
+   * event being applied twice — if a subscriber redelivers an event (a
+   * standard at-least-once event-sourcing hazard: a crash/restart before
+   * a checkpoint persists, or a bug upstream), the balance would be
+   * double-counted. `rebuild()` intentionally clears this set along with
+   * everything else — a full replay from genesis is supposed to reapply
+   * every event exactly once, which this correctly allows.
+   */
+  private readonly appliedEventIds = new Set<string>();
 
   // ── Projection interface ────────────────────────────────────────────────
 
@@ -81,6 +94,7 @@ export class WalletProjection implements Projection {
     this.byId.clear();
     this.byAccount.clear();
     this.byCurrency.clear();
+    this.appliedEventIds.clear();
     this.lastPosition = -1;
     this.eventsAppliedCount = 0;
     for (const ev of allEvents) {
@@ -175,6 +189,11 @@ export class WalletProjection implements Projection {
   // ── Internal: apply one event ───────────────────────────────────────────
 
   private applyOne(event: StoredEvent): void {
+    // SEC-002 fix: reject a redelivered event before it can double-count
+    // a balance mutation. See `appliedEventIds` doc comment above.
+    if (this.appliedEventIds.has(event.id)) return;
+    this.appliedEventIds.add(event.id);
+
     switch (event.type) {
       case 'wallet.created':
         this.applyCreated(event);

@@ -59,6 +59,22 @@ export const WEBHOOK_SIGNATURE_PREFIX = 'sha256=';
 export class WebhookEngine {
   private endpoints = new Map<string, WebhookEndpoint>();
   private deliveries: WebhookDelivery[] = [];
+  // H-6 fix (SEC-011, regrade 2026-08-08): timestamp freshness alone
+  // (reject signatures older than maxAgeMs) does NOT stop replay — a
+  // signature captured and resent within that window still verifies as
+  // valid every time. This tracks signatures already accepted by
+  // verifyStripeSignature so a second presentation of the exact same
+  // signed payload is rejected. Keyed by `t=<timestamp>,v1=<hmac>` (the
+  // full header — unique per delivery since the HMAC binds timestamp +
+  // body + secret). Entries older than the freshness window are already
+  // rejected on timestamp grounds, so periodic sweep just bounds memory.
+  private seenSignatures = new Map<string, number>();
+
+  private pruneSeenSignatures(now: number, maxAgeMs: number): void {
+    for (const [sig, seenAt] of this.seenSignatures) {
+      if (now - seenAt > maxAgeMs) this.seenSignatures.delete(sig);
+    }
+  }
 
   // ----------------------------------------------------------------- register
   register(params: { merchantId: string; url: string; events?: string[]; secret?: string }): WebhookEndpoint {
@@ -161,8 +177,17 @@ export class WebhookEngine {
 
   /**
    * OPS-2: Verify a Stripe-style `t=,v1=` signature.
+   *
+   * H-6 fix (SEC-011, regrade 2026-08-08): timestamp freshness rejects
+   * OLD signatures but not REPLAYED ones — a signature captured within
+   * the freshness window and resent verified as valid every time it was
+   * presented. `dedupe` (default true) now also rejects a signature
+   * that's already been accepted once, closing that gap. Pass
+   * `dedupe: false` only for read-only signature *inspection* (e.g. a
+   * "does this signature look right" debug tool) that must not consume
+   * the one-time budget of a real delivery.
    */
-  verifyStripeSignature(body: string, signatureHeader: string, secret: string, maxAgeMs: number = 5 * 60 * 1000): boolean {
+  verifyStripeSignature(body: string, signatureHeader: string, secret: string, maxAgeMs: number = 5 * 60 * 1000, dedupe = true): boolean {
     if (!body || !signatureHeader || !secret) return false;
     // Parse the signature header: t=1234567890,v1=abc123...
     const parts = signatureHeader.split(',').reduce((acc, part) => {
@@ -175,18 +200,28 @@ export class WebhookEngine {
     const v1 = parts['v1'];
     if (!timestamp || !v1) return false;
 
-    // Check timestamp freshness (replay protection).
-    if (Date.now() - timestamp > maxAgeMs) return false;
+    // Check timestamp freshness (rejects OLD signatures).
+    const now = Date.now();
+    if (now - timestamp > maxAgeMs) return false;
 
     // Recompute the HMAC.
     const signedPayload = `${timestamp}.${body}`;
     const expected = createHmac('sha256', secret).update(signedPayload, 'utf8').digest('hex');
 
+    let valid: boolean;
     try {
-      return timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(v1, 'utf8'));
+      valid = timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(v1, 'utf8'));
     } catch {
-      return false;
+      valid = false;
     }
+    if (!valid) return false;
+
+    if (dedupe) {
+      this.pruneSeenSignatures(now, maxAgeMs);
+      if (this.seenSignatures.has(signatureHeader)) return false; // REPLAY
+      this.seenSignatures.set(signatureHeader, now);
+    }
+    return true;
   }
 
   private sign(body: string, secret: string): string {
