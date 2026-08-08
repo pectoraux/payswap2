@@ -83,9 +83,41 @@ export class SnapshotStore {
     return this.save(snap);
   }
 
-  /** Get a snapshot by id. */
-  get(id: string): LedgerSnapshot | undefined {
-    return this.snapshots.find((s) => s.id === id);
+  /**
+   * Get a snapshot by id (string) or by timestamp (number).
+   * When passed a number, returns the snapshot whose `ts` matches exactly.
+   */
+  get(idOrTs: string | number): LedgerSnapshot | undefined {
+    if (typeof idOrTs === 'number') {
+      return this.snapshots.find((s) => s.ts === idOrTs);
+    }
+    return this.snapshots.find((s) => s.id === idOrTs);
+  }
+
+  /**
+   * Verify a snapshot's internal consistency: trial balance must be balanced,
+   * per-account balances must sum to the trial-balance totals, and the
+   * entry/leg counts must be non-negative. Returns true when the snapshot
+   * reconciles with itself (i.e. it has not been tampered with).
+   */
+  verify(snapshot: LedgerSnapshot): boolean {
+    if (!snapshot) return false;
+    if (!snapshot.trialBalance) return false;
+    if (!snapshot.trialBalance.balanced) return false;
+    // Per-account balances must sum to the trial-balance totals.
+    let totalDebit = 0;
+    let totalCredit = 0;
+    for (const code of Object.keys(snapshot.accounts)) {
+      const a = snapshot.accounts[code];
+      if (!a) return false;
+      totalDebit += a.debit;
+      totalCredit += a.credit;
+    }
+    if (Math.abs(totalDebit - snapshot.trialBalance.totalDebits) > 1e-6) return false;
+    if (Math.abs(totalCredit - snapshot.trialBalance.totalCredits) > 1e-6) return false;
+    if (snapshot.entryCount < 0 || snapshot.legCount < 0) return false;
+    if (snapshot.legCount < snapshot.entryCount) return false;
+    return true;
   }
 
   /** List all snapshots, oldest first. */

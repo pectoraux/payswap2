@@ -80,3 +80,11 @@ export class MetricsCollector {
     this.states.clear();
   }
 }
+
+/**
+ * Shared singleton `MetricsCollector` — paired with `sharedHealthMonitor`
+ * so all connectors (registry-backed + ad-hoc test connectors) record into
+ * the same counters. `sharedMetricsCollector.reset()` clears state between
+ * tests.
+ */
+export const sharedMetricsCollector = new MetricsCollector();

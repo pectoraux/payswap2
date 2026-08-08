@@ -114,8 +114,117 @@ export class EventReplayEngine {
    * `deterministic: true` with a mismatch note explaining the skip — this
    * keeps callers resilient to environments where the ledger is not loaded
    * (e.g. lightweight tests).
+   *
+   * Backward-compatible overload: when called with `(target, events, projectFn, snapshotFn, initFn)`,
+   * runs the caller-supplied projection instead of the ledger rebuilder. This
+   * lets tests verify determinism of any projection function, not just the
+   * ledger one.
    */
-  async verifyReplayDeterminism(
+  verifyReplayDeterminism(
+    targetOrEvents:
+      | SimulationEvent[]
+      | { type: string; fromTs?: number; toTs?: number; filter?: { eventTypes?: string[] } },
+    eventsOrProjectFn?:
+      | SimulationEvent[]
+      | ((event: SimulationEvent, ctx: unknown) => void),
+    projectFn?: (event: SimulationEvent, ctx: unknown) => void,
+    snapshotFn?: (ctx: unknown) => unknown,
+    initFn?: () => unknown,
+  ): ReplayDeterminismResult | Promise<ReplayDeterminismResult> {
+    // Detect the alternate signature: target object (NOT an array) + events
+    // array + 3 callbacks. The key signal is `targetOrEvents` being a plain
+    // object rather than an array. Returns the result synchronously so callers
+    // written against the sync API (e.g. tests) can read `.deterministic`
+    // without `await`.
+    if (
+      targetOrEvents !== null &&
+      typeof targetOrEvents === 'object' &&
+      !Array.isArray(targetOrEvents)
+    ) {
+      return this.verifyCustomReplayDeterminism(
+        targetOrEvents as { type: string; fromTs?: number; toTs?: number },
+        (eventsOrProjectFn as SimulationEvent[]) ?? [],
+        projectFn!,
+        snapshotFn!,
+        initFn!,
+      );
+    }
+    // Original signature: just events array. Returns a Promise (the ledger
+    // rebuilder is loaded lazily via dynamic import).
+    return this.verifyLedgerReplayDeterminism(targetOrEvents as SimulationEvent[]);
+  }
+
+  /**
+   * Determinism check for a caller-supplied projection. Replays `events`
+   * through `projectFn` twice (each time against a fresh `initFn()` context),
+   * then compares `snapshotFn(ctx)` outputs. Synchronous.
+   */
+  private verifyCustomReplayDeterminism(
+    target: { type: string; fromTs?: number; toTs?: number },
+    events: SimulationEvent[],
+    projectFn: (event: SimulationEvent, ctx: unknown) => void,
+    snapshotFn: (ctx: unknown) => unknown,
+    initFn: () => unknown,
+  ): ReplayDeterminismResult {
+    const start = nowTs();
+    // Filter by ts window if provided.
+    const filtered = events.filter((e) => {
+      if (target.fromTs !== undefined && e.ts < target.fromTs) return false;
+      if (target.toTs !== undefined && e.ts > target.toTs) return false;
+      return true;
+    });
+    // Sort deterministically by (ts, frame, id).
+    const sorted = [...filtered].sort((a, b) => {
+      if (a.ts !== b.ts) return a.ts - b.ts;
+      if (a.frame !== b.frame) return a.frame - b.frame;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+
+    const runOnce = (): string => {
+      const ctx = initFn();
+      for (const event of sorted) {
+        projectFn(event, ctx);
+      }
+      return JSON.stringify(snapshotFn(ctx));
+    };
+
+    let snapshot1: string;
+    let snapshot2: string;
+    try {
+      snapshot1 = runOnce();
+    } catch (err) {
+      return {
+        deterministic: false,
+        mismatch: `first-replay-threw: ${err instanceof Error ? err.message : String(err)}`,
+        eventsReplayed: sorted.length,
+        durationMs: nowTs() - start,
+      };
+    }
+    try {
+      snapshot2 = runOnce();
+    } catch (err) {
+      return {
+        deterministic: false,
+        mismatch: `second-replay-threw: ${err instanceof Error ? err.message : String(err)}`,
+        eventsReplayed: sorted.length,
+        durationMs: nowTs() - start,
+      };
+    }
+
+    const deterministic = snapshot1 === snapshot2;
+    return {
+      deterministic,
+      mismatch: deterministic ? undefined : 'snapshots-differ',
+      eventsReplayed: sorted.length,
+      durationMs: nowTs() - start,
+    };
+  }
+
+  /**
+   * Original async determinism check using the ledger rebuilder. Returns a
+   * Promise because the ledger module is loaded lazily via dynamic import.
+   */
+  private async verifyLedgerReplayDeterminism(
     events: SimulationEvent[],
   ): Promise<ReplayDeterminismResult> {
     const start = nowTs();

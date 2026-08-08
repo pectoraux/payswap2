@@ -31,6 +31,26 @@ export interface ReconcileResult {
   discrepancies: ReconcileDiscrepancy[];
   /** Optional summary metrics for the check. */
   metrics?: Record<string, number | string>;
+  /** Optional per-asset rows (populated by `reconcileTwinTokenBacking`). */
+  assets?: TwinTokenReconcileRow[];
+}
+
+/** Per-asset row in the twin-token backing reconciliation. */
+export interface TwinTokenReconcileRow {
+  /** Asset code (e.g. 'TWINGHS'). */
+  code: string;
+  /** Currency the asset is denominated in. */
+  currency: string;
+  /** Circulating balance per the ledger (`twintoken:circulating:<code>`). */
+  circulating: number;
+  /** Backing liability per the ledger (`twin:backing:<currency>`). */
+  backingLiability: number;
+  /** Escrowed balance per the ledger (`twintoken:escrowed:<code>`). */
+  escrowed: number;
+  /** Signed difference between `circulating` and `backingLiability`. */
+  discrepancy: number;
+  /** Total supply per the twin-token engine (may differ from ledger). */
+  engineTotalSupply: number;
 }
 
 export interface ReconcileDiscrepancy {
@@ -140,15 +160,16 @@ export function reconcileTwinTokenBacking(
   const discrepancies: ReconcileDiscrepancy[] = [];
   const assets = twinTokenEngine.allAssets();
   const metrics: Record<string, number | string> = { assetCount: assets.length };
+  const rows: TwinTokenReconcileRow[] = [];
 
   for (const asset of assets) {
     const currency = asset.currency || twinAssetToCurrency(asset.code);
     const circulating = asset.circulating ?? asset.totalSupply; // fallback if engine doesn't track circulating
     const escrowed = asset.escrowed ?? 0;
     const expectedBacking = round(circulating + escrowed, 6);
-    const ledgerBacking = Math.abs(ledger.getAccountBalance(backingAccount(currency)));
-    const ledgerEscrowed = Math.max(0, ledger.getAccountBalance(escrowedAccount(asset.code)));
-    const ledgerCirculating = Math.max(0, ledger.getAccountBalance(circulatingAccount(asset.code)));
+    const ledgerBacking = Math.abs(ledger.getAccountBalance(backingAccount(currency)).balance);
+    const ledgerEscrowed = Math.max(0, ledger.getAccountBalance(escrowedAccount(asset.code)).balance);
+    const ledgerCirculating = Math.max(0, ledger.getAccountBalance(circulatingAccount(asset.code)).balance);
 
     if (Math.abs(ledgerBacking - expectedBacking) > 1e-6) {
       discrepancies.push({
@@ -180,6 +201,17 @@ export function reconcileTwinTokenBacking(
 
     metrics[`asset:${asset.code}:totalSupply`] = asset.totalSupply;
     metrics[`asset:${asset.code}:backing`] = ledgerBacking;
+
+    // Per-asset row summarising the LEDGER view (circulating vs backing).
+    rows.push({
+      code: asset.code,
+      currency,
+      circulating: ledgerCirculating,
+      backingLiability: ledgerBacking,
+      escrowed: ledgerEscrowed,
+      discrepancy: round(ledgerCirculating - ledgerBacking, 6),
+      engineTotalSupply: asset.totalSupply,
+    });
   }
 
   return {
@@ -187,6 +219,7 @@ export function reconcileTwinTokenBacking(
     passed: discrepancies.length === 0,
     discrepancies,
     metrics,
+    assets: rows,
   };
 }
 
@@ -214,7 +247,7 @@ export function reconcileEscrow(
   }
 
   for (const [assetCode, frozenAmount] of frozenByAsset) {
-    const ledgerEscrowed = Math.max(0, ledger.getAccountBalance(escrowedAccount(assetCode)));
+    const ledgerEscrowed = Math.max(0, ledger.getAccountBalance(escrowedAccount(assetCode)).balance);
     if (Math.abs(ledgerEscrowed - frozenAmount) > 1e-6) {
       discrepancies.push({
         item: `escrow:${assetCode}`,
@@ -325,7 +358,7 @@ export function reconcileMerchant(
 ): ReconcileResult {
   const discrepancies: ReconcileDiscrepancy[] = [];
   const merchant = merchantPlatform.getMerchant?.(merchantId);
-  const ledgerPayable = ledger.getAccountBalance(`merchant:payable:${merchantId}`);
+  const ledgerPayable = ledger.getAccountBalance(`merchant:payable:${merchantId}`).balance;
 
   // Source value: bondEscrowed is the closest analog if no explicit payable
   // is exposed. Treat 0 as "no opinion" (skip).
@@ -362,7 +395,7 @@ export function reconcileMerchant(
 export function reconcileTreasury(ledger: LedgerEngine): ReconcileResult {
   const discrepancies: ReconcileDiscrepancy[] = [];
   const tb = ledger.getTrialBalance();
-  const treasuryBalance = ledger.getAccountBalance('equity:treasury');
+  const treasuryBalance = ledger.getAccountBalance('equity:treasury').balance;
 
   if (!tb.balanced) {
     discrepancies.push({

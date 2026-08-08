@@ -29,6 +29,12 @@ export interface CircuitBreakerOptions {
   cooldownMs: number;
   /** Consecutive successes required in HALF_OPEN to transition to CLOSED. */
   successThresholdToClose: number;
+  /**
+   * Max concurrent trial requests allowed in HALF_OPEN. Defaults to 1.
+   * Documentary on a single-process runtime (calls are serialised by the
+   * event loop) but surfaced for config parity with multi-replica setups.
+   */
+  halfOpenMaxRequests?: number;
 }
 
 /** Error thrown when an `execute` call is rejected because the breaker is OPEN. */
@@ -66,6 +72,10 @@ export interface CircuitBreakerMetrics {
   openedAt: number | null;
   /** Consecutive successes accumulated in HALF_OPEN. */
   consecutiveHalfOpenSuccesses: number;
+  /** Alias for `totalTrips` — number of times the breaker tripped to OPEN. */
+  trips: number;
+  /** Alias for `totalRejected` — number of calls rejected while OPEN. */
+  rejections: number;
 }
 
 /**
@@ -132,6 +142,11 @@ export class CircuitBreaker {
     return this._state;
   }
 
+  /** Alias for `state()` — current breaker state. */
+  getState(): CircuitState {
+    return this.state();
+  }
+
   /** Snapshot of runtime metrics. */
   metrics(): CircuitBreakerMetrics {
     return {
@@ -146,6 +161,8 @@ export class CircuitBreaker {
       lastFailureTs: this.lastFailureTs,
       openedAt: this.openedAt,
       consecutiveHalfOpenSuccesses: this.consecutiveHalfOpenSuccesses,
+      trips: this.totalTrips,
+      rejections: this.totalRejected,
     };
   }
 
@@ -249,11 +266,12 @@ export class CircuitBreaker {
 // ============================================================================
 
 /** Construction options for the pre-registered breakers. */
-const DEFAULT_BREAKER_POLICY: Omit<CircuitBreakerOptions, 'name'> = {
+export const DEFAULT_BREAKER_POLICY: Omit<CircuitBreakerOptions, 'name'> = {
   failureThreshold: 5,
   failureWindowMs: 60_000,
   cooldownMs: 30_000,
   successThresholdToClose: 2,
+  halfOpenMaxRequests: 1,
 };
 
 /** Breaker names pre-registered for PaySwap protocol rails. */
@@ -262,6 +280,7 @@ export const DEFAULT_BREAKER_NAMES = [
   'mpesa',
   'fx_rate',
   'stellar_horizon',
+  'stellar_settlement',
   'ethereum_rpc',
   'db',
 ] as const;
@@ -276,9 +295,25 @@ export class CircuitBreakerRegistry {
     return breaker;
   }
 
+  /**
+   * Create + register a breaker from options. The breaker's `name` is used as
+   * the registry key. Convenience wrapper so callers don't have to construct
+   * the breaker separately.
+   */
+  create(options: CircuitBreakerOptions): CircuitBreaker {
+    const breaker = new CircuitBreaker(options);
+    this.register(options.name, breaker);
+    return breaker;
+  }
+
   /** Look up a breaker by name. Returns undefined if unregistered. */
   get(name: string): CircuitBreaker | undefined {
     return this.breakers.get(name);
+  }
+
+  /** All registered breaker names (insertion order). */
+  names(): string[] {
+    return [...this.breakers.keys()];
   }
 
   /** All registered breakers (insertion order). */
@@ -294,6 +329,11 @@ export class CircuitBreakerRegistry {
   /** State of a single breaker, or undefined if it does not exist. */
   stateOf(name: string): CircuitState | undefined {
     return this.breakers.get(name)?.state();
+  }
+
+  /** True if the named breaker is currently OPEN. */
+  isOpen(name: string): boolean {
+    return this.breakers.get(name)?.state() === 'open';
   }
 
   /** Run `fn` under the breaker registered under `name`. */
@@ -313,6 +353,13 @@ export class CircuitBreakerRegistry {
   /** Number of registered breakers. */
   size(): number {
     return this.breakers.size;
+  }
+
+  /** Reset every registered breaker back to CLOSED (testing helper). */
+  resetAll(): void {
+    for (const b of this.breakers.values()) {
+      b.reset();
+    }
   }
 }
 

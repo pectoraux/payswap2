@@ -49,6 +49,7 @@ import { corridorFundingService } from './corridor-funding';
 import { lpProfitabilityService } from './lp-profitability';
 import { stressTestService } from './stress-test';
 import { treasuryReports } from './reports';
+import { emergencyFreezeEngine } from './freezes';
 
 /** Outcome of a pre-mint / pre-burn hook. */
 export interface HookResult extends LimitCheckResult {
@@ -318,6 +319,40 @@ export class TreasuryEngine {
   /** Alias for `status()` — the daily report. */
   dailyReport(): TreasuryReport {
     return this.status();
+  }
+
+  /** Lift (remove) a freeze by id. Delegates to the emergency freeze engine. */
+  liftFreeze(freezeId: string): boolean {
+    try {
+      emergencyFreezeEngine.lift(freezeId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Reset all treasury sub-engines to their initial state. Test helper. */
+  reset(): void {
+    reserveMonitor.reset();
+    backingVerifier.reset();
+    mintLimitEngine.reset();
+    burnLimitEngine.reset();
+    emergencyFreezeEngine.reset();
+    this.initialised = false;
+    this.timers.forEach((stop) => { try { stop(); } catch { /* noop */ } });
+    this.timers = [];
+  }
+
+  /** Record a mint (alias for confirmMint without the pre-check). */
+  recordMint(assetCode: string, amount: number): void {
+    mintLimitEngine.recordMint(assetCode, amount);
+    backingVerifier.recordMint(assetCode, amount);
+  }
+
+  /** Record a burn (alias for confirmBurn without the pre-check). */
+  recordBurn(assetCode: string, amount: number): void {
+    burnLimitEngine.recordBurn(assetCode, amount);
+    backingVerifier.recordBurn(assetCode, amount);
   }
 
   /** Run all stress test scenarios + return the results. */

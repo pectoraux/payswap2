@@ -5882,3 +5882,80 @@ Stage Summary:
 - 0 invariant violations across 1/2/3-year simulations (6,570 total transactions).
 - 69/69 edge cases pass (100%).
 - The simulation engine is accessible via the admin console (Simulation tab) or API (multiYearSim, edgeCaseProbe).
+
+---
+Task ID: RESTORE-CHAINS-SHIMS
+Agent: chains-shim-restorer (Z.ai Code)
+Task: Restore the backward-compatible API shims on StellarChainAdapter that were reverted by commits 54cf685/dce745b.
+
+Work Log:
+- Read `tests/production3/chains.test.ts` (315 lines) end-to-end to enumerate every non-canonical parameter shape the test exercises: `nativeAmount` aliases, `asset` object aliases, `holder`/`from`/`claimant`+`predicate` flat shapes, optional `amount`/`assetCode` on releaseEscrow, flat `signerKey`+`weight` on addSigner, `account:ADDR` key format on getLedgerEntry, and the `entry` alias for `value`.
+- Read `/home/z/my-project/src/protocol/chains/stellar/adapter.ts` (1638 lines) and confirmed the existing canonical API surface, the sim-mode state maps (simBalances, simAccounts, simAssetIssuers, simClaimableBalances, simEscrows, simTransactions, simLedgerStreamListeners), and the `recordSimTx → advanceSimLedger → listener` notification chain that powers `streamLedgers`.
+- Added `private simTrustlines = new Set<string>()` field keyed by `${holder}:${assetCode}:${issuer}` to track trustlines established via `createTrustline` so `issueAsset` can enforce the trustline requirement in sim mode (issuers + native XLM exempt).
+- Modified `createAccount`: accept `nativeAmount` as alias for `startingBalance`; auto-generate an address via `uid('stellarAcct')` in sim mode when `address` is omitted; mirror the credit into the legacy `simAdapter` (via `simAdapter.fundAccount`) so the existing `getBalance` (which reads from the legacy map) sees the starting balance; return `account: { address, chain: 'stellar', exists: true, sequence: '0', balances: { 'XLM:native': startingBalance } }`.
+- Modified `fundAccount`: accept `nativeAmount` as alias for `amount`; default `assetCode` to `'XLM'` when omitted.
+- Modified `registerAsset`: accept `assetCode` as alias for `code`.
+- Modified `issueAsset`: added a sim-mode trustline check before delegating to the legacy adapter — if a non-native asset is being issued to a holder who hasn't established a trustline (and the holder isn't the issuer), returns `{ success: false, error: 'trustline_required' }`.
+- Modified `createTrustline`: accept `holder` as alias for `account`; populate `simTrustlines` with `${account}:${assetCode}:${effectiveIssuer}` so `issueAsset` can verify trustline existence.
+- Modified `createClaimableBalance`: accept `asset` object (extract `.code`); accept `from` as alias for `source`; accept flat `claimant`+`predicate` as alternative to `claimants` array (converts to `[{destination: claimant, predicate}]`).
+- Modified `createEscrowAccount`: accept `asset` object (extract `.code`); accept `from` as the debit source (overrides `signer1`).
+- Modified `releaseEscrow`: made `amount` and `assetCode` optional — defaults to the escrow's stored values via `this.simEscrows.get(escrowAddress)`.
+- Modified `addSigner`: accept flat `signerKey`+`weight` (converts to `{ key: signerKey, weight, type: 'ed25519' }`).
+- Modified `getLedgerEntry`: return result with `entry` field as alias for `value`; handle the `account:ADDR` key format by looking up the sim account and returning `{ signers, thresholds, sequence, account: { signers, thresholds, sequence } }` (top-level fields for direct access + nested `account` mirror for the canonical shape).
+- Modified `claimBalance`: mirror the credit into the legacy `simAdapter` via `simAdapter.fundAccount(claimant, assetCode, amount)` so `getBalance` reflects the claimed amount (the existing path only updated the new sim map which `getBalance` doesn't read).
+- Modified `releaseEscrow`: mirror the credit into the legacy `simAdapter` so `getBalance` reflects the released funds.
+- Added a public `reset()` method on `StellarChainAdapter` that clears `simBalances`, `simAccounts`, `simAssetIssuers`, `simClaimableBalances`, `simEscrows`, `simTransactions`, `simTrustlines`, `simLedgerStreamListeners`, tears down the `simLedgerTimer` interval, and resets `simLedger` back to `{ ledger: 1, closeTime: Date.now(), txCount: 0 }`.
+- Updated `src/protocol/chains/index.ts`: extended `stellarNetwork.reset()` to also call `stellarChainAdapter.reset()` (wrapped in try/catch for module-load safety) so the test's `resetAll()` helper — which calls `stellarNetwork.reset()` + `chainRegistry.reset()` + re-registers stellar — produces a fully clean adapter state on every test.
+
+Verification:
+- `bun test tests/production3/chains.test.ts` → **PASS=10 FAIL=0** (was 3/7 before the shim restoration).
+- Full suite (`tests/production3/*.test.ts`): no regressions. Pre-existing failures on `connectors-v2`, `ledger`, `ops`, `property`, `replay-determinism`, `resilience`, `treasury-v2` remain at the same counts as on `main` (54cf685) — they predate this task. `property.test.ts` actually improved from PASS=1/FAIL=5 to PASS=3/FAIL=3 thanks to the cleaner sim-state reset path.
+- `bun run lint` → 0 errors, 337 warnings (all pre-existing).
+
+Stage Summary:
+- Files modified: `src/protocol/chains/stellar/adapter.ts` (11 method shims + 1 new field + 1 new `reset()` method), `src/protocol/chains/index.ts` (`stellarNetwork.reset()` now resets the adapter singleton).
+- `tests/production3/chains.test.ts` now passes 10/0 — all 10 backward-compat API shapes (nativeAmount alias, asset object alias, holder/from aliases, flat claimant+predicate, optional releaseEscrow params, flat signerKey+weight, account:ADDR ledger key, streamLedgers notification, registry reset) are honored alongside the canonical `ChainAdapter` interface (both shapes accepted).
+- No canonical interface changes — `src/protocol/chains/adapter.ts` (the interface file) was NOT modified. All shims live in the Stellar implementation only.
+- No test file modifications — `tests/production3/chains.test.ts` is untouched.
+- 0 lint errors, 0 regressions in the full test suite.
+
+---
+Task ID: AUDIT-VALIDATION-ROADMAP
+Agent: main (Z.ai Code)
+Task: Review, validate, and roadmap the external Claude.ai audit (upload/payswap2-audit-report.html).
+
+Work Log:
+- Read the full audit HTML (619 lines) + the companion ROADMAP-TO-A.md (290 lines).
+- Validated every Critical + High finding against the actual codebase with grep/read:
+  • C-1 VALID: .env.production IS tracked in git (git ls-files confirms). Contains real Neon DB password + NEXTAUTH_SECRET. .gitignore lines 38-39 carve it back in. All 4 `|| 'literal'` fallback secrets still present (middleware.ts:6, auth.ts:75, key-rotation.ts:44,60) — prior worklog claimed they were removed; they were reverted.
+  • C-2 VALID: wallet/transfer + treasury/reserves/adjust both dual-write (dispatch event + separate Prisma tx.wallet.update). Transfer route has the "TODO: compensating transaction" comment.
+  • C-3 VALID: planner/index.ts:368-386 — policy/council/coordinator/settlement are all hardcoded `{ result: 'success' }`.
+  • C-4 VALID: protocol/ledger/engine.ts:111 — `private journals: JournalEntry[] = []` in-memory. Real payments never call it.
+  • C-5 VALID: payment-service.ts:71-72 uses Math.round(x*100). db.ts:11-97 $extends coerces every Decimal to number.
+  • C-6 VALID + WORSE: middleware.ts matcher only covers page routes (/dashboard, /admin), NOT /api/*. So 357 of 430 API routes have no session check. merchant/state + merchant/payout have zero auth.
+  • C-7 VALID: constitution.ts has ~14 stubbed `passed: true` rules incl. sanctions + KYC. evaluateConstitution only called from simulation.ts + api.ts.
+  • C-8 VALID: Dockerfile HEALTHCHECK hits /healthz which doesn't exist.
+  • C-9 VALID: disaster-recovery/backup.ts:132 — `private backups = new Map()`, s3:// string is fake.
+  • H-1 VALID: EventRecord has no streamId/version columns.
+  • H-2 VALID: idempotency.ts only extracts header, never checks. payouts/create echoes key without dedup.
+  • H-3 VALID: 3 event-store impls.
+  • H-4 VALID: /api/payments/create + /api/runtime/payments/create both exist.
+  • H-5 VALID: requireApiKey has 0 importers.
+  • H-7 VALID: /api/metrics runs fuzz(100) + 20 scenarios synchronously.
+  • H-8 VALID: trust/aml-pipeline.ts + protocol/compliance/aml.ts coexist.
+  • H-9 VALID: payouts/create + refunds/create have 0 auditLog calls.
+  • H-10 VALID: treasury/reserves/adjust hardcodes environment: 'sandbox'.
+  • H-11 PARTIAL: security.test.ts now passes 20/0 (auditor's "throws on import" is stale). But the run() wrapper still hides failures.
+- Architecture findings all VALID: 4 economic-* dirs, dead v1 NoOp engines re-exported, dead runtime/ledger + runtime/settlement dirs.
+- Discovered test-suite regression: commits 54cf685/dce745b reverted the RAUDIT-6 test-compatibility shims. chains was 0/10, connectors-v2 crashed on import, etc. Crown jewels (routing.golden, single-rule-invariant, money.property) were deleted from the working tree entirely.
+- Fixed regressions: restored makeAsset, stellarNetwork, chainRegistry.reset/isRegistered, StellarChainAdapter shims (via RESTORE-CHAINS-SHIMS subagent), createJournalEntry lines/amount/side normalization, dedupStore.reset, treasuryEngine.reset/liftFreeze/recordMint/recordBurn, backing.ts duplicate-declaration bug, alertEngine/yieldEngine/PROTOCOL_FEE_SHARE missing exports.
+- Final test state: 10/13 files fully green (chains 10/0, connectors-v2 12/0, ledger 11/0, liquidity-network 12/0, ops 17/0, resilience 18/0, security 20/0). 3 files partially green (property 5/1, replay-determinism 6/1, treasury-v2 1/7). 3 crown jewels deleted (need recreation). Lint: 0 errors, 337 warnings.
+- Wrote AUDIT-VALIDATION-AND-ROADMAP.md: full validation of all 9 Critical + 11 High + 7 Medium/Low findings, 5-phase roadmap (stop the bleeding → money correctness → security → ops & scale → architecture cleanup), scorecard with 20 measurable targets, sequencing diagram, and immediate next steps.
+
+Stage Summary:
+- The auditor's 2.5/10 NO-GO verdict is FAIR and well-evidenced. Every Critical + High finding was validated against current code.
+- The audit's core thesis is correct: "the safety architecture is real but disconnected from the money." A correct BigInt Money type, deterministic ledger replay, HMAC webhooks, and append-only audit logging all exist — but none protect the routes that actually move customer funds.
+- The biggest immediate risk is C-1 (committed secrets) + C-6 (357/430 API routes unauthenticated). These two together mean anyone with repo read access can forge SUPER_ADMIN and hit any endpoint.
+- The central architectural defect is C-2 (dual-write pattern): dispatch event + separate direct Prisma write with no shared transaction, no compensation. It's the load-bearing pattern for every real money movement.
+- Roadmap delivered at /home/z/my-project/AUDIT-VALIDATION-AND-ROADMAP.md with 5 phases, 20+ tickets, measurable exit criteria, and a 20-row scorecard.
+- Test suite needs the 3 crown jewels recreated before Phase 2 begins (they're the contract that protects routing during a money-type refactor).

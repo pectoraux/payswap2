@@ -22,6 +22,7 @@ export {
   CircuitBreakerRegistry,
   CircuitOpenError,
   DEFAULT_BREAKER_NAMES,
+  DEFAULT_BREAKER_POLICY,
   buildDefaultCircuitBreakerRegistry,
   circuitBreakerRegistry,
 } from './circuit-breaker';
@@ -63,6 +64,8 @@ export type {
 
 export {
   healthCheck,
+  ping,
+  liveness,
   DEFAULT_HEALTH_THRESHOLDS,
 } from './health-check';
 export type {
@@ -72,3 +75,17 @@ export type {
   HealthStatus,
   HealthCheckThresholds,
 } from './health-check';
+
+// Partial settlement recovery -----------------------------------------------
+export {
+  PartialSettlementRecovery,
+  partialSettlementRecovery,
+} from './partial-recovery';
+export type {
+  PartialSettlementEntry,
+  PartialSettlementState,
+  RecoveryStrategy,
+  RecoveryResult,
+  RouterFn,
+  ReverseFn,
+} from './partial-recovery';

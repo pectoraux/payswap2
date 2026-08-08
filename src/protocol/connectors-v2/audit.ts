@@ -113,3 +113,21 @@ export function auditLogSize(): number {
 export function clearAuditLog(): void {
   buffer.length = 0;
 }
+
+/**
+ * Object-shaped facade over the module-level audit buffer. Mirrors the
+ * functional surface (`auditLog`, `getAuditLog`, `auditLogSize`,
+ * `clearAuditLog`) so callers can hold a single reference and call
+ * `auditLogInstance.reset()` / `auditLogInstance.query(filter)` /
+ * `auditLogInstance.size()`. Used by the connectors-v2 test suite.
+ */
+export const auditLogInstance = {
+  /** Append a request/response pair to the audit trail + emit event. */
+  log: auditLog,
+  /** Filtered query — returns matching entries, newest first. */
+  query: getAuditLog,
+  /** Drop every entry from the buffer. */
+  reset: clearAuditLog,
+  /** Number of entries currently held. */
+  size: auditLogSize,
+};

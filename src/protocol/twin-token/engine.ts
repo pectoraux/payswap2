@@ -249,6 +249,14 @@ export class TwinTokenEngine {
     });
   }
 
+  /** Reset all in-memory state — used by tests + simulation reruns. */
+  reset(): void {
+    this.assets.clear();
+    this.balances.clear();
+    this.escrows.clear();
+    this.operations = [];
+  }
+
   // ----------------------------------------------------------------- helpers
   private bkey(assetCode: string, holder: string): string {
     return `${assetCode}:${holder}`;

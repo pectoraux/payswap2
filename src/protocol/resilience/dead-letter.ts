@@ -56,11 +56,15 @@ export interface DeadLetterEntry {
   replayedAt?: number;
   /** If replayed, the outcome of the replay attempt. */
   replayOutcome?: { ok: true } | { ok: false; message: string };
+  /** True when the entry is still pending review (eligible for replay). */
+  replayable: boolean;
 }
 
 /** Optional filter passed to `list()`. All fields are optional. */
 export interface DeadLetterListFilter {
   originalQueue?: string;
+  /** Alias for `originalQueue` — name of the queue to filter by. */
+  queue?: string;
   status?: DeadLetterStatus;
   /** If provided, only entries whose `error.code` matches are returned. */
   errorCode?: string;
@@ -104,6 +108,7 @@ export class DeadLetterQueue {
       firstAttemptTs: input.firstAttemptTs ?? ts,
       dlqAt: ts,
       status: 'pending_review',
+      replayable: true,
     };
     this.entries.set(id, entry);
     this.order.push(id);
@@ -123,40 +128,51 @@ export class DeadLetterQueue {
   /** List entries, optionally filtered. Returns a copy of each entry. */
   list(filter?: DeadLetterListFilter): DeadLetterEntry[] {
     const all = this.order.map((id) => this.entries.get(id)!).filter(Boolean);
-    if (!filter) return all.map((e) => ({ ...e }));
+    if (!filter) return all.map((e) => ({ ...e, replayable: e.status === 'pending_review' }));
+    const queueFilter = filter.originalQueue ?? filter.queue;
     return all
       .filter((e) => {
-        if (filter.originalQueue !== undefined && e.originalQueue !== filter.originalQueue) return false;
+        if (queueFilter !== undefined && e.originalQueue !== queueFilter) return false;
         if (filter.status !== undefined && e.status !== filter.status) return false;
         if (filter.errorCode !== undefined && e.error.code !== filter.errorCode) return false;
         return true;
       })
-      .map((e) => ({ ...e }));
+      .map((e) => ({ ...e, replayable: e.status === 'pending_review' }));
   }
 
   /** Fetch a single entry by id (or undefined). */
   get(id: string): DeadLetterEntry | undefined {
     const entry = this.entries.get(id);
-    return entry ? { ...entry } : undefined;
+    return entry ? { ...entry, replayable: entry.status === 'pending_review' } : undefined;
   }
 
   /**
    * Replay a single entry through `replayFn`. On success the entry is marked
    * `replayed`; on failure the entry stays `pending_review` and the failure
-   * is recorded on the entry.
+   * is recorded on the entry. Throws if the entry has been discarded.
    */
   async replay(
     id: string,
-    replayFn: (entry: DeadLetterEntry) => Promise<void>,
-  ): Promise<DeadLetterEntry | undefined> {
+    replayFn: (entry: DeadLetterEntry) => Promise<unknown>,
+  ): Promise<DeadLetterEntry> {
     const entry = this.entries.get(id);
-    if (!entry) return undefined;
+    if (!entry) {
+      throw new Error(`discarded: DLQ entry ${id} not found`);
+    }
+    if (entry.status === 'discarded') {
+      throw new Error(`entry ${id} is discarded — cannot replay`);
+    }
+    if (entry.status === 'replayed') {
+      // Idempotent — return the existing replay record.
+      return { ...entry, replayable: false };
+    }
     const replayedAt = nowTs();
     try {
-      await replayFn({ ...entry });
+      await replayFn({ ...entry, replayable: true });
       entry.status = 'replayed';
       entry.replayedAt = replayedAt;
       entry.replayOutcome = { ok: true };
+      entry.replayable = false;
     } catch (err) {
       entry.replayedAt = replayedAt;
       entry.replayOutcome = {
@@ -165,16 +181,19 @@ export class DeadLetterQueue {
       };
       // Leave status as pending_review so it can be retried again.
     }
-    return { ...entry };
+    return { ...entry, replayable: entry.status === 'pending_review' };
   }
 
   /** Mark an entry as discarded with a human-readable reason. */
-  discard(id: string, reason: string): DeadLetterEntry | undefined {
+  discard(id: string, reason: string): DeadLetterEntry {
     const entry = this.entries.get(id);
-    if (!entry) return undefined;
+    if (!entry) {
+      throw new Error(`DLQ entry ${id} not found`);
+    }
     entry.status = 'discarded';
     entry.discardReason = reason;
-    return { ...entry };
+    entry.replayable = false;
+    return { ...entry, replayable: false };
   }
 
   /**
@@ -214,6 +233,11 @@ export class DeadLetterQueue {
   clear(): void {
     this.entries.clear();
     this.order.length = 0;
+  }
+
+  /** Alias for `clear()` — drops every entry. Test helper. */
+  reset(): void {
+    this.clear();
   }
 }
 

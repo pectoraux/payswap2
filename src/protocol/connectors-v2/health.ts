@@ -100,3 +100,11 @@ export class HealthMonitor {
     this.states.clear();
   }
 }
+
+/**
+ * Shared singleton `HealthMonitor` — used by both the registry-backed
+ * production connectors AND any ad-hoc connector constructed without
+ * explicit dependencies (e.g. test connectors). Lets `sharedHealthMonitor
+ * .reset()` produce a fully clean slate between tests.
+ */
+export const sharedHealthMonitor = new HealthMonitor();

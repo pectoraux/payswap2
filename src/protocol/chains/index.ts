@@ -76,6 +76,7 @@ export {
   assetKey,
   assetMetadata,
   horizonAssetType,
+  makeAsset,
 } from './stellar/assets';
 
 // Stellar settlement helpers ------------------------------------------------
@@ -104,6 +105,32 @@ export type {
 export { EthereumChainAdapter, ethereumChainAdapter } from './ethereum/adapter';
 export { BaseChainAdapter, baseChainAdapter } from './base/adapter';
 export { PolygonChainAdapter, polygonChainAdapter } from './polygon/adapter';
+
+// stellarNetwork — a singleton for managing Stellar network configuration
+// (mode + secret key). Test helper: `stellarNetwork.reset()` restores the
+// default simulation-mode state AND clears the singleton adapter's sim state
+// (balances, accounts, trustlines, escrows, ledger listeners) so each test
+// starts from a clean slate.
+export const stellarNetwork = {
+  _mode: 'simulation' as 'simulation' | 'live',
+  _secretKey: null as string | null,
+  get mode() { return this._mode; },
+  get secretKey() { return this._secretKey; },
+  reset() {
+    this._mode = 'simulation';
+    this._secretKey = null;
+    // Clear the singleton adapter's in-process sim state so tests are isolated.
+    try {
+      stellarChainAdapter.reset();
+    } catch {
+      // Adapter not yet initialized (e.g. during module load) — ignore.
+    }
+  },
+  configure(opts: { mode?: 'simulation' | 'live'; secretKey?: string }) {
+    if (opts.mode) this._mode = opts.mode;
+    if (opts.secretKey !== undefined) this._secretKey = opts.secretKey;
+  },
+};
 
 // ============================================================================
 // Auto-registration: Stellar is the default chain.

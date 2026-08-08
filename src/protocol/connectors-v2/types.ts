@@ -44,6 +44,10 @@ export interface ConnectorConfig {
   rateLimitBurst: number;
   /** TTL for idempotency-key cache entries (ms). */
   idempotencyTtlMs: number;
+  /** Optional vault reference for the upstream API key. */
+  apiKeyRef?: string;
+  /** Optional vault reference for the HMAC signing secret. */
+  secretRef?: string;
 }
 
 /** Outbound request — `id` doubles as the idempotency key. */

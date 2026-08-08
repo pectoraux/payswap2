@@ -85,3 +85,18 @@ export function horizonAssetType(code: string): 'native' | 'credit_alphanum4' | 
   if (isNative(code)) return 'native';
   return code.length <= 4 ? 'credit_alphanum4' : 'credit_alphanum12';
 }
+
+/**
+ * Build a Stellar asset descriptor. Test + integration helper.
+ * If `issuer` is omitted and `code` is native ('XLM'/'native'), the returned
+ * asset is marked native. Otherwise the issuer is carried as-is.
+ */
+export function makeAsset(
+  code: string,
+  issuer?: string,
+): { code: string; issuer?: string; native?: boolean } {
+  if (isNative(code)) {
+    return { code: NATIVE_ASSET_CODE, issuer: NATIVE_ISSUER, native: true };
+  }
+  return { code, issuer };
+}

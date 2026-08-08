@@ -39,8 +39,24 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 
 /** Outcome of a retried execution — discriminated union, never throws. */
 export type RetryOutcome<T> =
-  | { ok: true; value: T; attempts: number }
-  | { ok: false; error: ConnectorError; attempts: number };
+  | { ok: true; value: T; result: T; attempts: number }
+  | { ok: false; error: ConnectorError; attempts: number; result?: undefined; value?: undefined };
+
+/**
+ * Build a `RetryPolicy` from connector-style `retryCount` + `retryBackoffMs`.
+ * `retryCount` is the number of RETRIES (so total attempts = retryCount + 1),
+ * matching the `ConnectorConfig.retryCount` field. Provided as a function
+ * (not the `DEFAULT_RETRY_POLICY` object) so tests can parameterise it.
+ */
+export function defaultRetryPolicy(retryCount: number, retryBackoffMs: number): RetryPolicy {
+  return {
+    maxAttempts: Math.max(1, retryCount + 1),
+    initialBackoffMs: retryBackoffMs,
+    maxBackoffMs: 10_000,
+    backoffMultiplier: 2,
+    jitter: 0.25,
+  };
+}
 
 /** Compute the backoff (in ms) for attempt `n` (0-indexed). */
 function backoffFor(policy: RetryPolicy, n: number): number {
@@ -62,20 +78,46 @@ function sleep(ms: number): Promise<void> {
  * `{ ok: true, value }` or `{ ok: false, error }`. The orchestrator
  * keeps calling `fn` until it succeeds, exhausts attempts, or hits a
  * non-retryable error.
+ *
+ * Backward-compatible shim: `fn` may ALSO return the alternate shape
+ * `{ result: T, error?: ConnectorError }` (where a present `error` denotes
+ * failure regardless of `result`). The returned outcome carries `result`
+ * as an alias for `value` so callers written against either convention can
+ * read the success payload.
  */
 export async function executeWithRetry<T>(
-  fn: () => Promise<{ ok: true; value: T } | { ok: false; error: ConnectorError }>,
+  fn: () => Promise<
+    | { ok: true; value: T }
+    | { ok: false; error: ConnectorError }
+    | { result: T; error?: ConnectorError }
+  >,
   policy: RetryPolicy = DEFAULT_RETRY_POLICY,
 ): Promise<RetryOutcome<T>> {
   let lastError: ConnectorError | null = null;
   for (let attempt = 0; attempt < policy.maxAttempts; attempt++) {
-    const result = await fn();
-    if (result.ok) {
-      return { ok: true, value: result.value, attempts: attempt + 1 };
+    const raw = await fn() as
+      | { ok: true; value: T }
+      | { ok: false; error: ConnectorError }
+      | { result: T; error?: ConnectorError };
+    let ok: boolean;
+    let value: T | undefined;
+    let error: ConnectorError | undefined;
+    if ('ok' in raw) {
+      ok = raw.ok;
+      value = ok ? (raw as { ok: true; value: T }).value : undefined;
+      error = ok ? undefined : (raw as { ok: false; error: ConnectorError }).error;
+    } else {
+      // Alternate shape: { result, error? } — error presence determines ok.
+      ok = !raw.error;
+      value = (raw as { result: T }).result;
+      error = (raw as { error?: ConnectorError }).error;
     }
-    lastError = result.error;
-    if (!isRetryable(result.error)) {
-      return { ok: false, error: result.error, attempts: attempt + 1 };
+    if (ok) {
+      return { ok: true, value: value as T, result: value as T, attempts: attempt + 1 };
+    }
+    lastError = error!;
+    if (!isRetryable(error!)) {
+      return { ok: false, error: error!, attempts: attempt + 1 };
     }
     if (attempt < policy.maxAttempts - 1) {
       await sleep(backoffFor(policy, attempt));

@@ -13,6 +13,8 @@ import { eventEngine } from '@/kernel/event';
 import { nowTs } from '@/kernel/support';
 import { circuitBreakerRegistry } from './circuit-breaker';
 import type { CircuitState } from './circuit-breaker';
+import { deadLetterQueue } from './dead-letter';
+import { partialSettlementRecovery } from './partial-recovery';
 
 /** Overall health status for the resilience layer. */
 export type OverallHealth = 'healthy' | 'degraded' | 'unhealthy';
@@ -43,6 +45,12 @@ export interface HealthStatus {
   circuits: CircuitHealthSummary[];
   /** ts the check was taken. */
   lastCheckTs: number;
+  /** Components currently reporting unhealthy (convenience view). */
+  outages: ComponentHealth[];
+  /** Number of entries currently in the DLQ. */
+  dlqDepth: number;
+  /** Number of partial settlements awaiting recovery. */
+  partialSettlementsPending: number;
 }
 
 /** Thresholds for the system-level probes. */
@@ -249,5 +257,54 @@ export function healthCheck(
     components,
     circuits,
     lastCheckTs: nowTs(),
+    outages: components.filter((c) => !c.healthy),
+    dlqDepth: safeDlqDepth(),
+    partialSettlementsPending: safePartialPending(),
   };
+}
+
+/** Defensive DLQ depth probe — returns 0 if the DLQ singleton is unavailable. */
+function safeDlqDepth(): number {
+  try {
+    return deadLetterQueue.size();
+  } catch {
+    return 0;
+  }
+}
+
+/** Defensive partial-settlement pending probe — returns 0 if unavailable. */
+function safePartialPending(): number {
+  try {
+    return partialSettlementRecovery.pendingCount();
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Lightweight liveness probe — returns true if the process can compute a
+ * health check at all (used by Kubernetes `/livez`). Always returns true
+ * unless `healthCheck()` itself throws.
+ */
+export function liveness(): boolean {
+  try {
+    healthCheck();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Lightweight readiness probe — returns true when the system is `healthy` or
+ * `degraded` (i.e. accepting traffic). Returns false when `unhealthy`.
+ * Used by Kubernetes `/readyz`.
+ */
+export function ping(): boolean {
+  try {
+    const status = healthCheck();
+    return status.overall !== 'unhealthy';
+  } catch {
+    return false;
+  }
 }

@@ -325,7 +325,10 @@ export interface CapitalEfficiencySummary {
 export interface TreasuryReport {
   asOfTs: number;
   reserves: ReserveAccount[];
-  backingVerified: Array<{
+  /** True when every tracked asset passes the backing verification. */
+  backingVerified: boolean;
+  /** Per-asset backing verification details (empty when no assets tracked). */
+  backingResults?: Array<{
     assetCode: string;
     verified: boolean;
     backingRatio: number;
@@ -335,9 +338,13 @@ export interface TreasuryReport {
   burnUsage: LimitUsageSummary[];
   alerts: TreasuryAlert[];
   yields: CorridorYieldSummary[];
-  capitalEfficiency: CapitalEfficiencySummary;
+  /** Capital efficiency summary (array form for dashboard compatibility). */
+  capitalEfficiency: CapitalEfficiencySummary[];
   corridors: CorridorReserve[];
-  frozenAssets: FrozenAsset[];
+  /** Asset codes currently frozen (compliance hold). */
+  frozenAssets: string[];
+  /** Detailed frozen-asset records (parallel to `frozenAssets`). */
+  frozenAssetDetails?: FrozenAsset[];
   lpProfitability: LPProfitability[];
   stressTestResults: StressTestResult[];
 }
@@ -400,3 +407,20 @@ export interface TimeRange {
   fromTs: number;
   toTs: number;
 }
+
+/**
+ * Minimum backing ratio for a Twin Token to be considered fully backed.
+ * 1.0 means 1:1 — every issued token must be backed by an equal amount of
+ * fiat reserve. The backing verifier accepts a small tolerance band
+ * (configured separately) to account for rounding.
+ */
+export const MIN_BACKING_RATIO = 1.0;
+
+/** Default daily mint limit (per asset). */
+export const DEFAULT_DAILY_MINT_LIMIT = 100_000;
+
+/** Default per-transaction mint limit. */
+export const DEFAULT_PER_TX_MINT_LIMIT = 50_000;
+
+/** Protocol's share of LP yield (0.20 = 20%). */
+export const PROTOCOL_FEE_SHARE = 0.20;

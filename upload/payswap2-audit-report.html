@@ -1,0 +1,619 @@
+<title>PaySwap (payswap2) — Tier-1 Infrastructure Audit</title>
+<meta name="description" content="Independent financial-correctness, security, and production-readiness audit of github.com/pectoraux/payswap2">
+<style>
+  :root{
+    --bg:#eef0ea; --surface:#f8f9f4; --surface-2:#e5e8dd;
+    --ink:#1b2420; --ink-soft:#495449; --ink-faint:#7c8878;
+    --rule:#c9cfc0; --rule-strong:#a9b19b;
+    --accent:#24406b; --accent-soft:#dce3ee; --accent-ink:#13233d;
+    --critical:#8b1e1e; --critical-soft:#f3ded8;
+    --high:#8a5300; --high-soft:#f2e3c8;
+    --medium:#1f6f63; --medium-soft:#dbebe6;
+    --low:#4a5560; --low-soft:#e4e7e6;
+    --good:#2c6e3f; --good-soft:#dcebdd;
+    --mono: ui-monospace,'IBM Plex Mono','SFMono-Regular',Consolas,'Liberation Mono',monospace;
+    --serif: 'Source Serif 4','Iowan Old Style','Palatino Linotype',Georgia,serif;
+    --sans: 'IBM Plex Sans','Segoe UI',system-ui,-apple-system,sans-serif;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#10140f; --surface:#161c14; --surface-2:#1e251b;
+      --ink:#e7ece2; --ink-soft:#b4bfae; --ink-faint:#7f8b78;
+      --rule:#2c342a; --rule-strong:#3c4638;
+      --accent:#8fabd6; --accent-soft:#22334c; --accent-ink:#c9d7ee;
+      --critical:#e3766c; --critical-soft:#3a201d;
+      --high:#e0b262; --high-soft:#3a2f16;
+      --medium:#6cc4b4; --medium-soft:#193631;
+      --low:#a3aeae; --low-soft:#232a29;
+      --good:#7bc98e; --good-soft:#1b3122;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#10140f; --surface:#161c14; --surface-2:#1e251b;
+    --ink:#e7ece2; --ink-soft:#b4bfae; --ink-faint:#7f8b78;
+    --rule:#2c342a; --rule-strong:#3c4638;
+    --accent:#8fabd6; --accent-soft:#22334c; --accent-ink:#c9d7ee;
+    --critical:#e3766c; --critical-soft:#3a201d;
+    --high:#e0b262; --high-soft:#3a2f16;
+    --medium:#6cc4b4; --medium-soft:#193631;
+    --low:#a3aeae; --low-soft:#232a29;
+    --good:#7bc98e; --good-soft:#1b3122;
+  }
+  :root[data-theme="light"]{
+    --bg:#eef0ea; --surface:#f8f9f4; --surface-2:#e5e8dd;
+    --ink:#1b2420; --ink-soft:#495449; --ink-faint:#7c8878;
+    --rule:#c9cfc0; --rule-strong:#a9b19b;
+    --accent:#24406b; --accent-soft:#dce3ee; --accent-ink:#13233d;
+    --critical:#8b1e1e; --critical-soft:#f3ded8;
+    --high:#8a5300; --high-soft:#f2e3c8;
+    --medium:#1f6f63; --medium-soft:#dbebe6;
+    --low:#4a5560; --low-soft:#e4e7e6;
+    --good:#2c6e3f; --good-soft:#dcebdd;
+  }
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent)}
+  ::selection{background:var(--accent-soft)}
+
+  .masthead{
+    border-bottom:1px solid var(--rule-strong);
+    background:
+      repeating-linear-gradient(180deg, var(--surface-2) 0 44px, transparent 44px 88px),
+      var(--surface);
+    padding:56px 24px 40px;
+  }
+  .masthead-inner{max-width:980px; margin:0 auto}
+  .kicker{
+    font-family:var(--mono); font-size:12px; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--ink-faint); display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+  }
+  .kicker .sep{opacity:.5}
+  h1.title{
+    font-family:var(--serif); font-weight:600; font-size:clamp(32px,5vw,52px);
+    line-height:1.08; margin:14px 0 10px; text-wrap:balance; letter-spacing:-.01em;
+  }
+  .subtitle{
+    font-size:17px; color:var(--ink-soft); max-width:62ch; margin:0 0 28px;
+  }
+  .scorecard{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:1px; background:var(--rule-strong); border:1px solid var(--rule-strong);
+    margin-top:8px;
+  }
+  .scorecard > div{
+    background:var(--surface); padding:16px 18px;
+  }
+  .scorecard .num{
+    font-family:var(--mono); font-size:26px; font-variant-numeric:tabular-nums;
+    font-weight:600; line-height:1;
+  }
+  .scorecard .lbl{
+    font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-faint);
+    margin-top:6px;
+  }
+  .stamp{
+    font-family:var(--mono); font-weight:700; font-size:15px; letter-spacing:.06em;
+    color:var(--critical);
+  }
+
+  .layout{max-width:980px; margin:0 auto; padding:0 24px; display:flex; gap:48px; align-items:flex-start}
+  .toc{
+    width:220px; flex:none; position:sticky; top:24px; padding:32px 0;
+    font-size:13px;
+  }
+  .toc-title{font-family:var(--mono); text-transform:uppercase; letter-spacing:.1em; font-size:11px; color:var(--ink-faint); margin-bottom:10px}
+  .toc ol{list-style:none; margin:0; padding:0; border-left:1px solid var(--rule)}
+  .toc li{margin:0}
+  .toc a{
+    display:block; padding:6px 0 6px 14px; color:var(--ink-soft); text-decoration:none;
+    border-left:2px solid transparent; margin-left:-1px;
+  }
+  .toc a:hover{color:var(--accent); border-left-color:var(--accent)}
+  main{flex:1; min-width:0; padding:32px 0 100px}
+
+  section{margin-bottom:56px}
+  section > h2{
+    font-family:var(--serif); font-size:28px; font-weight:600; margin:0 0 6px;
+    padding-top:8px; scroll-margin-top:24px;
+  }
+  .section-note{color:var(--ink-faint); font-size:14px; margin:0 0 22px; max-width:70ch}
+  h3{font-family:var(--serif); font-size:19px; font-weight:600; margin:28px 0 8px}
+  p{max-width:72ch}
+  p.wide{max-width:none}
+
+  .callout{
+    border:1px solid var(--rule-strong); background:var(--surface); padding:18px 20px;
+    border-left:4px solid var(--accent); font-size:14.5px; max-width:none;
+  }
+  .callout p{max-width:none; margin:0 0 10px}
+  .callout p:last-child{margin-bottom:0}
+
+  .finding{
+    background:var(--surface); border:1px solid var(--rule-strong); border-left-width:5px;
+    margin-bottom:18px; padding:18px 20px 20px;
+  }
+  .finding.crit{border-left-color:var(--critical)}
+  .finding.high{border-left-color:var(--high)}
+  .finding.med{border-left-color:var(--medium)}
+  .finding.low{border-left-color:var(--low)}
+  .finding-head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:8px}
+  .badge{
+    font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.06em;
+    text-transform:uppercase; padding:3px 8px; border-radius:2px; white-space:nowrap;
+  }
+  .badge.crit{background:var(--critical-soft); color:var(--critical)}
+  .badge.high{background:var(--high-soft); color:var(--high)}
+  .badge.med{background:var(--medium-soft); color:var(--medium)}
+  .badge.low{background:var(--low-soft); color:var(--low)}
+  .badge.good{background:var(--good-soft); color:var(--good)}
+  .finding-id{font-family:var(--mono); font-size:12px; color:var(--ink-faint)}
+  .finding-title{font-weight:600; font-size:16px}
+  .finding p{margin:8px 0; font-size:14.5px; max-width:none}
+  .finding .lbl{
+    font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-faint);
+    margin-top:12px; margin-bottom:3px;
+  }
+  code, .code{
+    font-family:var(--mono); font-size:13px; background:var(--surface-2);
+    padding:1px 5px; border-radius:2px;
+  }
+  pre{
+    font-family:var(--mono); font-size:12.8px; background:var(--surface-2);
+    border:1px solid var(--rule); padding:12px 14px; overflow-x:auto; line-height:1.55;
+    margin:6px 0 0;
+  }
+  pre code{background:none; padding:0}
+
+  table{border-collapse:collapse; width:100%; font-size:14px; margin:10px 0}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--rule); vertical-align:top}
+  th{font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-faint); font-weight:600}
+  tbody tr:hover{background:var(--surface)}
+  .tbl-wrap{overflow-x:auto; border:1px solid var(--rule); background:var(--surface)}
+  .tbl-wrap table{margin:0}
+  .tbl-wrap th, .tbl-wrap td{border-color:var(--rule)}
+
+  .verdict-yes{color:var(--critical); font-weight:700; font-family:var(--mono); font-size:13px}
+  .verdict-no{color:var(--good); font-weight:700; font-family:var(--mono); font-size:13px}
+  .verdict-partial{color:var(--high); font-weight:700; font-family:var(--mono); font-size:13px}
+
+  .phase{display:flex; gap:16px; margin-bottom:20px; align-items:flex-start}
+  .phase-num{
+    font-family:var(--serif); font-size:30px; font-weight:600; color:var(--accent);
+    width:52px; flex:none; line-height:1;
+  }
+  .phase-body h3{margin:0 0 6px}
+  .phase-body ul{margin:6px 0 0; padding-left:18px}
+  .phase-body li{margin-bottom:4px; font-size:14.5px}
+
+  details.disclosure{background:var(--surface); border:1px solid var(--rule-strong); margin-bottom:10px}
+  details.disclosure summary{
+    padding:12px 16px; cursor:pointer; font-family:var(--mono); font-size:13px;
+    display:flex; align-items:center; gap:10px; list-style:none;
+  }
+  details.disclosure summary::-webkit-details-marker{display:none}
+  details.disclosure summary::before{content:"+"; color:var(--accent); font-weight:700; width:14px}
+  details.disclosure[open] summary::before{content:"–"}
+  details.disclosure .finding{border:none; border-left-width:5px; margin-bottom:0}
+  details.disclosure .finding + .finding{border-top:1px solid var(--rule)}
+
+  footer{
+    max-width:980px; margin:0 auto; padding:28px 24px 60px; color:var(--ink-faint);
+    font-size:13px; border-top:1px solid var(--rule)
+  }
+
+  @media (max-width:820px){
+    .layout{flex-direction:column}
+    .toc{position:static; width:100%; padding:16px 0; border-bottom:1px solid var(--rule); margin-bottom:8px}
+    .toc ol{columns:2}
+  }
+  @media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto} }
+</style>
+
+<div class="masthead">
+  <div class="masthead-inner">
+    <div class="kicker">
+      <span>INDEPENDENT AUDIT</span><span class="sep">/</span>
+      <span>github.com/pectoraux/payswap2</span><span class="sep">/</span>
+      <span>main @ 2026-08-07</span>
+    </div>
+    <h1 class="title">PaySwap: a Tier‑1 Infrastructure Review</h1>
+    <p class="subtitle">An adversarial, evidence-first audit of financial correctness, settlement safety, security, and production readiness — measured against the bar a real cross-border payments processor has to clear before it touches a single real dollar.</p>
+    <div class="scorecard">
+      <div><div class="num stamp">NO-GO</div><div class="lbl">Production readiness</div></div>
+      <div><div class="num">2.5<span style="font-size:15px;color:var(--ink-faint)">/10</span></div><div class="lbl">Verified readiness score</div></div>
+      <div><div class="num">9</div><div class="lbl">Critical findings</div></div>
+      <div><div class="num">11</div><div class="lbl">High findings</div></div>
+      <div><div class="num">1,521</div><div class="lbl">TS/TSX files reviewed</div></div>
+      <div><div class="num">6</div><div class="lbl">Independent review passes</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+  <nav class="toc">
+    <div class="toc-title">Contents</div>
+    <ol>
+      <li><a href="#summary">Executive summary</a></li>
+      <li><a href="#credibility">On this repo's own audits</a></li>
+      <li><a href="#critical">Critical findings</a></li>
+      <li><a href="#high">High findings</a></li>
+      <li><a href="#medium">Medium &amp; low findings</a></li>
+      <li><a href="#proof">Financial proof report</a></li>
+      <li><a href="#architecture">Architecture review</a></li>
+      <li><a href="#roadmap">Roadmap</a></li>
+      <li><a href="#verdict">Final verdict</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <section id="summary">
+      <h2>Executive summary</h2>
+      <p class="section-note">Scope: the full <code>payswap2</code> source tree (1,521 TypeScript/TSX files, 433 API routes, 48 Prisma models) — not the local Milestone‑1 snapshot. Six independent review passes covered financial correctness, the settlement/event-sourcing pipeline, security, economic-kernel governance, architecture sprawl, and production/regulatory readiness, each verifying claims against running code rather than documentation.</p>
+
+      <p class="wide">PaySwap is architecturally ambitious — an event-sourced ledger, an intent-compiler-planner-council-settlement pipeline, a governance "Constitution," a multi-connector protocol layer, and a 26-document internal audit trail. Pockets of it are genuinely well built: a correct BigInt-based money type, a deterministic ledger-replay function, append-only audit logging, real HMAC-verified webhooks, and a working internal reconciliation script all exist and hold up under direct code review.</p>
+      <p class="wide">None of that changes the verdict. The code paths that actually move customer money today — wallet deposit, withdrawal, transfer, payout, refund, and treasury adjustment — bypass nearly every protection the architecture claims to provide. Balances are mutated directly and separately from the event-sourced ledger with no compensation on failure; idempotency keys are accepted and then ignored; the policy/council/settlement review chain is four hardcoded success strings on the live payout path; and a production database password plus the JWT-signing secret are committed in plaintext in this public repository. Any one of these is disqualifying on its own. Together, they describe a system where the safety architecture is real but disconnected from the money.</p>
+
+      <div class="tbl-wrap" style="margin-top:20px">
+        <table>
+          <tr><th>Area</th><th>Verdict</th><th>Headline issue</th></tr>
+          <tr><td>Financial correctness</td><td><span class="badge crit">Critical</span></td><td>Wallet balances are directly mutated Prisma fields, independent of the ledger; float arithmetic prices real fees</td></tr>
+          <tr><td>Settlement &amp; event sourcing</td><td><span class="badge crit">Critical</span></td><td>Policy/Council/Coordinator/Settlement stages are hardcoded no-ops on the live payout path</td></tr>
+          <tr><td>Security</td><td><span class="badge crit">Critical</span></td><td>Production DB password + JWT secret committed in a public repo; unauthenticated cross-merchant IDOR</td></tr>
+          <tr><td>Economic-kernel governance</td><td><span class="badge crit">Critical</span></td><td>The "Constitution" gate is simulation-only and a third of its own rules always pass</td></tr>
+          <tr><td>Architecture</td><td><span class="badge high">High</span></td><td>Four duplicate economic-reasoning subsystems; dead v1 engines re-exported publicly</td></tr>
+          <tr><td>Production readiness</td><td><span class="badge crit">Critical</span></td><td>Container health check 404s; disaster-recovery backups live only in a process-memory Map</td></tr>
+          <tr><td>Regulatory readiness</td><td><span class="badge high">High</span></td><td>Two disconnected compliance stacks; live sanctions list is 10 hardcoded names</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section id="credibility">
+      <h2>On this repo's own audits</h2>
+      <p class="section-note">Before the findings: how much weight the repository's own 26 self-authored markdown reports should carry.</p>
+      <div class="callout">
+        <p>The repo ships an unusual amount of self-grading: <code>FINAL-REPORT.md</code> claims all 10 milestones are complete and cites a 97-route, 77-page, 37-model, zero-lint-error platform. The actual tree has 433 routes, 137 pages, and 48 models — and <code>PRODUCT-AUDIT.md</code>, written in the same pass, independently calls the same codebase "a beautiful showroom with no engine" with "zero of ~20 user journeys complete end-to-end." <code>AUDIT-TIER1-V2.md</code> raises its own readiness score from 4.5 to 7.5 out of 10, then in the same document states — at "100% probability" — that wallet transfers bypass the runtime kernel entirely, directly contradicting <code>INVARIANTS.md</code>'s claim of "zero runtime bypasses, 10/10 financial routes verified" a few files over.</p>
+        <p>The test suite tells the same story. Ten of thirteen test files use a private <code>run(name, fn)</code> wrapper that swallows thrown assertions into a local array instead of calling <code>bun:test</code>'s own <code>expect</code> — so <code>bun test</code>'s top-line summary reads "28 pass / 1 fail," while re-reading each file's actual internal tally shows roughly 24 real failures (<code>connectors-v2.test.ts</code>: 10 failing; <code>chains.test.ts</code>: 7 failing; <code>ledger.test.ts</code>: 3 failing) invisible to that summary. <code>security.test.ts</code> throws on import (<code>Cannot find module 'next/server'</code>) and has never run a single assertion. Specific test IDs cited as evidence in <code>INVARIANTS.md</code> (P1a, S7‑2, R5‑1, and a dozen others) do not exist anywhere in <code>tests/</code>. The "13 provider connector adapters" that <code>BENCHMARK-REPORT.md</code> clocks at 10,000 TPS are self-labeled in-process simulations — <code>sim://mpesa/daraja/v1</code> endpoints, <code>Math.random()</code> block numbers, balances derived from a hash of the phone number — not network calls.</p>
+        <p><strong>Working assumption for the rest of this report:</strong> every "✅ Complete," percentage, or benchmark figure in this codebase's own documentation is treated as an unverified claim, not evidence. Where a doc claim is checked below and holds up, it's called out explicitly as confirmed — the codebase's more skeptical internal documents (<code>AUDIT-REPORT.md</code>, <code>PRODUCT-AUDIT.md</code>, <code>AUDIT-TIER1.md</code>) were consistently more accurate than its celebratory ones (<code>FINAL-REPORT.md</code>, <code>PRODUCTION-4-VERIFICATION-REPORT.md</code>, <code>INVARIANTS.md</code>).</p>
+      </div>
+    </section>
+
+    <section id="critical">
+      <h2>Critical findings</h2>
+      <p class="section-note">Must be resolved before this system is trusted with real money. Ordered by blast radius.</p>
+
+      <div class="finding crit">
+        <div class="finding-head"><span class="badge crit">Critical</span><span class="finding-id">C‑1 · Security</span></div>
+        <div class="finding-title">Production database password and JWT-signing secret are committed in plaintext, in a public repository</div>
+        <p><strong>Evidence:</strong> <code>.env.production:3-5</code> contains a live Neon Postgres connection string with its password, and a hardcoded <code>NEXTAUTH_SECRET</code>. <code>.gitignore:38-39</code> explicitly carves this file back <em>in</em> with the comment "Don't ignore .env.production — it's needed by Vercel" (Vercel reads env vars from its own dashboard, not a committed file — the justification doesn't hold). <code>src/lib/auth.ts:57-77</code> and <code>middleware.ts:81</code> sign and verify every session JWT with this exact static secret, and role claims baked into that token (<code>ADMIN</code>/<code>SUPER_ADMIN</code>/<code>TREASURY</code>) are trusted directly by <code>middleware.ts:118-139</code> with no per-request database re-check.</p>
+        <p><strong>Failure scenario:</strong> anyone who has viewed this public repository can forge an HS256 JWT with <code>roles: ['SUPER_ADMIN']</code> using the leaked secret — full admin and treasury access, no password required — and separately can connect directly to the production database with the leaked credentials.</p>
+        <p><strong>Fix:</strong> rotate the database password and <code>NEXTAUTH_SECRET</code> immediately, purge both from git history, and move all production secrets to the hosting platform's secret store. This is independent of everything else in this report and should not wait on it.</p>
+      </div>
+
+      <div class="finding crit">
+        <div class="finding-head"><span class="badge crit">Critical</span><span class="finding-id">C‑2 · Financial correctness</span></div>
+        <div class="finding-title">Every live money-movement route writes the customer's real balance outside the ledger it claims to run on</div>
+        <p><strong>Evidence:</strong> wallet deposit, withdrawal, transfer, and treasury reserve-adjustment routes all follow the same pattern — dispatch an event through the invariant-checked runtime kernel, <em>then separately</em> call <code>db.wallet.update(...)</code> directly on the real Prisma balance, uncoupled from the first write. <code>src/app/api/customer/wallet/transfer/route.ts:120-237</code> even runs the direct Prisma transaction <em>unconditionally</em>, with the failure branch left as a comment:</p>
+        <pre><code>if (!creditResult.success) {
+  // TODO: In production, this should trigger a compensating transaction
+  // to reverse the debit. For now, log the error.
+  console.error('[wallet/transfer] Credit failed after debit succeeded — manual reconciliation needed');
+}
+// ... proceeds to run the Prisma $transaction anyway</code></pre>
+        <p>The treasury route (<code>src/app/api/treasury/reserves/adjust/route.ts:195-245</code>) compounds this: its invariant check runs with <code>environment: 'sandbox'</code> hardcoded, while the direct write beneath it mutates the real balance — the gate is checking data that has no relationship to what it's guarding.</p>
+        <p><strong>Failure scenario:</strong> a crash, timeout, or partial failure between the two writes leaves the event log and the spendable balance permanently diverged — in either direction. This isn't a theoretical race; it's the documented behavior on the one route whose comments already admit it.</p>
+        <p><strong>Fix:</strong> pick one writer. Either the event-sourced path derives and projects the balance (delete the direct Prisma write), or the direct write is the source of truth and the event dispatch is purely a log (delete the illusion of a gate). Wrap whichever remains in a single database transaction.</p>
+      </div>
+
+      <div class="finding crit">
+        <div class="finding-head"><span class="badge crit">Critical</span><span class="finding-id">C‑3 · Settlement pipeline</span></div>
+        <div class="finding-title">The Policy → Council → Coordinator → Settlement review chain is four hardcoded success strings on the routes that actually create payouts and refunds</div>
+        <p><strong>Evidence:</strong> <code>src/runtime/planner/index.ts:368-386</code> — the stage executor for the documented Intent→Compiler→Planner→Policy→Council→Coordinator→Settlement pipeline:</p>
+        <pre><code>case 'policy':      return { result: 'success', detail: 'Policy evaluated — passed', ... };
+case 'council':     return { result: 'success', detail: 'Council debated strategy', ... };
+case 'coordinator': return { result: 'success', detail: 'Coordinator initiated saga', ... };
+case 'settlement':  return { result: 'success', detail: 'Settlement orchestrator engaged', ... };</code></pre>
+        <p>None of these call the real <code>DefaultPolicyEngine.evaluate()</code>, <code>EconomicCouncil.convene()</code>, or any settlement adapter — confirmed by grep: those real implementations are referenced only from their own instantiation, never from this planner. This exact planner is what <code>src/services/payout-service.ts:69</code> and <code>refund-service.ts:55</code> call to create real payouts and refunds. Separately, the policy engine that does exist has exactly one rule registered anywhere in the codebase: an unconditional allow-everything default.</p>
+        <p><strong>Fix:</strong> either wire the real policy/council/coordinator/settlement implementations into the planner's execution path, or remove the pipeline-stage claims from the architecture documentation until they are. A pipeline diagram that doesn't match the execution path is worse than no diagram.</p>
+      </div>
+
+      <div class="finding crit">
+        <div class="finding-head"><span class="badge crit">Critical</span><span class="finding-id">C‑4 · Financial correctness</span></div>
+        <div class="finding-title">The one correctly-built double-entry ledger engine is in-memory only and unwired from real payments</div>
+        <p><strong>Evidence:</strong> <code>src/protocol/ledger/engine.ts:120-123</code> holds journal entries in <code>private journals: JournalEntry[] = []</code> — no database write anywhere in the file; a restart erases it. The one table shaped like a real journal, <code>LedgerEntryRecord</code>, has exactly one write call site in the entire codebase: <code>src/app/api/simulate/route.ts:118</code>. Real payments never touch it. The balance-validation logic itself (<code>entry.ts</code>) is genuinely correct — BigInt-backed, throws on an unbalanced entry — it simply governs a module the live payment flow never calls.</p>
+        <p><strong>Fix:</strong> persist journal entries durably and call this engine from the actual money-movement routes identified in C‑2, or stop describing it as the system's ledger.</p>
+      </div>
+
+      <div class="finding crit">
+        <div class="finding-head"><span class="badge crit">Critical</span><span class="finding-id">C‑5 · Financial correctness</span></div>
+        <div class="finding-title">Real payment fees are computed in floating point, and the correct money type is used almost nowhere</div>
+        <p><strong>Evidence:</strong> <code>src/services/payment-service.ts:71-72</code>, called directly from <code>POST /api/payments/create</code>:</p>
+        <pre><code>const fee = Math.round(params.amount * (lpFeeBps / 10000) * 100) / 100;
+const netAmount = success ? Math.round((params.amount - fee) * 100) / 100 : 0;</code></pre>
+        <p>This compounds with <code>src/lib/db.ts:11-97</code>, which globally coerces every monetary <code>Decimal</code> column (wallet balances, payment/payout/refund/invoice amounts) to a JS <code>number</code> via a Prisma <code>$extends</code> read hook — so even though the database stores <code>Decimal(18,2)</code>, application code always computes in float. The correctly-built BigInt <code>Money</code> class (<code>src/money/money.ts</code>) is used in exactly 2 files in the whole source tree.</p>
+        <p><strong>Fix:</strong> route every monetary read/write through the BigInt <code>Money</code> type; remove the global Decimal→number coercion; recompute fee/net logic in integer minor-units.</p>
+      </div>
+
+      <div class="finding crit">
+        <div class="finding-head"><span class="badge crit">Critical</span><span class="finding-id">C‑6 · Security</span></div>
+        <div class="finding-title">Unauthenticated cross-merchant access: any caller can read any merchant's keys and trigger payouts on their behalf</div>
+        <p><strong>Evidence:</strong> <code>src/app/api/merchant/state/route.ts:13-16</code> reads <code>merchantId</code> from the query string and returns that merchant's API keys, invoices, customers, refunds, and webhook endpoints — no session or ownership check anywhere in the file. <code>src/app/api/merchant/payout/route.ts:9-53</code> takes <code>merchantId</code>/<code>payoutId</code> from the request body with the same absence of auth, letting any caller list or trigger a payout for an arbitrary merchant. This matches the project's own security test suite (<code>certification/results/security-review.json</code>, finding SEC‑016, "Critical," dated 2026‑07‑25: "the platform does NOT verify caller identity or merchant membership") — confirmed still true by direct route inspection, three weeks after it was logged.</p>
+        <p><strong>Fix:</strong> add merchant-ownership verification (session's authenticated org must match the target <code>merchantId</code>) to every route that accepts a tenant identifier from client input — audit all 433 routes for the same pattern, not just these two.</p>
+      </div>
+
+      <div class="finding crit">
+        <div class="finding-head"><span class="badge crit">Critical</span><span class="finding-id">C‑7 · Economic-kernel governance</span></div>
+        <div class="finding-title">The "Constitution" that's supposed to gate every financial action is simulation-only, and a third of its own rules always pass</div>
+        <p><strong>Evidence:</strong> <code>src/kernel/constitution.ts</code> defines roughly 45 governance rules, but at least 14 — including <code>cmp-sanctions-screen</code> and <code>cmp-kyc</code>, the two a payments regulator cares about most — are hardcoded <code>check: (ctx) => ({ passed: true, ... })</code> with no actual logic. Worse, <code>evaluateConstitution()</code> is called only from <code>src/kernel/simulation.ts</code> and <code>src/kernel/api.ts</code> — both part of a sandbox subsystem never imported by any real wallet or payment route. The live money-movement path (deposit, withdraw, treasury adjust) never calls the Constitution at all. A separate, genuinely-wired invariant engine does exist (<code>src/runtime/invariants/engine.ts</code>, called from the dispatcher) — but it only governs the event-sourced side of the dual-write pattern in C‑2, not the direct Prisma write that actually determines spendable balance.</p>
+        <p><strong>Fix:</strong> implement the stubbed compliance rules for real, and move constitutional enforcement into the live request path rather than the simulator — or stop calling it "non-overridable" in the architecture docs.</p>
+      </div>
+
+      <div class="finding crit">
+        <div class="finding-head"><span class="badge crit">Critical</span><span class="finding-id">C‑8 · Production readiness</span></div>
+        <div class="finding-title">Container health checks target a route that doesn't exist; the app will restart-loop under any real orchestrator</div>
+        <p><strong>Evidence:</strong> <code>deploy/docker/Dockerfile:64-66</code> and <code>docker-compose.yml</code> both define <code>HEALTHCHECK</code> against <code>http://127.0.0.1:3000/healthz</code>. No <code>/healthz</code> or <code>/api/healthz</code> route exists anywhere in the tree — the only related artifact is a doc comment. <code>middleware.ts:44</code> separately whitelists <code>/api/health</code> as public, but <code>src/app/api/health/route.ts</code> also does not exist. Whichever route Docker/Kubernetes actually probes, it 404s.</p>
+        <p><strong>Fix:</strong> ship the health-check route the deployment config already expects, and have it verify real dependencies (see C‑9) — not just process liveness.</p>
+      </div>
+
+      <div class="finding crit">
+        <div class="finding-head"><span class="badge crit">Critical</span><span class="finding-id">C‑9 · Production readiness</span></div>
+        <div class="finding-title">Disaster-recovery "backups" live in a process-memory array and vanish on every restart</div>
+        <p><strong>Evidence:</strong> <code>src/protocol/disaster-recovery/backup.ts:132</code> — <code>private backups = new Map&lt;string, StoredBackup&gt;()</code>, capped at 200 entries with FIFO eviction. The <code>location: 's3://payswap-backups/...'</code> field (line 160) is a string literal — no S3 SDK call exists anywhere in the file or its imports. <code>restoreFromBackup</code> replays events back into the same in-process engine it was "backing up," so it cannot recover from the one scenario backups exist for: the process actually going down. A routine deploy or autoscale-down event silently discards every backup along with the data it protects.</p>
+        <p><strong>Fix:</strong> write backups to durable, off-process storage (the S3 path is already named — implement it), and run an actual restore drill before claiming any RPO/RTO figure.</p>
+      </div>
+    </section>
+
+    <section id="high">
+      <h2>High findings</h2>
+      <p class="section-note">Real risk to money, availability, or regulatory standing — should be closed before scaling volume.</p>
+
+      <div class="finding high">
+        <div class="finding-head"><span class="badge high">High</span><span class="finding-id">H‑1 · Settlement</span></div>
+        <div class="finding-title">Concurrency control on the event store is enforced only in process memory — no database constraint backs it</div>
+        <p><code>EventRecord</code> in the Prisma schema has no <code>streamId</code>/<code>version</code> columns and no unique constraint on them; the optimistic-concurrency check compares against an in-process <code>Map</code>. The store's own comment admits it: <em>"our current schema doesn't have that [unique constraint] — for now, treat all DB errors as append failures."</em> Two replicas (or two serverless instances) can both pass the version check for the same aggregate and both append, silently corrupting that stream's history.</p>
+      </div>
+
+      <div class="finding high">
+        <div class="finding-head"><span class="badge high">High</span><span class="finding-id">H‑2 · Financial / Settlement</span></div>
+        <div class="finding-title">Idempotency-key infrastructure exists and is correct, but nothing on the money-movement routes calls it</div>
+        <p><code>withIdempotency()</code> is backed by a real unique constraint (<code>IdempotencyRecord.key</code>) and is called zero times outside its own definition. <code>src/app/api/payouts/create/route.ts</code> reads the <code>Idempotency-Key</code> header, echoes it back in the response, and never looks it up before creating the payout — a client retry after a timeout creates a second one. Confirmed independently on the wallet-transfer path.</p>
+      </div>
+
+      <div class="finding high">
+        <div class="finding-head"><span class="badge high">High</span><span class="finding-id">H‑3 · Settlement</span></div>
+        <div class="finding-title">Three uncoordinated event-store implementations write to the same table with different durability guarantees</div>
+        <p>A synchronous per-append Postgres writer, a second writer with a 2‑second auto-flush interval (up to 2s of events lost on crash unless flushed explicitly), and a third, fully in-memory store that is silently selected whenever <code>DATABASE_URL</code> doesn't start with <code>postgres://</code> — zero persistence, no warning logged.</p>
+      </div>
+
+      <div class="finding high">
+        <div class="finding-head"><span class="badge high">High</span><span class="finding-id">H‑4 · Settlement</span></div>
+        <div class="finding-title">The live payment-creation route bypasses the entire event-sourced pipeline it's audited around</div>
+        <p><code>/api/payments/create</code> calls a plain Prisma read/write service with no Intent, Compiler, or event-store involvement. The real event-sourced path lives at <code>/api/runtime/payments/create</code> — a parallel, disconnected route. A merchant's ordinary payment-creation call does not go through the pipeline this report's other findings analyze.</p>
+      </div>
+
+      <div class="finding high">
+        <div class="finding-head"><span class="badge high">High</span><span class="finding-id">H‑5 · Security</span></div>
+        <div class="finding-title">The entire API-key authentication and scoping system is dead code</div>
+        <p><code>requireApiKey</code>/<code>requireMerchantOrApiKey</code> are never imported by any of the 433 route files. All <code>psk_live_</code>/<code>psk_test_</code> key generation and scope-checking machinery is unreachable — every protected route relies solely on NextAuth session cookies. Separately, key creation hardcodes the <code>psk_live_</code> prefix regardless of whether the key was created for sandbox or live use.</p>
+      </div>
+
+      <div class="finding high">
+        <div class="finding-head"><span class="badge high">High</span><span class="finding-id">H‑6 · Security</span></div>
+        <div class="finding-title">Thirteen of the project's own logged security-test failures remain unfixed in shipped code</div>
+        <p>Per <code>certification/results/security-review.json</code> (dated 2026-07-25, re-verified against live route code for this report): event-replay double-credits a wallet balance (no event-ID dedup); compliance-frozen accounts can still <em>receive</em> funds; dynamic QR codes have no one-shot consumption or signature; outbound webhook replay isn't blocked by a nonce store; team-invite flow lets a caller self-escalate to owner.</p>
+      </div>
+
+      <div class="finding high">
+        <div class="finding-head"><span class="badge high">High</span><span class="finding-id">H‑7 · Production readiness</span></div>
+        <div class="finding-title">No real monitoring exists, and the "metrics" endpoint is itself a load-bearing risk</div>
+        <p>No APM, tracing, or metrics SDK is installed anywhere in <code>package.json</code>. <code>GET /api/metrics</code> — the operational dashboard endpoint — actually executes 20 simulation scenarios and 100 fuzz iterations synchronously on every request and returns their results as "metrics." This is a simulation harness mislabeled as telemetry, and a self-inflicted denial-of-service surface if it's ever exposed to real traffic.</p>
+      </div>
+
+      <div class="finding high">
+        <div class="finding-head"><span class="badge high">High</span><span class="finding-id">H‑8 · Regulatory</span></div>
+        <div class="finding-title">Two disconnected compliance stacks coexist; it's unclear which one gates real payments</div>
+        <p>A real, Prisma-backed AML/SAR pipeline exists (<code>src/trust/aml-pipeline.ts</code>, <code>sar-manager.ts</code> — genuinely functional). A second, entirely separate implementation (<code>src/protocol/compliance/aml.ts</code>, <code>sanctions.ts</code>) runs on process-local <code>Map</code>s that don't survive a restart or scale across instances, and screens against a hardcoded 10-name sanctions list. Its own code comment says a real deployment would swap in Chainalysis/TRM/Refinitiv — confirming it's a stub.</p>
+      </div>
+
+      <div class="finding high">
+        <div class="finding-head"><span class="badge high">High</span><span class="finding-id">H‑9 · Regulatory</span></div>
+        <div class="finding-title">Audit logging is absent on the routes that actually move money out</div>
+        <p>64 <code>auditLog.create</code> call sites exist and — genuinely, verified by grep — zero <code>update</code>/<code>delete</code> calls, so the log is honestly append-only where it's used. But <code>payouts/create</code> and <code>refunds/create</code> — the money-out creation paths — have no audit-log call at all, while their <code>cancel</code> siblings do. 19 of 22 admin routes (marketplace/extension approvals) are unlogged.</p>
+      </div>
+
+      <div class="finding high">
+        <div class="finding-head"><span class="badge high">High</span><span class="finding-id">H‑10 · Economic-kernel governance</span></div>
+        <div class="finding-title">The treasury adjustment route validates its invariant against the wrong environment</div>
+        <p><code>src/app/api/treasury/reserves/adjust/route.ts:211</code> dispatches through the runtime host with <code>environment: 'sandbox'</code> hardcoded, then separately writes the real production wallet balance in an uncoupled transaction. The gate is checking sandbox state while production money moves underneath it.</p>
+      </div>
+
+      <div class="finding high">
+        <div class="finding-head"><span class="badge high">High</span><span class="finding-id">H‑11 · Doc credibility</span></div>
+        <div class="finding-title">The test suite's own reported pass rate hides the majority of its real failures</div>
+        <p>10 of 13 test files route assertions through a custom wrapper that swallows exceptions instead of calling <code>bun:test</code>'s <code>expect</code>, so <code>bun test</code>'s top-line summary ("28 pass / 1 fail") is invisible to roughly 24 real internal failures across <code>connectors-v2</code>, <code>chains</code>, and <code>ledger</code> test files. <code>security.test.ts</code> crashes on import and has never executed a single assertion.</p>
+      </div>
+    </section>
+
+    <section id="medium">
+      <h2>Medium &amp; low findings</h2>
+      <p class="section-note">Real, but lower blast radius, or engineering-quality rather than money-at-risk. Expand each group.</p>
+
+      <details class="disclosure" open>
+        <summary><span class="badge med">Medium</span> Architecture sprawl — 4 items</summary>
+        <div class="finding med">
+          <div class="finding-title">Four parallel "economic reasoning" subsystems, none of which touch real money</div>
+          <p><code>src/economic/</code>, <code>economic-engine/</code>, <code>economic-os/</code>, <code>economic-platform/</code> each independently implement a verifier/planner/store/executor for the same concept — <code>economic-engine</code> and <code>economic-platform</code> are near-identical file-for-file. None import <code>@/lib/db</code>. This is four maintained copies of the same idea with no canonical version and 29 API routes between them, none wired to a wallet.</p>
+        </div>
+        <div class="finding med">
+          <div class="finding-title">Dead v1 engines are deliberately re-exported from the public runtime barrel</div>
+          <p><code>opportunity-discovery</code>, <code>reserve-market</code>, and <code>recommendation-lifecycle</code> each have a v1 (inert stub, e.g. <code>NoOpOpportunityDiscoveryEngine</code>) and a v2 (real implementation) — and <code>src/runtime/index.ts</code> still re-exports both under the public barrel, so a future caller importing the old name silently gets a no-op instead of an error.</p>
+        </div>
+        <div class="finding med">
+          <div class="finding-title">Dead ledger and settlement directories coexist with live ones</div>
+          <p><code>src/runtime/ledger/</code>, <code>runtime/settlement/</code>, and <code>runtime/settlement-orchestrator/</code> have zero imports from outside themselves — confirmed dead — while <code>src/protocol/ledger/</code> and <code>protocol/settlement/</code> are live. Not a correctness bug, but it roughly doubles the surface anyone auditing this system has to read to find the real path.</p>
+        </div>
+        <div class="finding med">
+          <div class="finding-title">"13 provider connector adapters" are self-labeled in-process simulations</div>
+          <p>M‑Pesa, Ethereum RPC, and Stellar Horizon connectors use <code>sim://</code> endpoints, <code>Math.random()</code>-generated block numbers, and phone-number-hash-derived balances — well engineered as simulations, but the benchmark numbers built on top of them (10,000 TPS, p99 ~51ms) measure the simulation's artificial latency, not any real network.</p>
+        </div>
+      </details>
+
+      <details class="disclosure">
+        <summary><span class="badge med">Medium</span> Security &amp; production hardening — 4 items</summary>
+        <div class="finding med">
+          <div class="finding-title">Rate limiting is in-memory only</div>
+          <p>Backed by a plain <code>Map</code> inside one Node process; on the serverless/multi-instance deployment this app targets, each instance enforces its own independent limit — real but weak.</p>
+        </div>
+        <div class="finding med">
+          <div class="finding-title">docker-compose.yml (dev-labeled) exposes database ports with a weak hardcoded password</div>
+          <p><code>POSTGRES_PASSWORD: payswap_dev_password</code>, with Postgres and Redis ports published directly to the host. Labeled "Development/CI" in its own header, which lowers severity — but the accompanying Caddyfile has no TLS termination block, so whatever fronts this in the named deployment target isn't defined here.</p>
+        </div>
+        <div class="finding med">
+          <div class="finding-title">Key-rotation manager is fully implemented and never called</div>
+          <p>A real JWT/API-key rotation manager with overlap windows exists; grep finds zero call sites outside its own file. Live auth reads <code>NEXTAUTH_SECRET</code> directly with no rotation path — which is what makes C‑1 unresolvable by rotation alone without a code change.</p>
+        </div>
+        <div class="finding med">
+          <div class="finding-title">"Proof of reserves" reconciles the database against itself</div>
+          <p>Derives "reserves" from the LP-stake table and "liabilities" from the wallet table — both in the same application database. No external bank statement, custodian attestation, or on-chain balance check occurs anywhere in the file, despite a cryptographic-sounding hash field implying independent verifiability.</p>
+        </div>
+      </details>
+
+      <details class="disclosure">
+        <summary><span class="badge low">Low</span> Engineering quality — 3 items</summary>
+        <div class="finding low">
+          <div class="finding-title"><code>watchdog.sh</code> hardcodes a path from an unrelated sandbox environment</div>
+          <p><code>cd /home/z/my-project</code> — never adapted for this project's real deployment target.</p>
+        </div>
+        <div class="finding low">
+          <div class="finding-title">Production builds silently ignore TypeScript errors</div>
+          <p><code>next.config.ts</code> sets <code>typescript: { ignoreBuildErrors: true }</code>.</p>
+        </div>
+        <div class="finding low">
+          <div class="finding-title">FX conversion rounding is untracked</div>
+          <p><code>fxRate</code> is stored on payments/payouts, but no reconciliation account absorbs the rounding remainder from conversion — it simply isn't tracked either way.</p>
+        </div>
+      </details>
+
+      <details class="disclosure">
+        <summary><span class="badge good">Confirmed working</span> What genuinely holds up under review — 7 items</summary>
+        <div class="finding low" style="border-left-color:var(--good)">
+          <ul style="margin:0; padding-left:18px">
+            <li>The BigInt <code>Money</code> type and its <code>validateBalanced()</code> check are arithmetically correct — they're just not used where money actually moves (C‑5).</li>
+            <li>The core ledger-replay function (<code>protocol/ledger/projection.ts</code>) is genuinely deterministic — sorts events, no wall-clock or random calls in the replay loop.</li>
+            <li>Deny-by-default middleware for <code>/api/*</code> with an explicit allowlist is real and verified in code, not just claimed.</li>
+            <li>Outbound webhook HMAC verification uses <code>timingSafeEqual</code> and a signed timestamp window.</li>
+            <li>No raw-SQL injection surface exists anywhere — the codebase is Prisma-only, zero <code>$queryRaw</code>/<code>$executeRaw</code> with interpolated input.</li>
+            <li><code>scripts/reconcile.ts</code> is a real, runnable job that compares event-store counts, projections, and trial balance, and exits non-zero on drift.</li>
+            <li>The hosted checkout page (<code>/pay/[paymentId]</code>) genuinely queries Prisma for a real payment record — not a fixture, as an early doc pass worried.</li>
+          </ul>
+        </div>
+      </details>
+    </section>
+
+    <section id="proof">
+      <h2>Financial proof report</h2>
+      <p class="section-note">Direct answers to the questions a Tier-1 review has to prove, not merely inspect — based on the evidence in the sections above.</p>
+      <div class="tbl-wrap">
+        <table>
+          <tr><th style="width:38%">Question</th><th style="width:10%">Answer</th><th>Basis</th></tr>
+          <tr><td>Can money be created accidentally?</td><td><span class="verdict-yes">YES</span></td><td>Unenforced optimistic concurrency (H‑1) permits duplicate appends; the dual-write pattern (C‑2) has no cross-check between the two balances it produces.</td></tr>
+          <tr><td>Can money disappear?</td><td><span class="verdict-yes">YES</span></td><td>The wallet-transfer route's own comment documents a debit-with-no-compensating-credit path on failure (C‑2).</td></tr>
+          <tr><td>Can a transaction execute twice?</td><td><span class="verdict-yes">YES</span></td><td>Idempotency keys are accepted and never checked before payout/refund/transfer creation (H‑2).</td></tr>
+          <tr><td>Can balances diverge?</td><td><span class="verdict-yes">YES — demonstrated</span></td><td><code>Wallet.balance</code> is a directly-mutated field with no derivation from, or reconciliation against, any entry log (C‑2, C‑4).</td></tr>
+          <tr><td>Can ledger replay produce different balances?</td><td><span class="verdict-partial">PARTIAL</span></td><td>The replay function itself is deterministic and correct — but it replays a ledger table live payments never write to (C‑4), so the proof doesn't extend to real customer balances.</td></tr>
+          <tr><td>Is every retry idempotent?</td><td><span class="verdict-no" style="color:var(--critical)">NO</span></td><td>See H‑2.</td></tr>
+          <tr><td>Assets = Liabilities + Equity after every operation?</td><td><span class="verdict-partial">UNPROVABLE</span></td><td>No single ledger is authoritative over the balances customers actually spend against — there is nothing to check this equation against.</td></tr>
+          <tr><td>Does double-entry always balance?</td><td><span class="verdict-partial">ONLY IN ISOLATION</span></td><td>True inside <code>protocol/ledger/entry.ts</code>, which real payments never call (C‑4).</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <h2>Architecture review</h2>
+      <h3>Duplicated responsibilities</h3>
+      <p class="wide">Four independent "economic reasoning" subsystems, three duplicated v1/v2 engine pairs, and parallel ledger/settlement directory trees (one live, one dead) all describe the same underlying pattern: superseded or exploratory implementations were never deleted, and in the economic-* case, never even converged. <code>economic-engine</code> and <code>economic-platform</code> being near-identical, both live, and both reachable from the API surface is the concerning variant — split-brain implementations of the same idea are exactly how financial bugs hide, even though neither currently touches a real wallet.</p>
+      <h3>Hidden coupling</h3>
+      <p class="wide">The dual-write pattern (C‑2) is the report's central architectural defect: it couples an event-sourced, invariant-checked path to an unguarded direct database write with no shared transaction and no compensation logic, so the two writers can only stay consistent by luck. This same shape recurs independently in wallet deposit, withdrawal, transfer, and treasury adjustment — it isn't a one-off bug, it's the load-bearing pattern for every real money movement in the system.</p>
+      <h3>Unnecessary complexity</h3>
+      <p class="wide">433 API routes and a <code>runtime/engines/</code> tree with more than 30 subfolders is a lot of surface for a system whose actual live money path is, per this audit, five or six routes. A meaningful fraction of that surface — the simulator, four economic-* subsystems, dead v1 engines, the in-memory kernel — is scaffolding that a reviewer (human or automated) has to read and rule out before finding the real path, which is itself a production-readiness cost independent of any single bug.</p>
+      <h3>Missing abstraction boundary</h3>
+      <p class="wide">There is no single "balance authority" — no one module that every route is required to go through to change a balance. Each money-movement route reimplements its own read-check-write sequence, which is why the same dual-write and same missing-idempotency shape appears independently in four different route files rather than being fixed once.</p>
+      <h3>Scalability bottlenecks</h3>
+      <p class="wide">The in-memory optimistic-concurrency map, the in-memory rate limiter, the in-memory idempotency store, and the in-memory event-store fallback share one property: none of them survive a process restart or a second instance. That is precisely the deployment shape (serverless, autoscaled, multi-region per the project's own <code>MULTI-REGION-DESIGN.md</code>) this system is being built for — these components will silently stop providing the protection they appear to provide the moment the app scales past one instance, with no error or warning.</p>
+    </section>
+
+    <section id="roadmap">
+      <h2>Roadmap</h2>
+      <div class="phase">
+        <div class="phase-num">1</div>
+        <div class="phase-body">
+          <h3>Stop the bleeding — before this touches real money</h3>
+          <ul>
+            <li>Rotate the leaked database password and <code>NEXTAUTH_SECRET</code>; purge both from git history (C‑1)</li>
+            <li>Add merchant-ownership checks to <code>merchant/state</code>, <code>merchant/payout</code>, and re-audit all 433 routes for the same missing-auth pattern (C‑6)</li>
+            <li>Collapse the dual-write pattern to a single writer, in a single transaction, on wallet deposit/withdraw/transfer and treasury adjust (C‑2)</li>
+            <li>Wire the existing <code>withIdempotency()</code> into payouts, refunds, and transfers (H‑2)</li>
+            <li>Ship the health-check route the Docker/K8s config already expects (C‑8)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-num">2</div>
+        <div class="phase-body">
+          <h3>Security &amp; correctness hardening</h3>
+          <ul>
+            <li>Add a real database unique constraint on <code>(streamId, version)</code> for event-store concurrency (H‑1)</li>
+            <li>Consolidate the three event-store implementations into one with a guaranteed durability contract (H‑3)</li>
+            <li>Wire the real policy/council/coordinator/settlement implementations into the planner, or remove the claim (C‑3)</li>
+            <li>Replace float arithmetic with the existing BigInt <code>Money</code> type across the payment service and the Prisma read layer (C‑5)</li>
+            <li>Add audit-log calls to payout/refund creation and the 19 unlogged admin routes (H‑9)</li>
+            <li>Merge the two compliance stacks and connect a real sanctions-list feed (H‑8)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-num">3</div>
+        <div class="phase-body">
+          <h3>Production operability &amp; scale</h3>
+          <ul>
+            <li>Wire real APM/tracing; stop serving simulation output from <code>/api/metrics</code> (H‑7)</li>
+            <li>Implement durable, off-process backups and run an actual restore drill (C‑9)</li>
+            <li>Move rate-limit, idempotency, and OCC state to a shared store (e.g. Redis) so protection survives horizontal scaling</li>
+            <li>Delete confirmed-dead code — v1 engine stubs, dead ledger/settlement directories, redundant economic-* subsystems — to shrink audit surface</li>
+          </ul>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-num">4</div>
+        <div class="phase-body">
+          <h3>Regulatory &amp; ecosystem</h3>
+          <ul>
+            <li>Replace simulated connector adapters with real integrations before citing them in benchmarks or documentation</li>
+            <li>Build proof-of-reserves against an external source, not the application's own database</li>
+            <li>Re-verify every self-authored audit doc against current code before publishing it, or stop publishing the celebratory tier while the skeptical tier contradicts it</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="verdict">
+      <h2>Final verdict</h2>
+      <div class="callout" style="border-left-color:var(--critical)">
+        <p><strong>NO-GO.</strong> PaySwap should not handle real customer money in its current state. The architecture is not vaporware — a correct money type, a deterministic replay function, real append-only audit logging, and a working reconciliation script all exist — but none of it protects the paths that actually move funds today. Wallet balances are mutated outside the ledger with no compensation on failure, the settlement pipeline's review chain is hardcoded to always pass, idempotency protection exists as unused library code, and the production database password is readable by anyone who opens this public repository.</p>
+        <p>This report's verified readiness score (2.5/10) is materially lower than the codebase's own most recent self-assessment (7.5/10 in <code>AUDIT-TIER1-V2.md</code>) — not because the engineering effort isn't real, but because the self-assessment measures architecture-as-built rather than behavior-as-tested, and its own test suite silently discards roughly 24 real failures behind a "1 fail" summary. Phase 1 of the roadmap above — five fixes, all scoped to specific files identified in this report — is the minimum bar before any of the rest of this audit's findings are worth revisiting.</p>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  Independent review of <a href="https://github.com/pectoraux/payswap2">github.com/pectoraux/payswap2</a> (public, default branch <code>main</code>), commit snapshot dated 2026‑08‑07. Six parallel review passes, each independently verifying claims against source rather than documentation; overlapping findings across passes are noted where they converged on the same defect from different entry points. Evidence is quoted from source with file paths and line numbers; no real secret values are reproduced.
+</footer>

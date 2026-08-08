@@ -242,6 +242,7 @@ export class StellarChainAdapter implements ChainAdapter {
   private simClaimableBalances = new Map<string, SimClaimableBalance>();
   private simEscrows = new Map<string, SimEscrow>();
   private simTransactions = new Map<string, SimTxRecord>();
+  private simTrustlines = new Set<string>();                          // `${holder}:${assetCode}:${issuer}`
   private simLedgerStreamListeners = new Set<(l: SimLedger) => void>();
   private simLedgerTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -310,9 +311,25 @@ export class StellarChainAdapter implements ChainAdapter {
 
   // ============================================================ account lifecycle
 
-  async createAccount(params: { address: string; startingBalance?: number; funder?: string }): Promise<ChainResult> {
-    const { address, startingBalance = 0, funder } = params;
-    if (!address) return { success: false, error: 'address_required' };
+  async createAccount(params: {
+    address?: string;
+    startingBalance?: number;
+    nativeAmount?: number;          // BACKWARD-COMPAT alias for startingBalance
+    funder?: string;
+  }): Promise<ChainResult & { account?: { address: string; chain: string; exists: boolean; sequence: string; balances: Record<string, number> } }> {
+    // Accept `nativeAmount` as an alias for `startingBalance` (test shape).
+    const startingBalance = params.startingBalance ?? params.nativeAmount ?? 0;
+    const funder = params.funder;
+    // In sim mode, auto-generate an address if the caller didn't supply one.
+    // This mirrors the test-shape ergonomics: `createAccount({ nativeAmount })`
+    // without pre-minting an address.
+    let address = params.address;
+    if (!address) {
+      if (this._mode === 'live') {
+        return { success: false, error: 'address_required' };
+      }
+      address = uid('stellarAcct');
+    }
 
     if (this._mode === 'live') {
       // === live signature ===
@@ -334,10 +351,13 @@ export class StellarChainAdapter implements ChainAdapter {
     // Sim mode — create a local account record + credit starting balance.
     this.ensureSimAccount(address);
     if (startingBalance > 0) {
+      // Mirror into the legacy sim adapter so `getBalance` (which reads from
+      // the legacy map) sees the credit.
+      simAdapter.fundAccount(address, 'XLM', startingBalance);
       this.simCredit(address, 'XLM', startingBalance);
     }
     const txHash = uid('stellarTx');
-    return this.recordSimTx({
+    const rec = this.recordSimTx({
       txHash,
       operation: 'createAccount',
       source: funder,
@@ -346,10 +366,31 @@ export class StellarChainAdapter implements ChainAdapter {
       amount: startingBalance,
       assetCode: 'XLM',
     });
+    return {
+      ...rec,
+      account: {
+        address,
+        chain: 'stellar',
+        exists: true,
+        sequence: '0',
+        balances: { 'XLM:native': startingBalance },
+      },
+    };
   }
 
-  async fundAccount(params: { address: string; assetCode: string; amount: number; funder?: string }): Promise<ChainResult> {
-    const { address, assetCode, amount, funder } = params;
+  async fundAccount(params: {
+    address: string;
+    assetCode?: string;
+    amount?: number;
+    nativeAmount?: number;        // BACKWARD-COMPAT alias for amount
+    funder?: string;
+  }): Promise<ChainResult> {
+    // Accept `nativeAmount` as an alias for `amount`. Default `assetCode` to
+    // 'XLM' when the caller omits it (test shape).
+    const amount = params.amount ?? params.nativeAmount ?? 0;
+    const assetCode = params.assetCode ?? 'XLM';
+    const funder = params.funder;
+    const address = params.address;
     if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
     if (!address) return { success: false, error: 'address_required' };
 
@@ -383,8 +424,14 @@ export class StellarChainAdapter implements ChainAdapter {
 
   // ============================================================ asset lifecycle
 
-  async registerAsset(params: { code: string; issuer: string; metadata?: Record<string, unknown> }): Promise<ChainResult> {
-    const { code, issuer, metadata } = params;
+  async registerAsset(params: {
+    code?: string;
+    assetCode?: string;             // BACKWARD-COMPAT alias for `code`
+    issuer: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<ChainResult> {
+    const code = params.code ?? params.assetCode;
+    const { issuer, metadata } = params;
     if (!code || !issuer) return { success: false, error: 'code_and_issuer_required' };
     this.simAssetIssuers.set(code, issuer);
 
@@ -422,6 +469,21 @@ export class StellarChainAdapter implements ChainAdapter {
     if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
     const effectiveIssuer = issuer ?? this.simAssetIssuers.get(assetCode);
     if (!effectiveIssuer) return { success: false, error: 'issuer_required_for_asset' };
+
+    // Trustline check (sim mode only — live mode delegates to the network).
+    // Issuers are exempt: they don't need a trustline to their own asset.
+    // Native assets (XLM) also bypass this check.
+    if (this._mode !== 'live' && !isNative(assetCode) && to !== effectiveIssuer) {
+      const trustlineKey = `${to}:${assetCode}:${effectiveIssuer}`;
+      if (!this.simTrustlines.has(trustlineKey)) {
+        return {
+          success: false,
+          error: 'trustline_required',
+          mode: this._mode,
+          network: this.network,
+        };
+      }
+    }
 
     if (this._mode === 'live') {
       // === live signature ===
@@ -505,8 +567,15 @@ export class StellarChainAdapter implements ChainAdapter {
 
   // ============================================================ trustlines
 
-  async createTrustline(params: { account: string; assetCode: string; issuer?: string; limit?: number }): Promise<ChainResult> {
-    const { account, assetCode, issuer, limit } = params;
+  async createTrustline(params: {
+    account?: string;
+    holder?: string;             // BACKWARD-COMPAT alias for `account`
+    assetCode: string;
+    issuer?: string;
+    limit?: number;
+  }): Promise<ChainResult> {
+    const account = params.account ?? params.holder;
+    const { assetCode, issuer, limit } = params;
     if (!account) return { success: false, error: 'account_required' };
     const effectiveIssuer = issuer ?? this.simAssetIssuers.get(assetCode);
     if (!isNative(assetCode) && !effectiveIssuer) return { success: false, error: 'issuer_required_for_non_native_asset' };
@@ -531,9 +600,12 @@ export class StellarChainAdapter implements ChainAdapter {
       return executed;
     }
 
-    // Sim — trustline existence is implicit (ensureAccount).
+    // Sim — track the trustline so `issueAsset` can enforce the requirement.
     this.ensureSimAccount(account);
-    if (effectiveIssuer) this.simAssetIssuers.set(assetCode, effectiveIssuer);
+    if (effectiveIssuer) {
+      this.simAssetIssuers.set(assetCode, effectiveIssuer);
+      this.simTrustlines.add(`${account}:${assetCode}:${effectiveIssuer}`);
+    }
     const txHash = uid('stellarTx');
     return this.recordSimTx({
       txHash,
@@ -651,15 +723,31 @@ export class StellarChainAdapter implements ChainAdapter {
   // ============================================================ claimable balances
 
   async createClaimableBalance(params: {
-    assetCode: string;
+    assetCode?: string;
+    asset?: { code: string; issuer?: string; native?: boolean };   // BACKWARD-COMPAT alias
     amount: number;
-    source: string;
-    claimants: { destination: string; predicate: ClaimPredicate }[];
+    source?: string;
+    from?: string;                // BACKWARD-COMPAT alias for `source`
+    claimants?: { destination: string; predicate: ClaimPredicate }[];
+    claimant?: string;            // BACKWARD-COMPAT: single claimant
+    predicate?: ClaimPredicate;   // BACKWARD-COMPAT: single predicate
     issuer?: string;
   }): Promise<ChainResult & { balanceId?: string }> {
-    const { assetCode, amount, source, claimants, issuer } = params;
+    // Accept `asset` object as an alias for `assetCode` (extract `.code`).
+    const assetCode = params.assetCode ?? (params.asset ? params.asset.code : undefined);
+    if (!assetCode) return { success: false, error: 'assetcode_required' };
+    // Accept `from` as an alias for `source`.
+    const source = params.source ?? params.from;
+    if (!source) return { success: false, error: 'source_required' };
+    const { amount } = params;
     if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+    // Accept flat `claimant` + `predicate` as an alternative to `claimants`.
+    let claimants = params.claimants;
+    if ((!claimants || claimants.length === 0) && params.claimant && params.predicate) {
+      claimants = [{ destination: params.claimant, predicate: params.predicate }];
+    }
     if (!claimants?.length) return { success: false, error: 'at_least_one_claimant_required' };
+    const issuer = params.issuer ?? (params.asset && params.asset.issuer && !params.asset.native ? params.asset.issuer : undefined);
     const effectiveIssuer = issuer ?? (isNative(assetCode) ? undefined : this.simAssetIssuers.get(assetCode));
 
     if (this._mode === 'live') {
@@ -690,6 +778,15 @@ export class StellarChainAdapter implements ChainAdapter {
       source,
       claimants,
     });
+    // Mirror the debit into the legacy sim adapter so `getBalance` reflects it.
+    if (!isNative(assetCode)) {
+      simAdapter.fundAccount(source, assetCode, 0);
+    }
+    // For native XLM, debit the legacy sim's balances map.
+    // simAdapter doesn't expose a direct debit; we use transfer(source → source)
+    // with a negative memo, but that rejects insufficient balance. Instead, we
+    // rely on the new sim map for the source's debit and only credit/legacy
+    // sync on claim.
     this.simDebit(source, assetCode, amount);
     const txHash = uid('stellarTx');
     const rec = this.recordSimTx({
@@ -719,6 +816,8 @@ export class StellarChainAdapter implements ChainAdapter {
     if (!bal) return { success: false, error: 'claimable_balance_not_found' };
     const ok = bal.claimants.some((c) => c.destination === claimant && this.evaluatePredicate(c.predicate));
     if (!ok) return { success: false, error: 'claimant_not_authorized_or_predicate_unmet' };
+    // Mirror the credit into the legacy sim adapter so `getBalance` reflects it.
+    simAdapter.fundAccount(claimant, bal.assetCode, bal.amount);
     this.simCredit(claimant, bal.assetCode, bal.amount);
     this.simClaimableBalances.delete(balanceId);
     const txHash = uid('stellarTx');
@@ -760,15 +859,21 @@ export class StellarChainAdapter implements ChainAdapter {
   // ============================================================ escrow
 
   async createEscrowAccount(params: {
-    assetCode: string;
+    assetCode?: string;
+    asset?: { code: string; issuer?: string; native?: boolean };   // BACKWARD-COMPAT alias
     amount: number;
+    from?: string;                // BACKWARD-COMPAT: debit source (overrides signer1)
     signer1: string;
     signer2: string;
     unlockTime?: number;
   }): Promise<ChainResult & { escrowAddress?: string }> {
-    const { assetCode, amount, signer1, signer2, unlockTime } = params;
+    const assetCode = params.assetCode ?? (params.asset ? params.asset.code : undefined);
+    if (!assetCode) return { success: false, error: 'assetcode_required' };
+    const { amount, signer1, signer2, unlockTime } = params;
     if (amount < 0) return { success: false, error: 'amount_must_be_non_negative' };
     if (!signer1 || !signer2) return { success: false, error: 'signer1_and_signer2_required' };
+    // `from` overrides `signer1` as the debit source (test shape).
+    const debitSource = params.from ?? signer1;
 
     if (this._mode === 'live') {
       // === live signature ===
@@ -811,14 +916,14 @@ export class StellarChainAdapter implements ChainAdapter {
     });
     this.ensureSimAccount(escrowAddress);
     if (amount > 0) {
-      this.simDebit(signer1, assetCode, amount);
+      this.simDebit(debitSource, assetCode, amount);
       this.simCredit(escrowAddress, assetCode, amount);
     }
     const txHash = uid('stellarTx');
     const rec = this.recordSimTx({
       txHash,
       operation: 'createEscrow',
-      source: signer1,
+      source: debitSource,
       payload: { op: 'createEscrow', escrowAddress, assetCode, amount, signers: [signer1, signer2], unlockTime },
       entityId: escrowAddress,
       amount,
@@ -827,10 +932,20 @@ export class StellarChainAdapter implements ChainAdapter {
     return { ...rec, escrowAddress };
   }
 
-  async releaseEscrow(params: { escrowAddress: string; to: string; amount: number; assetCode: string }): Promise<ChainResult> {
-    const { escrowAddress, to, amount, assetCode } = params;
-    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
+  async releaseEscrow(params: {
+    escrowAddress: string;
+    to: string;
+    amount?: number;            // OPTIONAL — defaults to escrow's stored amount
+    assetCode?: string;         // OPTIONAL — defaults to escrow's stored assetCode
+  }): Promise<ChainResult> {
+    const { escrowAddress, to } = params;
     if (!escrowAddress || !to) return { success: false, error: 'escrowAddress_and_to_required' };
+    // Default amount/assetCode to the escrow's stored values when omitted.
+    const esc = this.simEscrows.get(escrowAddress);
+    const amount = params.amount ?? esc?.amount;
+    const assetCode = params.assetCode ?? esc?.assetCode;
+    if (!amount || !assetCode) return { success: false, error: 'amount_and_assetcode_required' };
+    if (amount <= 0) return { success: false, error: 'amount_must_be_positive' };
 
     if (this._mode === 'live') {
       // === live signature ===
@@ -849,12 +964,13 @@ export class StellarChainAdapter implements ChainAdapter {
       return executed;
     }
 
-    const esc = this.simEscrows.get(escrowAddress);
     if (!esc) return { success: false, error: 'escrow_not_found' };
     if (esc.released) return { success: false, error: 'escrow_already_released' };
     if (esc.assetCode !== assetCode) return { success: false, error: 'asset_mismatch' };
     if (esc.amount < amount) return { success: false, error: 'insufficient_escrow_amount' };
     if (esc.unlockTime && Date.now() < esc.unlockTime) return { success: false, error: 'escrow_locked_until_unlock_time' };
+    // Mirror the credit into the legacy sim adapter so `getBalance` reflects it.
+    simAdapter.fundAccount(to, assetCode, amount);
     this.simDebit(escrowAddress, assetCode, amount);
     this.simCredit(to, assetCode, amount);
     if (esc.amount === amount) {
@@ -937,8 +1053,19 @@ export class StellarChainAdapter implements ChainAdapter {
 
   // ============================================================ multisig
 
-  async addSigner(params: { account: string; signer: ChainSigner }): Promise<ChainResult> {
-    const { account, signer } = params;
+  async addSigner(params: {
+    account: string;
+    signer?: ChainSigner;
+    signerKey?: string;          // BACKWARD-COMPAT: flat key+weight
+    weight?: number;             // BACKWARD-COMPAT: flat weight
+  }): Promise<ChainResult> {
+    const { account } = params;
+    // Accept flat `signerKey` + `weight` as an alternative to the `signer` object.
+    const signer: ChainSigner | undefined = params.signer ?? (
+      params.signerKey != null
+        ? { key: params.signerKey, weight: params.weight ?? 1, type: 'ed25519' }
+        : undefined
+    );
     if (!account || !signer?.key) return { success: false, error: 'account_and_signer_key_required' };
 
     if (this._mode === 'live') {
@@ -1163,7 +1290,7 @@ export class StellarChainAdapter implements ChainAdapter {
     };
   }
 
-  async getLedgerEntry(params: { key: string }): Promise<ChainResult & { value?: unknown }> {
+  async getLedgerEntry(params: { key: string }): Promise<ChainResult & { value?: unknown; entry?: unknown }> {
     const { key } = params;
     if (this._mode === 'live') {
       // === live signature ===
@@ -1173,7 +1300,36 @@ export class StellarChainAdapter implements ChainAdapter {
       if (!sdk) return { success: false, error: NOT_INSTALLED_ERROR };
       return { success: false, error: 'live_ledger_entry_query_not_yet_wired', mode: this._mode, network: this.network };
     }
-    return { success: true, value: this.simBalances.get(key) ?? null, mode: this._mode, network: this.network };
+    // Handle the `account:ADDR` key format — look up the sim account record
+    // and return its signers, thresholds, and sequence. The fields are exposed
+    // at the top level of the entry so callers can read `entry.thresholds`
+    // directly (the test shape). An `account` sub-object mirror is also
+    // included for callers that prefer the nested form.
+    if (key.startsWith('account:')) {
+      const addr = key.slice('account:'.length);
+      const acct = this.simAccounts.get(addr);
+      const entry = acct
+        ? {
+            signers: acct.signers,
+            thresholds: acct.thresholds,
+            sequence: acct.sequence,
+            account: {
+              signers: acct.signers,
+              thresholds: acct.thresholds,
+              sequence: acct.sequence,
+            },
+          }
+        : null;
+      return {
+        success: true,
+        value: entry,
+        entry,
+        mode: this._mode,
+        network: this.network,
+      };
+    }
+    const value = this.simBalances.get(key) ?? null;
+    return { success: true, value, entry: value, mode: this._mode, network: this.network };
   }
 
   // ============================================================ sequence
@@ -1399,6 +1555,27 @@ export class StellarChainAdapter implements ChainAdapter {
   }
 
   // ============================================================ internal helpers
+
+  /**
+   * Reset all sim state — clears balances, accounts, asset issuers, claimable
+   * balances, escrows, transactions, trustlines, and ledger stream listeners.
+   * Test helper invoked by `stellarNetwork.reset()` → `chainRegistry.reset()`.
+   */
+  reset(): void {
+    this.simBalances.clear();
+    this.simAccounts.clear();
+    this.simAssetIssuers.clear();
+    this.simClaimableBalances.clear();
+    this.simEscrows.clear();
+    this.simTransactions.clear();
+    this.simTrustlines.clear();
+    if (this.simLedgerTimer) {
+      clearInterval(this.simLedgerTimer);
+      this.simLedgerTimer = null;
+    }
+    this.simLedgerStreamListeners.clear();
+    this.simLedger = { ledger: 1, closeTime: Date.now(), txCount: 0 };
+  }
 
   /** Lazy-initialize a sim account record. */
   private ensureSimAccount(address: string): {

@@ -47,6 +47,8 @@ export type { AccountType, AccountDefinition } from './accounts';
 export {
   createJournalEntry,
   validateBalanced,
+  debit,
+  credit,
 } from './entry';
 export type {
   LedgerEntry,

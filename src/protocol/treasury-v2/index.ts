@@ -107,3 +107,7 @@ export {
 
 // M-RT-20 fix: re-export emergencyFreezeEngine (needed by /api/treasury/freeze).
 export { EmergencyFreezeEngine, emergencyFreezeEngine } from './freezes';
+
+// Re-export alert + yield engines (test + dashboard consumers).
+export { AlertEngine, alertEngine } from './alerts';
+export { YieldEngine, yieldEngine } from './yield';

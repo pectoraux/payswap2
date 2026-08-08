@@ -58,14 +58,36 @@ export class DedupStore {
     this.defaultTtlMs = defaultTtlMs;
   }
 
+  /** Reset the store — clears every entry. Test helper. */
+  reset(): void {
+    this.store.clear();
+  }
+
+  // ----------------------------------------------------------- key normaliser
+  /**
+   * Normalise a dedup key. Accepts:
+   *   - a plain string (returned as-is),
+   *   - an object `{ scope, key }` (serialised to `scope:key`),
+   *   - any other object (canonicalised via `idempotencyKey`).
+   */
+  private normaliseKey(key: string | { scope: string; key: string } | object): string {
+    if (typeof key === 'string') return key;
+    if (key !== null && typeof key === 'object' && 'scope' in key && 'key' in key) {
+      const k = key as { scope: string; key: string };
+      return `${k.scope}:${k.key}`;
+    }
+    return idempotencyKey(key);
+  }
+
   // ------------------------------------------------------------- check / mark
   /** Check whether `key` has been seen. Does NOT mutate the store. */
-  check(key: string): DedupCheckResult {
-    const entry = this.store.get(key);
+  check(key: string | { scope: string; key: string } | object): DedupCheckResult {
+    const k = this.normaliseKey(key);
+    const entry = this.store.get(k);
     if (!entry) return { seen: false };
     if (nowTs() >= entry.expiresAt) {
       // Expired — clean up and report as unseen.
-      this.store.delete(key);
+      this.store.delete(k);
       return { seen: false };
     }
     const result: DedupCheckResult = {
@@ -81,9 +103,10 @@ export class DedupStore {
    * (non-expired) key refreshes its TTL but does NOT overwrite the original
    * result — once a result is cached, it is sticky until expiry.
    */
-  mark(key: string, result?: unknown, ttlMs: number = this.defaultTtlMs): void {
+  mark(key: string | { scope: string; key: string } | object, result?: unknown, ttlMs: number = this.defaultTtlMs): void {
+    const k = this.normaliseKey(key);
     if (ttlMs <= 0) return;
-    const existing = this.store.get(key);
+    const existing = this.store.get(k);
     const ts = nowTs();
     if (existing && nowTs() < existing.expiresAt) {
       // Refresh TTL, preserve original firstSeenTs and original result.
@@ -94,7 +117,7 @@ export class DedupStore {
       }
       return;
     }
-    this.store.set(key, {
+    this.store.set(k, {
       firstSeenTs: ts,
       expiresAt: ts + ttlMs,
       result,
@@ -114,23 +137,25 @@ export class DedupStore {
    * after `fn` resolves.
    */
   async checkOrMark<T>(
-    key: string,
+    key: string | { scope: string; key: string } | object,
     fn: () => Promise<T>,
     ttlMs: number = this.defaultTtlMs,
-  ): Promise<T> {
-    const hit = this.check(key);
+  ): Promise<{ fromCache: boolean; result: T }> {
+    const k = this.normaliseKey(key);
+    const hit = this.check(k);
     if (hit.seen && hit.originalResult !== undefined) {
-      return hit.originalResult as T;
+      return { fromCache: true, result: hit.originalResult as T };
     }
     const value = await fn();
-    this.mark(key, value, ttlMs);
-    return value;
+    this.mark(k, value, ttlMs);
+    return { fromCache: false, result: value };
   }
 
   // ----------------------------------------------------------------- utility
   /** Drop a single key (e.g. after an explicit invalidate). */
-  forget(key: string): boolean {
-    return this.store.delete(key);
+  forget(key: string | { scope: string; key: string } | object): boolean {
+    const k = this.normaliseKey(key);
+    return this.store.delete(k);
   }
 
   /** Sweep all expired entries. Returns the count removed. */

@@ -18,7 +18,7 @@ import type { MetricsRegistry, AnyMetric, Counter, Gauge, Histogram } from './me
 import { METRIC_NAMES } from './metrics';
 
 /** Comparison operators supported by alert rules. */
-export type AlertCondition = 'gt' | 'lt' | 'gte' | 'lte';
+export type AlertCondition = 'gt' | 'lt' | 'gte' | 'lte' | 'eq';
 
 /** Alert severity tiers. */
 export type AlertSeverity = 'info' | 'warning' | 'critical';
@@ -67,7 +67,14 @@ export interface AlertTimeRange {
 
 /**
  * Returns true when `value <op> threshold` holds.
+ *
+ * Exported as `checkCondition` so tests + external callers can evaluate a
+ * rule's condition without going through the full AlertManager pipeline.
  */
+export function checkCondition(condition: AlertCondition, value: number, threshold: number): boolean {
+  return matches(condition, value, threshold);
+}
+
 function matches(condition: AlertCondition, value: number, threshold: number): boolean {
   switch (condition) {
     case 'gt':
@@ -78,6 +85,8 @@ function matches(condition: AlertCondition, value: number, threshold: number): b
       return value >= threshold;
     case 'lte':
       return value <= threshold;
+    case 'eq':
+      return value === threshold;
     default:
       return false;
   }
@@ -228,11 +237,13 @@ export class AlertManager {
 // ---------------------------------------------------------------------------
 
 /** Build an AlertManager pre-loaded with PaySwap's default rules. */
-function createDefaultAlertManager(): AlertManager {
-  const mgr = new AlertManager();
-
-  // Settlement p99 latency above 10s → warning.
-  mgr.addRule({
+/**
+ * The 5 critical PaySwap alert rules. Exported so tests + dashboards can
+ * verify the canonical set is registered, and so downstream consumers can
+ * re-register them on a fresh AlertManager if needed.
+ */
+export const STANDARD_ALERT_RULES: AlertRule[] = [
+  {
     id: 'settlement_p99_high',
     name: 'Settlement p99 latency above 10s',
     metric: METRIC_NAMES.settlementDurationMs,
@@ -241,10 +252,8 @@ function createDefaultAlertManager(): AlertManager {
     severity: 'warning',
     cooldownMs: 60_000,
     evaluate: (r) => r.getHistogram(METRIC_NAMES.settlementDurationMs)?.percentile(0.99) ?? 0,
-  });
-
-  // Connector error rate above 5% → critical.
-  mgr.addRule({
+  },
+  {
     id: 'connector_error_rate_high',
     name: 'Connector error rate above 5%',
     metric: METRIC_NAMES.connectorRequestsTotal,
@@ -260,12 +269,8 @@ function createDefaultAlertManager(): AlertManager {
       const failed = c.get({ status: 'error' });
       return failed / total;
     },
-  });
-
-  // Treasury reserve ratio below 1.1 → critical.
-  // The gauge is populated by the dashboards refresh step; before it has been
-  // set we return a safe high value so the alert does not fire on cold start.
-  mgr.addRule({
+  },
+  {
     id: 'treasury_reserve_ratio_low',
     name: 'Treasury reserve ratio below 1.1',
     metric: METRIC_NAMES.treasuryReserveRatio,
@@ -278,8 +283,45 @@ function createDefaultAlertManager(): AlertManager {
       if (!g || !g.has()) return Number.MAX_SAFE_INTEGER;
       return g.get();
     },
-  });
+  },
+  {
+    id: 'lp_active_count_low',
+    name: 'Active LP count below 3',
+    metric: 'payswap_lp_active_count',
+    condition: 'lt',
+    threshold: 3,
+    severity: 'warning',
+    cooldownMs: 60_000,
+    evaluate: (r) => {
+      const g = r.getGauge('payswap_lp_active_count');
+      if (!g || !g.has()) return Number.MAX_SAFE_INTEGER;
+      return g.get();
+    },
+  },
+  {
+    id: 'webhook_failure_rate_high',
+    name: 'Webhook failure rate above 10%',
+    metric: 'payswap_webhook_requests_total',
+    condition: 'gt',
+    threshold: 0.10,
+    severity: 'critical',
+    cooldownMs: 30_000,
+    evaluate: (r) => {
+      const c = r.getCounter('payswap_webhook_requests_total');
+      if (!c) return 0;
+      const total = c.total();
+      if (total <= 0) return 0;
+      const failed = c.get({ status: 'failed' });
+      return failed / total;
+    },
+  },
+];
 
+function createDefaultAlertManager(): AlertManager {
+  const mgr = new AlertManager();
+  for (const rule of STANDARD_ALERT_RULES) {
+    mgr.addRule(rule);
+  }
   return mgr;
 }
 

@@ -40,6 +40,7 @@ export {
 
 export {
   executeWithRetry,
+  defaultRetryPolicy,
   DEFAULT_RETRY_POLICY,
 } from './retry';
 export type { RetryPolicy, RetryOutcome } from './retry';
@@ -49,17 +50,21 @@ export type { AcquireResult } from './rate-limiter';
 
 export { IdempotencyStore } from './idempotency';
 
-export { HealthMonitor, DEFAULT_FAILURE_THRESHOLD } from './health';
+export { HealthMonitor, DEFAULT_FAILURE_THRESHOLD, sharedHealthMonitor } from './health';
 
-export { MetricsCollector } from './metrics';
+export { MetricsCollector, sharedMetricsCollector } from './metrics';
 
 export {
   auditLog,
   getAuditLog,
   auditLogSize,
   clearAuditLog,
+  auditLogInstance,
 } from './audit';
 export type { ConnectorAuditEntry, AuditLogFilter } from './audit';
+
+export { buildAttestationEvidence } from './attestation';
+export type { BuildAttestationEvidenceParams } from './attestation';
 
 export { ProductionConnector } from './base';
 export type { DoQueryResult } from './base';

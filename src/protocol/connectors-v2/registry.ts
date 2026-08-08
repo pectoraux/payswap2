@@ -10,9 +10,9 @@
  * production connectors using their default configs. Tests that need a
  * fresh registry can construct `new ProductionConnectorRegistry()`.
  */
-import type { ConnectorHealth, ConnectorId, ConnectorMetrics } from './types';
-import { HealthMonitor } from './health';
-import { MetricsCollector } from './metrics';
+import type { ConnectorHealth, ConnectorId, ConnectorMetrics, ConnectorRequest, ConnectorResponse } from './types';
+import { HealthMonitor, sharedHealthMonitor } from './health';
+import { MetricsCollector, sharedMetricsCollector } from './metrics';
 import { getAuditLog, type AuditLogFilter, type ConnectorAuditEntry } from './audit';
 import { ProductionConnector } from './base';
 import { OpenBankingConnector } from './open-banking';
@@ -30,8 +30,11 @@ export class ProductionConnectorRegistry {
   readonly metrics: MetricsCollector;
 
   constructor() {
-    this.health = new HealthMonitor();
-    this.metrics = new MetricsCollector();
+    // Use the shared singletons so test connectors (constructed without
+    // explicit deps) and registry-backed connectors observe the same state.
+    // Tests can call `sharedHealthMonitor.reset()` to wipe both at once.
+    this.health = sharedHealthMonitor;
+    this.metrics = sharedMetricsCollector;
   }
 
   /** Register a connector. Overwrites an existing one with the same id. */
@@ -44,9 +47,36 @@ export class ProductionConnectorRegistry {
     return this.connectors.get(id);
   }
 
+  /** All registered connector ids. */
+  ids(): ConnectorId[] {
+    return [...this.connectors.keys()];
+  }
+
   /** All registered connectors. */
   all(): AnyProductionConnector[] {
     return [...this.connectors.values()];
+  }
+
+  /**
+   * Convenience: run a query against the named connector. Returns a failure
+   * response (NOT_FOUND) if the connector isn't registered — never throws.
+   */
+  async query(id: ConnectorId, request: ConnectorRequest): Promise<ConnectorResponse> {
+    const connector = this.connectors.get(id);
+    if (!connector) {
+      return {
+        success: false,
+        error: {
+          code: 'UNKNOWN',
+          message: `connector_not_registered:${id}`,
+          retryable: false,
+        },
+        latencyMs: 0,
+        attempts: 0,
+        requestId: request.id,
+      };
+    }
+    return connector.query(request);
   }
 
   /** Run health checks against every connector. Returns the full report. */

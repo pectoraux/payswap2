@@ -25,6 +25,8 @@ export {
   metricsRegistry,
   METRIC_NAMES,
   DEFAULT_BUCKETS_MS,
+  labelKey,
+  histogramPercentile,
 } from './metrics';
 export type {
   LabelSet,
@@ -38,7 +40,12 @@ export type {
 } from './metrics';
 
 // Alerts --------------------------------------------------------------------
-export { AlertManager, alertManager } from './alerts';
+export {
+  AlertManager,
+  alertManager,
+  STANDARD_ALERT_RULES,
+  checkCondition,
+} from './alerts';
 export type {
   AlertRule,
   Alert,
@@ -50,6 +57,49 @@ export type {
 // SLOs ----------------------------------------------------------------------
 export { SLOManager, sloManager } from './slos';
 export type { SLO, SLOStatus, SLODirection, ErrorBudget } from './slos';
+
+// Correlation ---------------------------------------------------------------
+export {
+  withCorrelation,
+  currentCorrelation,
+  newTraceId,
+  newSpanId,
+  enterCorrelation,
+  correlationHeaders,
+} from './correlation';
+export type { CorrelationContext } from './correlation';
+
+// Tracing -------------------------------------------------------------------
+export {
+  withSpan,
+  withSpanAsync,
+  inMemorySpanExporter,
+  tracerProvider,
+  tracer,
+  SPAN_NAMES,
+} from './tracing';
+export type {
+  Span,
+  SpanEvent,
+  SpanKind,
+  SpanStatus,
+  SpanExporter,
+  SpanProcessor,
+  StartedSpan,
+  StartSpanOptions,
+  WithSpanOptions,
+} from './tracing';
+
+// Logger --------------------------------------------------------------------
+export {
+  logger,
+  sharedLogBuffer,
+  log,
+  logAt,
+  Logger,
+  LogBuffer,
+} from './logger';
+export type { LogEntry, LogLevel, LoggerOptions } from './logger';
 
 // Dashboards ----------------------------------------------------------------
 export {

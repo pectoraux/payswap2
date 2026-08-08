@@ -132,14 +132,36 @@ export class BackingVerifier {
    * Returns a `BackingVerification` with the ratio, discrepancy,
    * and verification result. Emits `treasury.backing_verified`
    * (when verified) or `treasury.backing_mismatch` (when not).
+   *
+   * Backward-compat overload: `verifyBacking(assetCode, twinTokenEngine, reserveMonitor)`
+   * derives `circulating` / `escrowed` from the twin-token engine and
+   * `reserveAvailable` from the reserve monitor.
    */
   verifyBacking(
     assetCode: string,
-    circulating: number,
-    escrowed: number,
+    circulatingOrEngine: number | TwinTokenLike,
+    escrowedOrReserveMonitor?: number | ReserveMonitorLike,
     reserveAvailable?: number,
   ): BackingVerification {
-    const reserve = reserveAvailable ?? this.reserveResolver(assetCode);
+    let circulating: number;
+    let escrowed: number;
+    let reserve: number | undefined;
+    if (typeof circulatingOrEngine === 'number') {
+      circulating = circulatingOrEngine;
+      escrowed = (escrowedOrReserveMonitor as number) ?? 0;
+      reserve = reserveAvailable ?? this.reserveResolver(assetCode);
+    } else {
+      // Alternate shape: (assetCode, twinTokenEngine, reserveMonitor).
+      const engine = circulatingOrEngine as TwinTokenLike;
+      const mon = escrowedOrReserveMonitor as ReserveMonitorLike | undefined;
+      const asset = engine.getAsset?.(assetCode) as
+        | { circulating?: number; escrowed?: number; totalSupply?: number }
+        | undefined;
+      circulating = asset?.circulating ?? asset?.totalSupply ?? 0;
+      escrowed = asset?.escrowed ?? 0;
+      const currency = assetCode.startsWith('TWIN') ? assetCode.slice(4) : assetCode;
+      reserve = mon?.available?.(currency) ?? mon?.getReserve?.(currency)?.available ?? this.reserveResolver(assetCode);
+    }
     const ratio = circulating <= 0 ? 1.0 : reserve / circulating;
     const discrepancy = circulating - reserve; // positive = shortfall
     const verified = ratio >= this.tolerance;

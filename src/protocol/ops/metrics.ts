@@ -62,11 +62,18 @@ export interface HistogramSnapshot {
 /**
  * Canonical serialization key for a label set. Uses the metric's declared
  * label names when available so missing labels sort deterministically.
+ *
+ * Output format is Prometheus-style: `a="1",b="2",c="3"` (declared order,
+ * quoted values, comma-separated). Returns the empty string when no labels
+ * are present so the "unlabelled" series has a stable, distinct identity.
  */
-function labelKey(declared: string[], labels?: LabelSet): string {
+export function labelKey(declared: string[], labels?: LabelSet): string {
   const l = labels ?? {};
   const names = declared.length > 0 ? declared : Object.keys(l).sort();
-  return names.map((k) => `${k}=${l[k] ?? ''}`).join('|');
+  const parts = names.map((k) => `${k}="${l[k] ?? ''}"`);
+  // If every value is empty, treat the label set as unlabelled.
+  if (parts.length > 0 && names.every((k) => !l[k])) return '';
+  return parts.join(',');
 }
 
 /** Pretty-print a label set for the Prometheus exposition format. */
@@ -101,10 +108,18 @@ export class Counter implements MetricDescriptor {
     this.labels = labels;
   }
 
-  /** Increment the counter for a label set. `value` must be ≥ 0. */
+  /**
+   * Increment the counter for a label set. `value` must be ≥ 0 — negative
+   * values are silently ignored (counters are monotonic). Throws on NaN /
+   * non-finite values (those indicate a caller bug).
+   */
   inc(labels?: LabelSet, value = 1): void {
+    if (!Number.isFinite(value)) {
+      throw new Error(`Counter ${this.name}.inc: value must be a finite number (got ${value})`);
+    }
     if (value < 0) {
-      throw new Error(`Counter ${this.name}.inc: value must be non-negative (got ${value})`);
+      // Counters are monotonic — ignore negative increments silently.
+      return;
     }
     const k = labelKey(this.labels, labels);
     const e = this.entries.get(k);
@@ -285,14 +300,38 @@ export class Histogram implements MetricDescriptor {
   /**
    * Nearest-rank percentile across ALL observations (ignoring labels).
    * `p` ∈ [0,1]. Returns 0 when no observations have been recorded.
+   *
+   * Backward-compat overload: `percentile(labels, p)` computes the percentile
+   * for a single label set (equivalent to `percentileFor(p, labels)`).
    */
-  percentile(p: number): number {
-    const n = this.globalValues.length;
-    if (n === 0) return 0;
-    const clamped = Math.min(1, Math.max(0, p));
-    const sorted = [...this.globalValues].sort((a, b) => a - b);
-    const rank = Math.max(1, Math.ceil(clamped * n));
-    return sorted[Math.min(rank - 1, n - 1)];
+  percentile(pOrLabels: number | LabelSet, maybeP?: number): number {
+    if (typeof pOrLabels === 'number') {
+      const n = this.globalValues.length;
+      if (n === 0) return 0;
+      const clamped = Math.min(1, Math.max(0, pOrLabels));
+      const sorted = [...this.globalValues].sort((a, b) => a - b);
+      const rank = Math.max(1, Math.ceil(clamped * n));
+      return sorted[Math.min(rank - 1, n - 1)];
+    }
+    // labels + p overload.
+    const p = maybeP ?? 0.5;
+    return this.percentileFor(p, pOrLabels);
+  }
+
+  /**
+   * Per-label-set snapshot: `{ count, sum, buckets }` or `undefined` when the
+   * label set has no observations yet. Buckets are cumulative (Prometheus
+   * convention: each bucket count includes observations from lower buckets).
+   */
+  get(labels?: LabelSet): HistogramSnapshot | undefined {
+    const e = this.entries.get(labelKey(this.labels, labels));
+    if (!e) return undefined;
+    const buckets: HistogramBucket[] = e.bucketCounts.map((c, i) => ({
+      le: this.buckets[i],
+      count: c,
+    }));
+    buckets.push({ le: Infinity, count: e.count });
+    return { labels: e.labels, buckets, sum: round(e.sum, 6), count: e.count };
   }
 
   /** Percentile restricted to a single label set. */
@@ -350,6 +389,33 @@ export class Histogram implements MetricDescriptor {
     this.globalCount = 0;
     this.globalBuckets = this.buckets.map(() => 0);
   }
+}
+
+/**
+ * Standalone percentile helper — computes the nearest-rank percentile from a
+ * histogram view (`{ count, sum, buckets }`) without needing the Histogram
+ * instance. Returns 0 when the histogram is empty (count = 0).
+ *
+ * Buckets are cumulative (Prometheus convention): each bucket count includes
+ * observations from lower buckets. The percentile is the smallest bucket
+ * upper bound whose count ≥ `p * totalCount`.
+ */
+export function histogramPercentile(
+  hv: { count: number; sum: number; buckets: { le: number; count: number }[] },
+  p: number,
+): number {
+  if (!hv || hv.count === 0) return 0;
+  const clamped = Math.min(1, Math.max(0, p));
+  const target = clamped * hv.count;
+  let lastLe = 0;
+  for (const b of hv.buckets) {
+    if (b.count >= target) {
+      if (b.le === Infinity) return lastLe;
+      return b.le;
+    }
+    if (b.le !== Infinity) lastLe = b.le;
+  }
+  return lastLe;
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +622,7 @@ export const METRIC_NAMES = {
 function createDefaultRegistry(): MetricsRegistry {
   const r = new MetricsRegistry();
   r.registerCounter(METRIC_NAMES.paymentsTotal, 'Total payments processed, by status.', ['status']);
-  r.registerCounter(METRIC_NAMES.payoutsTotal, 'Total payouts initiated, by state.', ['state']);
+  r.registerCounter(METRIC_NAMES.payoutsTotal, 'Total payouts initiated, by status.', ['status']);
   r.registerHistogram(
     METRIC_NAMES.settlementDurationMs,
     'Settlement duration in milliseconds.',

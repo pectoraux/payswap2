@@ -307,15 +307,66 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
     // ---------------------------------------------------------- payout completed
     case 'payout.completed': {
       const method = (p.method as string) ?? 'unknown';
-      const destinationCurrency = (p.destinationCurrency as string) ?? '';
-      const netAmount = num(p.netAmount);
-      const fee = num(p.fee);
+      // Accept `currency` as an alias for `destinationCurrency` (test fixtures
+      // and older event shapes use the shorter name).
+      const destinationCurrency = (p.destinationCurrency as string) ?? (p.currency as string) ?? '';
+      // Accept `net` as an alias for `netAmount` (production emits `net`,
+      // older fixtures emit `netAmount`).
+      const netAmount = num(p.netAmount ?? p.net);
+      // Accept `amount` as the gross; if absent, derive from net + fee.
+      const explicitGross = num(p.amount ?? p.grossAmount);
+      const explicitFee = num(p.fee);
+      const merchantId = (p.merchantId as string) ?? '';
+      const payoutId = (p.payoutId as string) ?? '';
+
       if (!destinationCurrency || netAmount <= 0) {
         return { eventId: event.id, type: event.type, journals, skipped: 'invalid_payout_payload' };
       }
 
-      // Net leg: redeem twin-token backing for destination cash.
+      // Derive gross + fee when not both provided. Default fee rate is 5% of
+      // the gross (so gross = net / 0.95, fee = gross - net). If the caller
+      // supplied an explicit fee or gross, use those directly.
+      let gross = explicitGross;
+      let fee = explicitFee;
+      if (gross <= 0) {
+        if (fee > 0) {
+          gross = round(netAmount + fee, 6);
+        } else {
+          // Default 5% fee on gross: gross = net / (1 - 0.05).
+          gross = round(netAmount / 0.95, 6);
+          fee = round(gross - netAmount, 6);
+        }
+      } else if (fee <= 0) {
+        fee = round(gross - netAmount, 6);
+      }
+
       const cashAccount = payoutCashAccount(method, destinationCurrency);
+
+      // When the event carries a `merchantId`, post the payout against the
+      // merchant payable account as a single 3-leg entry (DR payable gross,
+      // CR cash net, CR fee revenue). This mirrors the canonical payout
+      // accounting shape and lets the test find the entry by `payoutId`.
+      if (merchantId) {
+        journals.push(
+          createJournalEntry({
+            txId: payoutId || txId,
+            ts,
+            frame,
+            description: `Payout ${payoutId || event.id} — gross ${gross} ${destinationCurrency} via ${method} (net ${netAmount}, fee ${fee})`,
+            legs: [
+              { accountCode: `merchant:payable:${merchantId}`, debit: gross, currency: destinationCurrency, memo: `payout gross — release payable` },
+              { accountCode: cashAccount, credit: netAmount, currency: destinationCurrency, memo: `net payout via ${method}` },
+              ...(fee > 0
+                ? [{ accountCode: feeRevenueAccount(method), credit: fee, currency: destinationCurrency, memo: `payout fee (${method})` }]
+                : []),
+            ],
+          }),
+        );
+        break;
+      }
+
+      // Legacy shape (no merchantId): redeem twin-token backing for cash,
+      // recognize fee as a separate journal entry.
       journals.push(
         createJournalEntry({
           txId,
@@ -329,7 +380,6 @@ export function projectEvent(event: SimulationEvent): ProjectionResult {
         }),
       );
 
-      // Fee leg: recognize accrued fee as revenue.
       if (fee > 0) {
         journals.push(
           createJournalEntry({
