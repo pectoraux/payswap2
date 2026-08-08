@@ -38,21 +38,30 @@ export type SettlementStrategy =
 
 /** A treasury action within a liquidity execution plan. */
 export interface TreasuryAction {
-  actionType: 'credit_reserve' | 'debit_reserve' | 'mint_twin' | 'burn_twin' | 'purchase_stablecoin' | 'sell_stablecoin' | 'lock_stablecoin' | 'release_stablecoin';
+  actionType: 'credit_reserve' | 'debit_reserve' | 'mint_twin' | 'burn_twin' | 'purchase_stablecoin' | 'sell_stablecoin' | 'lock_stablecoin' | 'release_stablecoin' | 'convert_fx';
   accountId: string;
   currency: string;
   amount: number;
   reason: string;
+  /** For convert_fx: the FX quote driving the conversion. */
+  fxQuote?: FxQuote;
+  /** For convert_fx: the destination currency after conversion. */
+  destinationCurrency?: string;
+  /** For convert_fx: the amount in destination currency. */
+  destinationAmount?: number;
 }
 
 /** A liquidity action (LP bandwidth usage). */
 export interface LiquidityAction {
+  // S1: Added 'fiat' asset type for tier 2 (LP FIAT bandwidth)
   actionType: 'lock_bandwidth' | 'release_bandwidth' | 'escrow_bandwidth' | 'slash_bandwidth';
   lpId: string;
   country: string;
-  assetType: 'twin_token' | 'stablecoin';
+  assetType: 'twin_token' | 'stablecoin' | 'fiat';
   amount: number;
   reason: string;
+  /** For fiat asset type: the LP's mandate reference (standing authorization). */
+  mandateReference?: string;
 }
 
 /** A settlement action. */
@@ -184,6 +193,28 @@ export interface DisputeEvidence {
   submittedAt: number;
 }
 
+// ─── FX Quote (F1: two-currency support) ───────────────────────────────────
+
+/** An FX quote for a cross-currency transfer. */
+export interface FxQuote {
+  /** Source currency (e.g. 'GHS'). */
+  fromCurrency: string;
+  /** Destination currency (e.g. 'NGN'). */
+  toCurrency: string;
+  /** Exchange rate: 1 fromCurrency = rate toCurrency. */
+  rate: number;
+  /** Amount in source currency. */
+  sourceAmount: number;
+  /** Amount in destination currency (sourceAmount × rate). */
+  destinationAmount: number;
+  /** Spread in basis points. */
+  spreadBps: number;
+  /** Quote expiry timestamp (ms). */
+  expiresAt: number;
+  /** Who provides the quote (for audit). */
+  provider: string;
+}
+
 // ─── Liquidity Intent ──────────────────────────────────────────────────────
 
 /** The intent that flows into the Liquidity Policy Engine. */
@@ -192,6 +223,11 @@ export interface LiquidityIntent {
   fromCountry: string;
   toCountry: string;
   amount: number;
+  /** Source currency (sender's currency, e.g. 'GHS'). */
+  sourceCurrency: string;
+  /** Destination currency (recipient's currency, e.g. 'NGN'). */
+  destinationCurrency: string;
+  /** @deprecated Use sourceCurrency. Kept for backward compatibility. */
   currency: string;
   senderAccountId: string;
   recipientAccountId: string;
@@ -199,8 +235,10 @@ export interface LiquidityIntent {
   senderHasReserve: boolean;
   /** Whether the receiver country has a fiat reserve. */
   receiverHasReserve: boolean;
-  /** Whether it's a same-country transfer. */
+  /** Whether it's a same-country AND same-currency transfer. */
   isLocal: boolean;
+  /** FX quote (if cross-currency). Null for same-currency transfers. */
+  fxQuote?: FxQuote | null;
 }
 
 // ─── Twin Token Backing ────────────────────────────────────────────────────

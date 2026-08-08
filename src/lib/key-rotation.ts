@@ -37,17 +37,20 @@ class KeyRotationManager {
 
   /**
    * Get the active JWT secret (for signing new tokens).
+   * SECURITY: no fallback. Throws if NEXTAUTH_SECRET is unset.
    */
   getActiveJwtSecret(): string {
     const active = Array.from(this.jwtKeys.values()).find(k => k.status === 'active');
     if (active) return active.key;
     // No rotated key active — require the env secret (fail closed if missing).
+    // Canonical implementation lives in @/lib/secrets.
     return requireNextAuthSecret();
   }
 
   /**
    * Get all valid JWT secrets (for verifying tokens).
    * During rotation, both old and new secrets are valid.
+   * SECURITY: no fallback. Throws if NEXTAUTH_SECRET is unset.
    */
   getValidJwtSecrets(): string[] {
     const now = Date.now();
@@ -58,6 +61,7 @@ class KeyRotationManager {
     });
     if (valid.length === 0) {
       // No rotated keys valid — require the env secret (fail closed if missing).
+      // Canonical implementation lives in @/lib/secrets.
       return [requireNextAuthSecret()];
     }
     return valid.map(k => k.key);

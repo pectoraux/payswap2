@@ -55,7 +55,25 @@ export async function callLLM(
   userPrompt: string,
 ): Promise<string | null> {
   try {
-    const zai = await ZAI.create();
+    // On Vercel (and other production environments), the .z-ai-config file
+    // doesn't exist. Fall back to env vars if available.
+    let zai: InstanceType<typeof ZAI>;
+    const envApiKey = process.env.ZAI_API_KEY;
+    const envBaseUrl = process.env.ZAI_BASE_URL;
+    const envToken = process.env.ZAI_TOKEN;
+    const envChatId = process.env.ZAI_CHAT_ID;
+    const envUserId = process.env.ZAI_USER_ID;
+    if (envApiKey && envBaseUrl) {
+      zai = new ZAI({
+        apiKey: envApiKey,
+        baseUrl: envBaseUrl,
+        token: envToken,
+        chatId: envChatId,
+        userId: envUserId,
+      });
+    } else {
+      zai = await ZAI.create();
+    }
     const completion = await zai.chat.completions.create({
       messages: [
         { role: 'system', content: systemPrompt },

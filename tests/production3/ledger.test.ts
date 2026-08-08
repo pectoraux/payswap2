@@ -18,6 +18,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { Money } from '@/money/money';
 import {
   ledgerEngine,
   snapshotStore,
@@ -67,8 +68,8 @@ await run('createJournalEntry with balanced debits/credits succeeds', () => {
   });
   assert.equal(entry.balanced, true);
   assert.equal(entry.entries.length, 2);
-  assert.equal(entry.entries[0].debit, 100);
-  assert.equal(entry.entries[1].credit, 100);
+  assert.equal(entry.entries[0].debit.toNumber(), 100);
+  assert.equal(entry.entries[1].credit.toNumber(), 100);
 });
 
 await run('createJournalEntry with unbalanced throws', () => {
@@ -87,8 +88,8 @@ await run('validateBalanced reports imbalance', () => {
   const entry: JournalEntry = {
     id: 'x', ts: 0, txId: 'tx1', description: 'x', balanced: false,
     entries: [
-      { id: 'a', ts: 0, ledgerSeq: 0, txId: 'tx1', accountCode: 'cash:bank:GHS', debit: 100, credit: 0, currency: 'GHS', memo: '' },
-      { id: 'b', ts: 0, ledgerSeq: 0, txId: 'tx1', accountCode: 'user:wallet:w1', debit: 0, credit: 50, currency: 'GHS', memo: '' },
+      { id: 'a', ts: 0, ledgerSeq: 0, txId: 'tx1', accountCode: 'cash:bank:GHS', debit: Money.fromMajor(100, 'GHS'), credit: Money.zero('GHS'), currency: 'GHS', memo: '' },
+      { id: 'b', ts: 0, ledgerSeq: 0, txId: 'tx1', accountCode: 'user:wallet:w1', debit: Money.zero('GHS'), credit: Money.fromMajor(50, 'GHS'), currency: 'GHS', memo: '' },
     ],
   };
   const check = validateBalanced(entry);
@@ -105,13 +106,13 @@ await run('post → getAccountBalance correct', () => {
       credit('user:wallet:w1', 200, 'GHS'),
     ],
   });
-  const cash = ledgerEngine.getAccountBalance('cash:bank:GHS');
+  const cash = ledgerEngine.getAccountDetail('cash:bank:GHS');
   assert.equal(cash.debit, 200);
   assert.equal(cash.credit, 0);
   assert.equal(cash.balance, 200);
   assert.equal(cash.byCurrency.GHS.balance, 200);
 
-  const wallet = ledgerEngine.getAccountBalance('user:wallet:w1');
+  const wallet = ledgerEngine.getAccountDetail('user:wallet:w1');
   assert.equal(wallet.credit, 200);
   assert.equal(wallet.balance, -200);
 });
@@ -193,8 +194,8 @@ await run('rebuildLedgerFromEvents: deterministic (rebuild twice → identical)'
   // Verify account codes match exactly.
   assert.deepEqual(led1.getAccountCodes(), led2.getAccountCodes());
   // Spot-check: circulating should be 500 + 300 - 200 = 600
-  const circ1 = led1.getAccountBalance('twintoken:circulating:TWINGHS');
-  const circ2 = led2.getAccountBalance('twintoken:circulating:TWINGHS');
+  const circ1 = led1.getAccountDetail('twintoken:circulating:TWINGHS');
+  const circ2 = led2.getAccountDetail('twintoken:circulating:TWINGHS');
   assert.equal(circ1.balance, 600);
   assert.equal(circ2.balance, 600);
 });
@@ -264,9 +265,10 @@ await run('reconcilePayouts: completed payout → reconciles', () => {
   const j = matches[0];
   let drPayable = 0, crCash = 0, crFees = 0;
   for (const ln of j.entries) {
-    if (ln.accountCode === 'merchant:payable:m1') drPayable = ln.debit;
-    if (ln.accountCode === 'cash:bank:GHS') crCash = ln.credit;
-    if (ln.accountCode === 'revenue:fees:bank') crFees = ln.credit;
+    // MON-3: leg.debit/credit are now Money objects — call .toNumber() at the boundary.
+    if (ln.accountCode === 'merchant:payable:m1') drPayable = ln.debit.toNumber();
+    if (ln.accountCode === 'cash:bank:GHS') crCash = ln.credit.toNumber();
+    if (ln.accountCode === 'revenue:fees:bank') crFees = ln.credit.toNumber();
   }
   assert.equal(drPayable, 100);
   assert.equal(crCash, 95);
@@ -315,4 +317,4 @@ for (const r of results) {
   else { fail++; console.error(`  ✗ ${r.name}\n    ${r.err ?? ''}`); }
 }
 console.log(`\nledger.test.ts — PASS=${pass} FAIL=${fail}`);
-if (fail > 0) process.exit(1);
+if (fail > 0) process.exitCode = 1;

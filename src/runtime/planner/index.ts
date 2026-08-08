@@ -25,10 +25,11 @@
 
 import type { RuntimeCommand } from '@/runtime/dispatcher/types';
 import type { DispatchResult } from '@/runtime/dispatcher/dispatcher';
-import { runtime } from '@/runtime';
+import { runtime, runtimeHost } from '@/runtime';
 import { liquidityPolicyEngine, type LiquidityExecutionPlan } from '@/runtime/liquidity';
 import type { PolicyContext } from '@/runtime/policy';
 import type { SettlementRequest, SettlementNetwork } from '@/runtime/settlement/adapters';
+import { fxEngine } from '@/kernel/fx';
 
 // H-1 fix: import the persisted event store to flush after every dispatch.
 // This ensures events are written to the DB before the API returns,
@@ -336,7 +337,7 @@ class ExecutionPlanner {
             fromCurrency,
             toCurrency,
             amount,
-            fxRate: 1, // simplified — in production, use real FX rates
+            fxRate: fxEngine.rate(fromCurrency as any, toCurrency as any) ?? 1,
             senderReserve: {
               country: fromCountry,
               currency: fromCurrency,
@@ -534,7 +535,23 @@ class ExecutionPlanner {
             data: { dispatchResult: priorDispatchResult, eventsProduced: priorDispatchResult.events.length, source: 'coordinator' },
           };
         }
-        const dispatchResult = await runtime.dispatcher.dispatch(input.command);
+        // NO CONTAMINATION FIX: route through runtimeHost.execute() instead
+        // of runtime.dispatcher.dispatch(). The host routes by
+        // command.metadata.environment → the correct isolated runtime
+        // (sandbox or live). The bare `runtime` singleton shares one
+        // EventStore + snapshotCache across both environments.
+        const hostResult = await runtimeHost.execute(input.command);
+        // Adapt TransactionResult → DispatchResult shape for the planner.
+        const dispatchResult: DispatchResult = {
+          success: hostResult.success,
+          commandType: hostResult.commandType,
+          entityId: hostResult.entityId,
+          events: hostResult.events,
+          message: hostResult.message,
+          error: hostResult.error,
+          metrics: { compileTime: 0, verifyTime: 0, appendTime: 0, totalTime: hostResult.metrics.totalTime },
+          dispatchedAt: Date.now(),
+        };
         return {
           result: dispatchResult.success ? 'success' : 'failed',
           detail: dispatchResult.message,

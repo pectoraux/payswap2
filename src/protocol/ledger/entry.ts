@@ -13,10 +13,24 @@
  * This is the fundamental invariant of double-entry bookkeeping. The
  * `createJournalEntry()` constructor enforces it; `validateBalanced()`
  * re-checks an existing entry.
+ *
+ * MON-3: `debit`/`credit` on `LedgerEntry` and `JournalLegInput` are
+ * `Money` — integer minor units, never float. The `debit()`/`credit()`
+ * helper functions accept `number | Money` and convert numbers via
+ * `Money.fromMajor()` so test code can keep using the terse
+ * `debit('cash:bank:GHS', 200, 'GHS')` form.
  */
-import { uid, nowTs, round } from '@/kernel/support';
+import { uid, nowTs } from '@/kernel/support';
+import { Money } from '@/money/money';
 
-/** A single debit or credit against one account. Exactly one of debit/credit is non-zero. */
+/**
+ * A single debit or credit against one account. Exactly one of debit/credit is non-zero.
+ *
+ * MON-3: `debit` and `credit` are `Money` — integer minor units, never float.
+ * Callers that still pass `number` will get a compile error; use `Money.fromMajor()`
+ * to convert. The `currency` field on the entry must match `debit.currency` /
+ * `credit.currency`.
+ */
 export interface LedgerEntry {
   /** Unique id of this leg. */
   id: string;
@@ -28,10 +42,10 @@ export interface LedgerEntry {
   txId: string;
   /** Fully-qualified account code (see CHART_OF_ACCOUNTS). */
   accountCode: string;
-  /** Debit amount (zero for a credit-only leg). */
-  debit: number;
-  /** Credit amount (zero for a debit-only leg). */
-  credit: number;
+  /** Debit amount (Money.zero for a credit-only leg). */
+  debit: Money;
+  /** Credit amount (Money.zero for a debit-only leg). */
+  credit: Money;
   /** ISO currency code (or asset code for twin-token accounts). */
   currency: string;
   /** Free-form memo describing the leg. */
@@ -65,8 +79,14 @@ export interface JournalEntry {
 /** Input leg for constructing a journal entry. */
 export interface JournalLegInput {
   accountCode: string;
-  debit?: number;
-  credit?: number;
+  /** Debit amount (Money or number — number is converted via Money.fromMajor). */
+  debit?: Money | number;
+  /** Credit amount (Money or number — number is converted via Money.fromMajor). */
+  credit?: Money | number;
+  /** Raw amount (test compatibility — converted to debit or credit based on `side`). */
+  amount?: number;
+  /** Side: 'debit' or 'credit' (test compatibility — used with `amount`). */
+  side?: 'debit' | 'credit';
   currency: string;
   memo?: string;
   evidenceId?: string;
@@ -75,18 +95,22 @@ export interface JournalLegInput {
 
 /**
  * Helper: build a debit leg. `debit('cash:bank:GHS', 100, 'GHS')` is shorthand
- * for `{ accountCode: 'cash:bank:GHS', debit: 100, credit: 0, currency: 'GHS' }`.
- * Keeps journal-entry construction readable in tests + integration code.
+ * for `{ accountCode: 'cash:bank:GHS', debit: Money.fromMajor(100, 'GHS'), credit: Money.zero('GHS'), currency: 'GHS' }`.
+ *
+ * Accepts `number | Money` so test code can keep the terse numeric form
+ * while production code can pass `Money` directly (MON-3).
  */
-export function debit(accountCode: string, amount: number, currency: string, memo?: string): JournalLegInput {
-  return { accountCode, debit: amount, credit: 0, currency, memo };
+export function debit(accountCode: string, amount: number | Money, currency: string, memo?: string): JournalLegInput {
+  const money = typeof amount === 'number' ? Money.fromMajor(amount, currency as any) : amount;
+  return { accountCode, debit: money, credit: Money.zero(currency as any), currency, memo };
 }
 
 /**
  * Helper: build a credit leg. Mirrors `debit()` — see above.
  */
-export function credit(accountCode: string, amount: number, currency: string, memo?: string): JournalLegInput {
-  return { accountCode, debit: 0, credit: amount, currency, memo };
+export function credit(accountCode: string, amount: number | Money, currency: string, memo?: string): JournalLegInput {
+  const money = typeof amount === 'number' ? Money.fromMajor(amount, currency as any) : amount;
+  return { accountCode, debit: Money.zero(currency as any), credit: money, currency, memo };
 }
 
 /** Input for `createJournalEntry()`. */
@@ -96,7 +120,9 @@ export interface CreateJournalEntryParams {
   /** Human-readable description. */
   description: string;
   /** The legs (debit/credit movements). */
-  legs: JournalLegInput[];
+  legs?: JournalLegInput[];
+  /** Alias for legs (test compatibility). */
+  lines?: JournalLegInput[];
   /** Optional explicit timestamp (defaults to now). */
   ts?: number;
   /** Optional explicit journal id (defaults to generated). */
@@ -120,6 +146,9 @@ export interface CreateJournalEntryParams {
  * The caller is responsible for using a startSeq that continues from the
  * engine's current sequence counter; the LedgerEngine wrapper does this
  * automatically.
+ *
+ * Accepts both `legs` and `lines` (test compatibility) and the alternate
+ * `{amount, side}` leg shape (converted to Money internally).
  */
 export function createJournalEntry(params: CreateJournalEntryParams): JournalEntry {
   const ts = params.ts ?? nowTs();
@@ -127,34 +156,34 @@ export function createJournalEntry(params: CreateJournalEntryParams): JournalEnt
   let seq = params.startSeq ?? 0;
 
   // Accept `lines` as an alias for `legs` (test + integration compatibility).
-  // Also accept the alternate {amount, side:'debit'|'credit'} leg shape and
-  // normalize it to {debit, credit}.
-  type AltLeg = { accountCode: string; amount?: number; side?: 'debit' | 'credit'; debit?: number; credit?: number; currency: string; memo?: string; evidenceId?: string; frame?: number };
+  type AltLeg = { accountCode: string; amount?: number; side?: 'debit' | 'credit'; debit?: Money; credit?: Money; currency: string; memo?: string; evidenceId?: string; frame?: number };
   const rawLegs = (params.legs ?? (params as { lines?: AltLeg[] }).lines ?? []) as AltLeg[];
   if (!rawLegs.length) {
     throw new Error('journal entry has no legs');
   }
-  const legs: JournalLegInput[] = rawLegs.map((leg) => {
-    if (leg.amount != null && leg.side) {
-      return leg.side === 'debit'
-        ? { accountCode: leg.accountCode, debit: leg.amount, credit: 0, currency: leg.currency, memo: leg.memo, evidenceId: leg.evidenceId, frame: leg.frame }
-        : { accountCode: leg.accountCode, debit: 0, credit: leg.amount, currency: leg.currency, memo: leg.memo, evidenceId: leg.evidenceId, frame: leg.frame };
-    }
-    return leg as JournalLegInput;
-  });
 
-  // Validate legs and build the entries array.
+  // Normalize each leg: convert {amount, side} to {debit, credit} Money values.
   const entries: LedgerEntry[] = [];
-  for (const leg of legs) {
-    const debit = leg.debit ?? 0;
-    const credit = leg.credit ?? 0;
-    if (debit < 0 || credit < 0) {
-      throw new Error(`ledger leg cannot have negative amounts (debit=${debit}, credit=${credit})`);
+  for (const leg of rawLegs) {
+    // MON-3: legs now carry Money. Default to zero if not provided.
+    // Backward-compat: if a caller passes a raw `number` (legacy projection
+    // code that hasn't been migrated), convert via Money.fromMajor().
+    let debitMoney = leg.debit ?? Money.zero(leg.currency as any);
+    let creditMoney = leg.credit ?? Money.zero(leg.currency as any);
+    if (typeof debitMoney === 'number') debitMoney = Money.fromMajor(debitMoney, leg.currency as any);
+    if (typeof creditMoney === 'number') creditMoney = Money.fromMajor(creditMoney, leg.currency as any);
+    if (leg.amount !== undefined && leg.side) {
+      const amt = Money.fromMajor(leg.amount, leg.currency as any);
+      if (leg.side === 'debit') debitMoney = amt;
+      else creditMoney = amt;
     }
-    if (debit > 0 && credit > 0) {
+    if (debitMoney.isNegative() || creditMoney.isNegative()) {
+      throw new Error(`ledger leg cannot have negative amounts (debit=${debitMoney}, credit=${creditMoney})`);
+    }
+    if (debitMoney.isPositive() && creditMoney.isPositive()) {
       throw new Error(`ledger leg cannot be both debit and credit (account=${leg.accountCode})`);
     }
-    if (debit === 0 && credit === 0) {
+    if (debitMoney.isZero() && creditMoney.isZero()) {
       throw new Error(`ledger leg has zero debit and zero credit (account=${leg.accountCode})`);
     }
     if (!leg.currency) {
@@ -164,10 +193,11 @@ export function createJournalEntry(params: CreateJournalEntryParams): JournalEnt
       id: uid('le'),
       ts,
       ledgerSeq: seq++,
-      txId,
+      txId: txId ?? '',
       accountCode: leg.accountCode,
-      debit: round(debit, 6),
-      credit: round(credit, 6),
+      // MON-3: Money values — integer minor units, no float.
+      debit: debitMoney,
+      credit: creditMoney,
       currency: leg.currency,
       memo: leg.memo ?? params.description,
       evidenceId: leg.evidenceId ?? params.evidenceId,
@@ -191,7 +221,7 @@ export function createJournalEntry(params: CreateJournalEntryParams): JournalEnt
   return {
     id: params.id ?? uid('je'),
     ts,
-    txId,
+    txId: txId ?? '',
     description: params.description,
     entries,
     balanced: true,
@@ -217,12 +247,16 @@ export interface BalanceCheckResult {
     totalCredit: number;
     difference: number;
   }[];
-  /** Per-currency map view (currency → debit/credit totals + signed delta). */
+  /** Per-currency map view (currency → debit/credit totals + signed delta + balanced flag). */
   byCurrency: Record<string, {
     totalDebit: number;
     totalCredit: number;
     /** Signed difference = totalDebit - totalCredit (positive = debit-heavy). */
+    difference: number;
+    /** Alias for `difference` (kept for compatibility with HEAD callers). */
     delta: number;
+    /** True when this currency's debit total equals its credit total. */
+    balanced: boolean;
   }>;
 }
 
@@ -234,36 +268,50 @@ export function validateBalanced(journal: JournalEntry): BalanceCheckResult {
   return validateBalancedInner(journal.entries);
 }
 
-/** Internal: per-currency debit/credit balance check. */
+/** Internal: per-currency debit/credit balance check.
+ *
+ * MON-3: uses Money arithmetic — sums are BigInt, comparisons are exact.
+ * No float, no tolerance, no rounding. `debit.equals(credit)` is the check.
+ */
 function validateBalancedInner(entries: LedgerEntry[]): BalanceCheckResult {
-  const totals = new Map<string, { debit: number; credit: number }>();
+  const totals = new Map<string, { debit: Money; credit: Money }>();
   for (const e of entries) {
     let t = totals.get(e.currency);
     if (!t) {
-      t = { debit: 0, credit: 0 };
+      t = { debit: Money.zero(e.currency as any), credit: Money.zero(e.currency as any) };
       totals.set(e.currency, t);
     }
-    t.debit = round(t.debit + e.debit, 6);
-    t.credit = round(t.credit + e.credit, 6);
+    t.debit = t.debit.add(e.debit);
+    t.credit = t.credit.add(e.credit);
   }
 
   const currencies: BalanceCheckResult['currencies'] = [];
   const mismatches: BalanceCheckResult['mismatches'] = [];
   const byCurrency: BalanceCheckResult['byCurrency'] = {};
   for (const [currency, t] of totals) {
-    const diff = round(t.debit - t.credit, 6);
+    // MON-3: exact comparison via Money.equals(). No tolerance.
+    const balanced = t.debit.equals(t.credit);
+    const debitNum = t.debit.toNumber();
+    const creditNum = t.credit.toNumber();
+    const diff = debitNum - creditNum;
     currencies.push({
       currency,
-      totalDebit: t.debit,
-      totalCredit: t.credit,
+      totalDebit: debitNum,
+      totalCredit: creditNum,
       difference: diff,
     });
-    byCurrency[currency] = { totalDebit: t.debit, totalCredit: t.credit, delta: diff };
-    if (Math.abs(diff) > 1e-6) {
+    byCurrency[currency] = {
+      totalDebit: debitNum,
+      totalCredit: creditNum,
+      difference: diff,
+      delta: diff,
+      balanced,
+    };
+    if (!balanced) {
       mismatches.push({
         currency,
-        totalDebit: t.debit,
-        totalCredit: t.credit,
+        totalDebit: debitNum,
+        totalCredit: creditNum,
         difference: diff,
       });
     }

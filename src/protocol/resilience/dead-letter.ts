@@ -154,13 +154,11 @@ export class DeadLetterQueue {
   async replay(
     id: string,
     replayFn: (entry: DeadLetterEntry) => Promise<unknown>,
-  ): Promise<DeadLetterEntry> {
+  ): Promise<DeadLetterEntry | undefined> {
     const entry = this.entries.get(id);
-    if (!entry) {
-      throw new Error(`discarded: DLQ entry ${id} not found`);
-    }
+    if (!entry) return undefined;
     if (entry.status === 'discarded') {
-      throw new Error(`entry ${id} is discarded — cannot replay`);
+      throw new Error(`Cannot replay entry ${id}: entry has been discarded`);
     }
     if (entry.status === 'replayed') {
       // Idempotent — return the existing replay record.
@@ -184,11 +182,12 @@ export class DeadLetterQueue {
     return { ...entry, replayable: entry.status === 'pending_review' };
   }
 
-  /** Mark an entry as discarded with a human-readable reason. */
-  discard(id: string, reason: string): DeadLetterEntry {
+  /** Mark an entry as discarded with a human-readable reason. Throws if already replayed. */
+  discard(id: string, reason: string): DeadLetterEntry | undefined {
     const entry = this.entries.get(id);
-    if (!entry) {
-      throw new Error(`DLQ entry ${id} not found`);
+    if (!entry) return undefined;
+    if (entry.status === 'replayed') {
+      throw new Error(`Cannot discard entry ${id}: already replayed`);
     }
     entry.status = 'discarded';
     entry.discardReason = reason;
@@ -235,7 +234,7 @@ export class DeadLetterQueue {
     this.order.length = 0;
   }
 
-  /** Alias for `clear()` — drops every entry. Test helper. */
+  /** Alias for `clear()` — drops every entry. Test helper (test compatibility). */
   reset(): void {
     this.clear();
   }

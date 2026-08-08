@@ -46,6 +46,54 @@ export {
   type ReserveLowAlert,
 } from './reserve-monitor';
 
+// I1: per-country reserve drift monitoring with alarm threshold.
+export {
+  ReserveDriftMonitor,
+  reserveDriftMonitor,
+  newDriftAlertId,
+  type DriftSample,
+  type DriftState,
+  type DriftStatus,
+} from './reserve-drift-monitor';
+
+// D1 + D2: stablecoin→twin composition per corridor + migration proposals (never executed).
+export {
+  MigrationProposalEngine,
+  migrationProposalEngine,
+  type CorridorComposition,
+  type CompositionInput,
+  type MigrationProposal,
+} from './migration-proposals';
+
+// Closed-loop controllers: pair every observer with an actuator.
+// "A system that computes the right number and doesn't act on it is more
+// dangerous than one that never computed it."
+export {
+  wireClosedLoops,
+  wireRebalanceInputs,
+  wireProposalInputs,
+  wireNetSettleInputs,
+  wireAuctionInputs,
+  startNetSettlementCycle,
+  stopNetSettlementCycle,
+  runNetSettlementCycle,
+  backingFallbackTier,
+  fxBlockPayment,
+  auctionTimeoutRefund,
+  isCorridorPaused,
+  resumeCorridor,
+  pauseLoop,
+  resumeLoop,
+  loopStatus,
+  loopCapsConfig,
+  closedLoopAuditLog,
+  type ClosedLoopAction,
+  type RebalanceInputs,
+  type ProposalApplyInputs,
+  type NetSettleInputs,
+  type AuctionRefundInputs,
+} from './closed-loop-controllers';
+
 export {
   MintLimitEngine,
   BurnLimitEngine,
@@ -53,6 +101,8 @@ export {
   burnLimitEngine,
   DEFAULT_MINT_LIMITS,
   DEFAULT_BURN_LIMITS,
+  DEFAULT_DAILY_MINT_LIMIT,
+  DEFAULT_PER_TX_MINT_LIMIT,
   type MintLimitConfig,
   type BurnLimitConfig,
 } from './limits';

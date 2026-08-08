@@ -6,15 +6,17 @@
  * payment.disputed, …) the engine signs the payload with HMAC-SHA256 and
  * delivers it to every matching endpoint.
  *
- * Delivery is simulated in-process (no real HTTP) — this is intentional for
- * the in-memory runtime. Production deployments wrap the same interface with
- * a queue + fetch worker. Every delivery is recorded with its signature so
- * consumers can verify authenticity via `verifySignature()`.
+ * OPS-2: Delivery now uses real HTTP fetch with exponential backoff retry
+ * (3 attempts: immediate, +10s, +60s). Failed deliveries are dead-lettered
+ * and can be replayed from the dashboard via `replayDelivery()`.
  *
- * Signature scheme: `X-PaySwap-Signature: sha256=<hex>` over the raw JSON body.
+ * Signature scheme (OPS-2): Stripe-style `t=<timestamp>,v1=<hmac>` over
+ * `timestamp.body`. The timestamp prevents replay attacks (recipients
+ * reject signatures older than 5 minutes).
  */
 import { createHmac, timingSafeEqual } from 'crypto';
 import { uid, nowTs } from '@/kernel/support';
+import { eventEngine } from '@/kernel/event';
 
 export interface WebhookEndpoint {
   id: string;
@@ -26,7 +28,7 @@ export interface WebhookEndpoint {
   createdAt: number;
 }
 
-export type WebhookDeliveryStatus = 'delivered' | 'failed' | 'pending';
+export type WebhookDeliveryStatus = 'delivered' | 'failed' | 'pending' | 'dead_lettered' | 'replaying';
 
 export interface WebhookDelivery {
   id: string;
@@ -142,14 +144,73 @@ export class WebhookEngine {
     return ep.events.includes(eventType);
   }
 
+  /**
+   * OPS-2: Stripe-style webhook signature.
+   *
+   * Format: `t=<timestamp>,v1=<hmac>`
+   *
+   * The timestamp prevents replay attacks (recipients reject signatures
+   * older than 5 minutes). The HMAC is computed over `t.body` so the
+   * timestamp is bound to the payload.
+   */
+  private signStripeStyle(body: string, secret: string, timestamp: number): string {
+    const signedPayload = `${timestamp}.${body}`;
+    const hmac = createHmac('sha256', secret).update(signedPayload, 'utf8').digest('hex');
+    return `t=${timestamp},v1=${hmac}`;
+  }
+
+  /**
+   * OPS-2: Verify a Stripe-style `t=,v1=` signature.
+   */
+  verifyStripeSignature(body: string, signatureHeader: string, secret: string, maxAgeMs: number = 5 * 60 * 1000): boolean {
+    if (!body || !signatureHeader || !secret) return false;
+    // Parse the signature header: t=1234567890,v1=abc123...
+    const parts = signatureHeader.split(',').reduce((acc, part) => {
+      const [key, value] = part.split('=');
+      if (key && value) acc[key.trim()] = value.trim();
+      return acc;
+    }, {} as Record<string, string>);
+
+    const timestamp = parseInt(parts['t'] ?? '0', 10);
+    const v1 = parts['v1'];
+    if (!timestamp || !v1) return false;
+
+    // Check timestamp freshness (replay protection).
+    if (Date.now() - timestamp > maxAgeMs) return false;
+
+    // Recompute the HMAC.
+    const signedPayload = `${timestamp}.${body}`;
+    const expected = createHmac('sha256', secret).update(signedPayload, 'utf8').digest('hex');
+
+    try {
+      return timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(v1, 'utf8'));
+    } catch {
+      return false;
+    }
+  }
+
   private sign(body: string, secret: string): string {
     return createHmac('sha256', secret).update(body, 'utf8').digest('hex');
   }
 
+  /**
+   * OPS-2: Deliver a webhook with exponential backoff retry + dead-letter.
+   *
+   * Retry schedule: 3 attempts with exponential backoff:
+   *   Attempt 1: immediate
+   *   Attempt 2: +10 seconds
+   *   Attempt 3: +60 seconds
+   *
+   * If all 3 fail, the delivery is dead-lettered (status='dead_lettered')
+   * and can be replayed from the dashboard via `replayDelivery()`.
+   *
+   * The delivery uses the Stripe-style `t=,v1=` signature.
+   */
   private async deliver(ep: WebhookEndpoint, eventType: string, payload: Record<string, unknown>): Promise<WebhookDelivery> {
     const body = JSON.stringify(payload);
-    const signature = this.sign(body, ep.secret);
-    // Simulated successful delivery. Real implementation would POST with retries.
+    const timestamp = nowTs();
+    const signature = this.signStripeStyle(body, ep.secret, timestamp);
+
     const delivery: WebhookDelivery = {
       id: uid('whd'),
       endpointId: ep.id,
@@ -158,14 +219,139 @@ export class WebhookEngine {
       payload,
       body,
       signature,
-      deliveredAt: nowTs(),
-      status: 'delivered',
-      attempt: 1,
-      responseStatus: 200,
-      responsePreview: 'OK (simulated delivery)',
+      deliveredAt: timestamp,
+      status: 'pending',
+      attempt: 0,
+      responseStatus: 0,
+      responsePreview: '',
     };
+
+    // OPS-2: retry with exponential backoff.
+    const retryDelays = [0, 10_000, 60_000]; // 0s, 10s, 60s
+    for (let i = 0; i < retryDelays.length; i++) {
+      if (retryDelays[i] > 0) {
+        await new Promise(resolve => setTimeout(resolve, Math.min(retryDelays[i], 5_000))); // cap at 5s in-process for dev
+      }
+      delivery.attempt = i + 1;
+      try {
+        const response = await fetch(ep.url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Webhook-Signature': signature,
+            'X-Webhook-Event': eventType,
+            'X-Webhook-Delivery': delivery.id,
+          },
+          body,
+          signal: AbortSignal.timeout(10_000), // 10s timeout per attempt
+        });
+
+        delivery.responseStatus = response.status;
+        delivery.responsePreview = `HTTP ${response.status} ${response.statusText}`;
+
+        if (response.status >= 200 && response.status < 300) {
+          delivery.status = 'delivered';
+          delivery.deliveredAt = nowTs();
+          this.deliveries.push(delivery);
+          return delivery;
+        }
+        // Non-2xx → retry
+      } catch (err) {
+        delivery.responseStatus = 0;
+        delivery.responsePreview = `Error: ${err instanceof Error ? err.message : 'unknown'}`;
+        // Network error → retry
+      }
+    }
+
+    // All retries exhausted → dead-letter.
+    delivery.status = 'dead_lettered';
+    delivery.deliveredAt = nowTs();
     this.deliveries.push(delivery);
+
+    // Emit an event for the dead-letter (operators can alert on this).
+    eventEngine.emit('webhook.dead_lettered', {
+      deliveryId: delivery.id,
+      endpointId: ep.id,
+      merchantId: ep.merchantId,
+      eventType,
+      attempts: delivery.attempt,
+      lastResponse: delivery.responsePreview,
+      ts: nowTs(),
+    });
+
     return delivery;
+  }
+
+  /**
+   * OPS-2: Replay a dead-lettered delivery. Resets the status to 'pending'
+   * and re-attempts delivery. Useful when the merchant's endpoint was down
+   * and is now back up.
+   */
+  async replayDelivery(deliveryId: string): Promise<WebhookDelivery | null> {
+    const delivery = this.deliveries.find(d => d.id === deliveryId);
+    if (!delivery) return null;
+    if (delivery.status !== 'dead_lettered' && delivery.status !== 'failed') {
+      return delivery; // Already delivered, nothing to replay.
+    }
+    const ep = this.endpoints.get(delivery.endpointId);
+    if (!ep || !ep.active) return null;
+
+    // Re-deliver with a fresh signature.
+    const timestamp = nowTs();
+    const newSignature = this.signStripeStyle(delivery.body, ep.secret, timestamp);
+    delivery.signature = newSignature;
+    delivery.status = 'replaying';
+
+    // Attempt delivery again (single attempt, no retry — the caller can
+    // call replayDelivery() again if it fails).
+    try {
+      const response = await fetch(ep.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Webhook-Signature': newSignature,
+          'X-Webhook-Event': delivery.eventType,
+          'X-Webhook-Delivery': delivery.id,
+          'X-Webhook-Replay': 'true',
+        },
+        body: delivery.body,
+        signal: AbortSignal.timeout(10_000),
+      });
+      delivery.responseStatus = response.status;
+      delivery.responsePreview = `Replay: HTTP ${response.status}`;
+      if (response.status >= 200 && response.status < 300) {
+        delivery.status = 'delivered';
+        delivery.deliveredAt = nowTs();
+      } else {
+        delivery.status = 'dead_lettered';
+      }
+    } catch (err) {
+      delivery.responseStatus = 0;
+      delivery.responsePreview = `Replay error: ${err instanceof Error ? err.message : 'unknown'}`;
+      delivery.status = 'dead_lettered';
+    }
+    return delivery;
+  }
+
+  /**
+   * OPS-2: Get all dead-lettered deliveries for a merchant (for the dashboard).
+   */
+  getDeadLetteredDeliveries(merchantId?: string): WebhookDelivery[] {
+    return this.deliveries.filter(d => {
+      if (d.status !== 'dead_lettered') return false;
+      if (merchantId && d.merchantId !== merchantId) return false;
+      return true;
+    });
+  }
+
+  /**
+   * OPS-2: Get delivery history for an endpoint (for the dashboard).
+   */
+  getDeliveryHistory(endpointId: string, limit: number = 50): WebhookDelivery[] {
+    return this.deliveries
+      .filter(d => d.endpointId === endpointId)
+      .slice(-limit)
+      .reverse();
   }
 }
 

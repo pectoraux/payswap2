@@ -120,6 +120,9 @@ export function clearAuditLog(): void {
  * `clearAuditLog`) so callers can hold a single reference and call
  * `auditLogInstance.reset()` / `auditLogInstance.query(filter)` /
  * `auditLogInstance.size()`. Used by the connectors-v2 test suite.
+ *
+ * Both `reset` and `clear` are exposed as aliases — callers from either
+ * branch (HEAD preferred `reset`, origin/main used `clear`) work.
  */
 export const auditLogInstance = {
   /** Append a request/response pair to the audit trail + emit event. */
@@ -128,6 +131,13 @@ export const auditLogInstance = {
   query: getAuditLog,
   /** Drop every entry from the buffer. */
   reset: clearAuditLog,
+  /** Alias for `reset` (kept for compatibility with origin/main callers). */
+  clear: clearAuditLog,
   /** Number of entries currently held. */
   size: auditLogSize,
 };
+
+// Note: `buildAttestationEvidence` lives in its own module (`./attestation`)
+// with a richer signature (returns a kernel-grade `Evidence` object). The
+// simpler origin/main variant that returned a plain attestation record has
+// been removed in favor of the canonical `./attestation` implementation.

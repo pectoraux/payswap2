@@ -119,3 +119,8 @@ export type {
   TreasuryDashboard,
   OpsSnapshot,
 } from './dashboards';
+
+// Correlation + tracing + logger + metrics helpers are all already exported
+// above (origin/main's fuller surface). The HEAD duplicate exports below
+// were removed because they re-declared the same names.
+// `histogramPercentile` is also already re-exported from `./metrics` at line 29.

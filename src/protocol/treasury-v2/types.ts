@@ -138,6 +138,33 @@ export interface CorridorTarget {
   minReserve: number;
   maxReserve: number;
   rebalanceThreshold: number;
+  /** Last time this corridor was rebalanced (null = never). */
+  lastBalancedTs: number | null;
+}
+
+/** Configuration for a corridor target (input to CorridorBalancer.configure). */
+export interface CorridorTargetConfig {
+  corridor: CorridorId;
+  targetReserve: number;
+  minReserve: number;
+  maxReserve: number;
+  rebalanceThreshold: number;
+}
+
+/** Treasury corridor (from/to currencies). */
+export interface TreasuryCorridor {
+  from: string;
+  to: string;
+}
+
+/** Result of a corridor rebalance attempt. */
+export interface RebalanceResult {
+  rebalanced: boolean;
+  reason?: string;
+  from?: string;
+  to?: string;
+  amount?: number;
+  route?: string;
 }
 
 /** A corridor funding movement (in or out). */
@@ -429,3 +456,28 @@ export const DEFAULT_PER_TX_MINT_LIMIT = 50_000;
 
 /** Protocol's share of LP yield (0.20 = 20%). */
 export const PROTOCOL_FEE_SHARE = 0.20;
+
+// ── OPS-6: Kill switches (emergency freeze) ──────────────────────────────
+
+/** The scope of an emergency freeze (kill switch). */
+export type FreezeScope = 'account' | 'asset' | 'corridor' | 'currency' | 'tier' | 'lp' | 'global';
+
+/** An emergency freeze record. */
+export interface EmergencyFreeze {
+  id: string;
+  scope: FreezeScope;
+  target: string;
+  reason: string;
+  initiatedBy: string;
+  initiatedAt: number;
+  expiresAt?: number;
+  active: boolean;
+  liftedAt?: number;
+  liftedBy?: string;
+}
+
+/** A treasury corridor (from/to currencies). */
+export interface TreasuryCorridor {
+  from: string;
+  to: string;
+}

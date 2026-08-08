@@ -142,7 +142,7 @@ export class CircuitBreaker {
     return this._state;
   }
 
-  /** Alias for `state()` — current breaker state. */
+  /** Alias for `state()` — current breaker state (test compatibility). */
   getState(): CircuitState {
     return this.state();
   }
@@ -270,8 +270,8 @@ export const DEFAULT_BREAKER_POLICY: Omit<CircuitBreakerOptions, 'name'> = {
   failureThreshold: 5,
   failureWindowMs: 60_000,
   cooldownMs: 30_000,
-  successThresholdToClose: 2,
   halfOpenMaxRequests: 1,
+  successThresholdToClose: 2,
 };
 
 /** Breaker names pre-registered for PaySwap protocol rails. */

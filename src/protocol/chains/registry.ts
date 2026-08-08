@@ -114,7 +114,7 @@ export class ChainRegistry {
     return this.adapters.has(chain);
   }
 
-  /** Alias for `has`. */
+  /** Alias for `has` (test compatibility). */
   isRegistered(chain: string): boolean {
     return this.adapters.has(chain);
   }

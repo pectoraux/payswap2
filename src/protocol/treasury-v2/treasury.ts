@@ -195,8 +195,8 @@ export class TreasuryEngine {
   preMintHook(assetCode: string, amount: number): HookResult {
     const checks: HookResult['checks'] = [];
 
-    // 1. freeze status
-    const frozen = treasuryReports.isFrozen(assetCode);
+    // 1. freeze status — check both the reports freeze and the emergency freeze engine.
+    const frozen = treasuryReports.isFrozen(assetCode) || emergencyFreezeEngine.isFrozen('asset', assetCode);
     checks.push({
       name: 'freeze_status',
       passed: !frozen,
@@ -240,7 +240,7 @@ export class TreasuryEngine {
     if (!backingCheck.allowed) {
       const result: HookResult = {
         allowed: false,
-        reason: backingCheck.reason,
+        reason: 'backing_insufficient',
         remainingDaily: limitCheck.remainingDaily,
         checks,
       };
@@ -275,7 +275,7 @@ export class TreasuryEngine {
   preBurnHook(assetCode: string, amount: number): HookResult {
     const checks: HookResult['checks'] = [];
 
-    const frozen = treasuryReports.isFrozen(assetCode);
+    const frozen = treasuryReports.isFrozen(assetCode) || emergencyFreezeEngine.isFrozen('asset', assetCode);
     checks.push({
       name: 'freeze_status',
       passed: !frozen,
@@ -288,6 +288,15 @@ export class TreasuryEngine {
         checks,
       };
       this.emitBurnBlocked(assetCode, amount, result);
+      return result;
+    }
+
+    // If no burn limit is configured, skip the limit check (allow by default).
+    const burnLimit = burnLimitEngine.get(assetCode);
+    if (!burnLimit) {
+      // No limit configured — allow the burn.
+      const result: HookResult = { allowed: true, checks };
+      this.emitBurnApproved(assetCode, amount, result);
       return result;
     }
 
@@ -319,6 +328,39 @@ export class TreasuryEngine {
       ts: nowTs(),
     });
     return result;
+  }
+
+  /** Pre-transfer hook — checks freeze status before a twin-token transfer. */
+  preTransferHook(assetCode: string, amount: number, from?: string): HookResult {
+    const checks: HookResult['checks'] = [];
+    const frozen = treasuryReports.isFrozen(assetCode) || emergencyFreezeEngine.isFrozen('asset', assetCode);
+    checks.push({
+      name: 'freeze_status',
+      passed: !frozen,
+      reason: frozen ? 'asset_frozen' : undefined,
+    });
+    if (frozen) {
+      const result: HookResult = { allowed: false, reason: 'asset_frozen', checks };
+      return result;
+    }
+    return { allowed: true, checks };
+  }
+
+  /** Lift (deactivate) a freeze by ID. Test compatibility — delegates to emergencyFreezeEngine. */
+  liftFreeze(freezeId: string, liftedBy?: string): void {
+    emergencyFreezeEngine.lift(freezeId, liftedBy ?? 'system');
+  }
+
+  /** Unfreeze an asset. Test compatibility. */
+  unfreezeAsset(assetCode: string): void {
+    treasuryReports.unfreezeAsset(assetCode);
+    // Also lift any emergency freeze on the asset.
+    const freezes = emergencyFreezeEngine.all();
+    for (const f of freezes) {
+      if (f.target === assetCode && f.active) {
+        emergencyFreezeEngine.lift(f.id, 'system');
+      }
+    }
   }
 
   /**
@@ -400,12 +442,12 @@ export class TreasuryEngine {
   }
 
   /** Live treasury status — the canonical `TreasuryReport` snapshot. */
-  status(): TreasuryReport {
+  async status(): Promise<TreasuryReport> {
     return treasuryReports.generateDailyTreasuryReport();
   }
 
   /** Alias for `status()` — the daily report. */
-  dailyReport(): TreasuryReport {
+  async dailyReport(): Promise<TreasuryReport> {
     return this.status();
   }
 
@@ -517,6 +559,33 @@ export class TreasuryEngine {
       interval.unref();
     }
     return () => clearInterval(interval);
+  }
+
+  /** Reset all treasury state (for tests). Stops timers + clears singletons. */
+  reset(): void {
+    for (const stop of this.timers) {
+      try { stop(); } catch { /* best-effort */ }
+    }
+    this.timers = [];
+    this.initialised = false;
+    // Reset dependent singletons.
+    try { reserveMonitor.reset(); } catch { /* may not exist */ }
+    try { backingVerifier.reset(); } catch { /* may not exist */ }
+    try { mintLimitEngine.reset(); } catch { /* may not exist */ }
+    try { burnLimitEngine.reset(); } catch { /* may not exist */ }
+    try { emergencyFreezeEngine.reset(); } catch { /* may not exist */ }
+  }
+
+  /** Record a successful mint (test compatibility — delegates to backing verifier + limit engine). */
+  recordMint(assetCode: string, amount: number): void {
+    mintLimitEngine.recordMint(assetCode, amount);
+    backingVerifier.recordMint(assetCode, amount);
+  }
+
+  /** Record a successful burn (test compatibility). */
+  recordBurn(assetCode: string, amount: number): void {
+    burnLimitEngine.recordBurn(assetCode, amount);
+    backingVerifier.recordBurn(assetCode, amount);
   }
 }
 

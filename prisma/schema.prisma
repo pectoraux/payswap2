@@ -1034,3 +1034,29 @@ model TraceSpan {
   @@index([parentSpanId])
   @@index([kind])
 }
+
+/// SCALE-2: Postgres-backed authority state. Each authority singleton stores
+/// its state here so multiple instances can agree. Optimistic locking via
+/// the version column prevents concurrent writes from diverging.
+model AuthorityState {
+  id        String   @id @default(cuid())
+  authority String   // e.g., 'netSettlementEngine', 'backingVerifier'
+  key       String   // e.g., 'Ghana:Nigeria:NGN' or 'TWINGHS'
+  state     String   // JSON blob
+  version   Int      @default(1)
+  updatedAt DateTime @updatedAt
+
+  @@unique([authority, key])
+  @@index([authority])
+}
+
+/// SCALE-3: Leader election leases for periodic tasks. Only the instance
+/// holding the lease runs the task (net settlement cycle, drift scan, etc).
+model LeadershipLease {
+  taskName    String   @id // e.g., 'net-settlement-cycle'
+  leaderId    String   // instance ID
+  acquiredAt  DateTime
+  expiresAt   DateTime
+
+  @@index([leaderId])
+}

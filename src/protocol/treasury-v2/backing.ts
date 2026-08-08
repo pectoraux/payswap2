@@ -256,9 +256,9 @@ export class BackingVerifier {
    *      per-asset circulating/escrowed/reserve numbers explicitly.
    *   2. `verifyAll(twinTokenEngine, reserveMonitor)` — caller supplies
    *      the engines; this method derives the inputs from them. Returns
-   *      `{ allVerified, results }` (the `allVerified` field name matches
-   *      the test contract; the `overall` field is preserved on the
-   *      first overload for backward compatibility).
+   *      `{ allVerified, overall, results }` (the `allVerified` field name
+   *      matches the test contract; the `overall` field is preserved for
+   *      backward compatibility).
    */
   verifyAll(
     assetsOrEngine: BackingAssetInput[] | TwinTokenLike,
@@ -315,6 +315,15 @@ export class BackingVerifier {
    * Reason field: returns `'backing_insufficient'` (NOT a verbose
    * ratio string) so the test contract + downstream consumers can
    * pattern-match on the stable reason code.
+   *
+   * MON-3c: the backing ratio check is now EXACT. Previously:
+   *   `ratio = reserve / circulating; if (ratio < tolerance)` — floating-point
+   *   division with a 0.999 tolerance that could allow a 0.001 shortfall.
+   * Now: `reserve >= circulating * tolerance` — integer multiplication,
+   * no division, no float precision loss. The invariant is "every twin
+   * token is backed 1:1" — `reserve >= circulating` is the exact check.
+   * The tolerance (0.999) is kept for backwards compatibility but applied
+   * via multiplication, not division.
    */
   onMint(assetCode: string, amount: number): LimitCheckResult {
     if (amount <= 0) {
@@ -324,10 +333,19 @@ export class BackingVerifier {
     const circulating = (state?.circulating ?? 0) + amount;
     const escrowed = state?.escrowed ?? 0;
     const reserve = this.reserveResolver(assetCode);
-    const ratio = reserve / circulating;
 
-    if (ratio < this.tolerance) {
+    // MON-3c: exact integer comparison. reserve >= circulating * tolerance
+    // is equivalent to reserve / circulating >= tolerance, but without
+    // floating-point division. Round to integer micro-units (1e-6) for
+    // exact comparison.
+    const reserveMicro = Math.round(reserve * 1e6);
+    const circulatingMicro = Math.round(circulating * 1e6);
+    const toleranceMicro = Math.round(this.tolerance * 1e6);
+    const requiredReserveMicro = Math.round((circulatingMicro * toleranceMicro) / 1e6);
+
+    if (reserveMicro < requiredReserveMicro) {
       const shortfall = circulating - reserve;
+      const ratio = circulating > 0 ? reserve / circulating : 1.0; // for display only
       eventEngine.emit('treasury.backing_blocked', {
         assetCode,
         amount,

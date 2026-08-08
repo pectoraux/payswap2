@@ -2,3 +2,7 @@
 # See tests/setup.ts for why override is required.
 [test]
 preload = ["./tests/setup.ts"]
+# Run all test files under tests/, not just tests/production3/
+root = "."
+# The single-rule invariant test scans all of src/ — give it room.
+timeout = 30000

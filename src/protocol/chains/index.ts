@@ -93,20 +93,11 @@ export {
 } from './stellar/settlement';
 export type { SettlementResult } from './stellar/settlement';
 
-// Stellar Horizon sync ------------------------------------------------------
-export { HorizonSync, horizonSync } from './stellar/horizon';
-export type {
-  LedgerCloseEvent,
-  AccountEffect,
-  TransactionEffect,
-} from './stellar/horizon';
+// Stellar assets — `makeAsset` is already imported above (line 79) from
+// `./stellar/assets`. The `twinTokenCode as makeAsset` alias from origin/main
+// was removed because it conflicted with the canonical `makeAsset` export.
 
-// EVM stubs -----------------------------------------------------------------
-export { EthereumChainAdapter, ethereumChainAdapter } from './ethereum/adapter';
-export { BaseChainAdapter, baseChainAdapter } from './base/adapter';
-export { PolygonChainAdapter, polygonChainAdapter } from './polygon/adapter';
-
-// stellarNetwork — a singleton for managing Stellar network configuration
+// stellarNetwork — a singleton for managing Stellar network configuration.
 // (mode + secret key). Test helper: `stellarNetwork.reset()` restores the
 // default simulation-mode state AND clears the singleton adapter's sim state
 // (balances, accounts, trustlines, escrows, ledger listeners) so each test
@@ -131,6 +122,19 @@ export const stellarNetwork = {
     if (opts.secretKey !== undefined) this._secretKey = opts.secretKey;
   },
 };
+
+// Stellar Horizon sync ------------------------------------------------------
+export { HorizonSync, horizonSync } from './stellar/horizon';
+export type {
+  LedgerCloseEvent,
+  AccountEffect,
+  TransactionEffect,
+} from './stellar/horizon';
+
+// EVM stubs -----------------------------------------------------------------
+export { EthereumChainAdapter, ethereumChainAdapter } from './ethereum/adapter';
+export { BaseChainAdapter, baseChainAdapter } from './base/adapter';
+export { PolygonChainAdapter, polygonChainAdapter } from './polygon/adapter';
 
 // ============================================================================
 // Auto-registration: Stellar is the default chain.

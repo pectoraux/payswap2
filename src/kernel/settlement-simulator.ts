@@ -29,6 +29,7 @@ import {
 } from '@/runtime/liquidity/policy-engine';
 import { BandwidthEngine } from '@/runtime/liquidity/bandwidth-engine';
 import { SettlementContractEngine } from '@/runtime/liquidity/settlement-contract-engine';
+import { fxEngine } from '@/kernel/fx';
 
 // ── Countries + reserve configuration ──
 interface CountryConfig {
@@ -167,7 +168,7 @@ function runSettlementScenario(opts: {
       fromCurrency: from.currency,
       toCurrency: to.currency,
       amount: opts.amount,
-      fxRate: 1.0, // simplified
+      fxRate: fxEngine.rate(from.currency as any, to.currency as any) ?? 1,
       senderReserve: reserveState(from.country),
       receiverReserve: reserveState(to.country),
       senderBandwidth: senderBw,

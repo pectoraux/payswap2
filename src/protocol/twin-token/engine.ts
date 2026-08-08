@@ -277,6 +277,14 @@ export class TwinTokenEngine {
     this.operations.push(full);
     return full;
   }
+
+  /** Reset all state (for tests). */
+  reset(): void {
+    this.assets.clear();
+    this.balances.clear();
+    this.escrows.clear();
+    this.operations.length = 0;
+  }
 }
 
 export const twinTokenEngine = new TwinTokenEngine();

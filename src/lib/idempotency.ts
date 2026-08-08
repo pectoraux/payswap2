@@ -11,6 +11,19 @@
  * `withIdempotency()`. A second request with the same key (within the
  * TTL) returns the cached `{ status, body }` without re-running the
  * side effect.
+ *
+ * Rules:
+ *  - Same key → return cached response (dedup).
+ *  - No key → no idempotency (pass through).
+ *  - Key expires after `ttlHours` (default: 24h).
+ *  - DB lookup failure is fail-open (better than blocking all money
+ *    movement because the dedup layer is degraded). The degradation
+ *    is logged loudly so ops knows.
+ *
+ * Future work (OPS-1 — request-hash mismatch → 409 Conflict) is tracked
+ * in the audit roadmap; the IdempotencyRecord schema already has
+ * `requestHash`/`scope`/`responseStatus`/`responseBody` columns ready
+ * for that upgrade.
  */
 
 import type { NextRequest } from 'next/server';
@@ -50,12 +63,17 @@ export function newIdempotencyKey(): string {
 }
 
 /**
- * Validate an idempotency key format (alphanumeric + dashes/underscores,
- * max 128 chars).
+ * Clean up expired idempotency records. Call this from a periodic job.
  */
-export function isValidIdempotencyKey(key: string): boolean {
-  if (!key || key.length === 0 || key.length > 128) return false;
-  return /^[a-zA-Z0-9_-]+$/.test(key);
+export async function cleanupExpiredIdempotencyRecords(): Promise<{ deleted: number }> {
+  try {
+    const result = await db.idempotencyRecord.deleteMany({
+      where: { expiresAt: { lt: new Date() } },
+    });
+    return { deleted: result.count };
+  } catch {
+    return { deleted: 0 };
+  }
 }
 
 /**

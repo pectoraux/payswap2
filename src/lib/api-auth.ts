@@ -133,3 +133,112 @@ export function unauthorized() {
 export function forbidden() {
   return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 }
+
+// ── SEC-4: API key authentication with scopes ────────────────────────────
+
+import { createHash } from 'crypto';
+
+/**
+ * The result of authenticating via API key.
+ * Contains the merchant ID + the key's scopes for authorization.
+ */
+export interface ApiKeyAuth {
+  merchantId: string;
+  scopes: string[];
+  keyId: string;
+  environment: string;
+}
+
+/**
+ * Authenticate a request via API key (Bearer token or x-api-key header).
+ *
+ * SEC-4: Stripe-style API keys. The key is `psk_live_…` or `psk_test_…`,
+ * SHA-256 hashed at rest. The prefix is indexed for lookup. Scopes are
+ * per-key — a key scoped to `payments:read` cannot create a payout.
+ *
+ * Usage:
+ *   const keyAuth = await requireApiKey(request, 'payments:write');
+ *   if (!keyAuth) return unauthorized();
+ *
+ * Returns null if:
+ *   - No API key header is present
+ *   - The key is not found / revoked / expired
+ *   - The key lacks the required scope
+ */
+export async function requireApiKey(
+  req: Request,
+  requiredScope?: string,
+): Promise<ApiKeyAuth | null> {
+  // Extract the key from the Authorization header (Bearer psk_live_…) or
+  // the x-api-key header.
+  let plainKey: string | null = null;
+  const authHeader = req.headers.get('authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    plainKey = authHeader.slice(7).trim();
+  }
+  if (!plainKey) {
+    plainKey = req.headers.get('x-api-key');
+  }
+  if (!plainKey || !plainKey.startsWith('psk_')) return null;
+
+  // Hash the key for lookup.
+  const keyHash = createHash('sha256').update(plainKey).digest('hex');
+
+  // Look up the key.
+  const apiKey = await db.apiKey.findUnique({
+    where: { keyHash },
+  });
+
+  if (!apiKey) return null;
+  if (apiKey.status !== 'ACTIVE') return null;
+  if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null;
+
+  // Parse scopes.
+  let scopes: string[] = [];
+  try {
+    scopes = JSON.parse(apiKey.scopes);
+  } catch {
+    scopes = [];
+  }
+
+  // Check the required scope.
+  if (requiredScope && !scopes.includes(requiredScope)) {
+    return null;
+  }
+
+  // Update last-used tracking (fire-and-forget).
+  const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  db.apiKey.update({
+    where: { id: apiKey.id },
+    data: { lastUsedAt: new Date(), lastUsedIp: clientIp },
+  }).catch(() => { /* best-effort */ });
+
+  return {
+    merchantId: apiKey.merchantId,
+    scopes,
+    keyId: apiKey.id,
+    environment: apiKey.environment,
+  };
+}
+
+/**
+ * Authenticate via either session OR API key. Returns the merchant ID if
+ * either authentication method succeeds.
+ *
+ * Usage:
+ *   const merchantId = await requireMerchantOrApiKey(req, 'payments:write');
+ *   if (!merchantId) return unauthorized();
+ */
+export async function requireMerchantOrApiKey(
+  req: Request,
+  requiredScope?: string,
+): Promise<string | null> {
+  // Try API key first.
+  const keyAuth = await requireApiKey(req, requiredScope);
+  if (keyAuth) return keyAuth.merchantId;
+
+  // Fall back to session.
+  const session = await requireSession();
+  if (!session) return null;
+  return requireMerchantId();
+}

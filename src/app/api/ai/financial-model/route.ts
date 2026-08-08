@@ -41,6 +41,12 @@ Answer questions clearly, concisely, and with specific numbers. Use the provided
     return NextResponse.json({
       ok: false,
       error: 'AI assistant unavailable',
+      debug: {
+        hasZaiApiKey: !!process.env.ZAI_API_KEY,
+        hasZaiBaseUrl: !!process.env.ZAI_BASE_URL,
+        zaiApiKeyPrefix: process.env.ZAI_API_KEY?.slice(0, 10) ?? 'missing',
+        zaiBaseUrl: process.env.ZAI_BASE_URL ?? 'missing',
+      },
       fallback: 'The AI assistant is currently unavailable. Please try again later.',
     }, { status: 503 });
   }

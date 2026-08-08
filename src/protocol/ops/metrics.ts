@@ -359,6 +359,13 @@ export class Histogram implements MetricDescriptor {
     return this.globalCount === 0 ? 0 : round(this.globalSum / this.globalCount, 4);
   }
 
+  /** Get histogram snapshot for a specific label set (test compatibility). */
+  get(labels?: LabelSet): { count: number; sum: number; values: number[] } | undefined {
+    const e = this.entries.get(labelKey(this.labels, labels));
+    if (!e) return undefined;
+    return { count: e.count, sum: round(e.sum, 6), values: [...e.values] };
+  }
+
   /** Per-label-set histogram snapshots. */
   snapshots(): HistogramSnapshot[] {
     return [...this.entries.values()].map((e) => {

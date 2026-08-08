@@ -80,3 +80,12 @@ export {
   productionConnectorRegistry,
 } from './registry';
 export type { AnyProductionConnector } from './registry';
+
+// Shared singletons — `sharedHealthMonitor` and `sharedMetricsCollector`
+// are already re-exported from `./health` and `./metrics` above (lines 53/55).
+// The origin/main local instantiation was removed because it conflicted with
+// the canonical re-exports.
+
+// `defaultRetryPolicy` is already re-exported above (line 43) from `./retry`.
+// The origin/main alias `DEFAULT_RETRY_POLICY as defaultRetryPolicy` was
+// removed because it conflicted with the canonical re-export.

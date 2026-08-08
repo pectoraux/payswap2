@@ -109,6 +109,7 @@ function formatMessage(rule: AlertRule, value: number): string {
     lt: '<',
     gte: '>=',
     lte: '<=',
+    eq: '==',
   };
   return `${rule.name}: ${rule.metric}=${round6(value)} ${op[rule.condition]} ${rule.threshold}`;
 }

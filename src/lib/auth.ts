@@ -75,7 +75,12 @@ export const authOptions: NextAuthOptions = {
   // Evaluated lazily via getter so the module can be imported even before
   // env vars are fully loaded (Next.js loads .env asynchronously in some
   // contexts). The secret is checked on first use, not on import.
+  // SECURITY: no fallback secret. A hardcoded fallback secret in a public
+  // repo lets anyone forge JWTs with SUPER_ADMIN roles — the entire
+  // deny-by-default middleware becomes decorative.
   get secret() {
     return requireNextAuthSecret();
   },
 };
+
+// `requireNextAuthSecret()` is imported from `@/lib/secrets` (canonical source).

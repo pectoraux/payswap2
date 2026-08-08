@@ -12,15 +12,17 @@
  *   - fallbackGraph (deterministic fallback branches)
  *   - rollbackPlan (how to reverse if something fails)
  *
- * Strategy selection is deterministic:
- *   1. Same country → LOCAL_RAIL
- *   2. Both countries have fiat reserves → RESERVE_TO_RESERVE
- *   3. Sender has reserve, receiver doesn't → RESERVE_TO_MARKET
- *   4. Sender doesn't, receiver has reserve → MARKET_TO_RESERVE
- *   5. Neither has reserve → MARKET_TO_MARKET
+ * S3 FIX: Strategy selection is now DELEGATED to the settlement waterfall's
+ * `resolvePayment()` — the SAME rule the live dispatcher uses. Previously
+ * `selectStrategy()` was a hand-written boolean matrix that could diverge
+ * from the waterfall. Now there is ONE rule: both the simulator (which calls
+ * `compile()` → `selectStrategy()`) and production (which calls the waterfall
+ * directly) derive strategy from the same per-leg resolution.
  *
  * All output is deterministic — same input + same reserve state = same plan.
  */
+
+import { resolvePayment } from './settlement-waterfall';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -298,7 +300,19 @@ export class LiquidityPolicyEngine {
   // ─── Strategy Selection ───────────────────────────────────────────────────
 
   /**
-   * Select the settlement strategy based on reserve availability.
+   * Select the settlement strategy by DELEGATING to the settlement waterfall's
+   * per-leg resolver.
+   *
+   * S3 FIX: Previously this was a hand-written boolean matrix on
+   * `hasFiatReserve` — a parallel rule to the waterfall used by the live
+   * dispatcher. The simulator (which calls `compile()` → `selectStrategy()`)
+   * and production (which calls the waterfall directly) could disagree on
+   * strategy for the same input. Now there is ONE rule: both paths derive
+   * strategy from `resolvePayment()`.
+   *
+   * The planner stays pure and deterministic (same input → same strategy).
+   * The waterfall is the internal implementation of that derivation.
+   *
    * Deterministic: same input = same strategy.
    *
    * SINGLE-RULE INVARIANT: this method delegates to `resolvePayment` from
@@ -321,8 +335,13 @@ export class LiquidityPolicyEngine {
   // ─── Strategy 1: LOCAL_RAIL ───────────────────────────────────────────────
 
   /**
-   * Same country. Credit reserve, mint twin tokens, credit recipient.
+   * Same country. Credit reserve, settle immediately.
    * No stablecoins, no LPs.
+   *
+   * I2 DECISION: LOCAL_RAIL does NOT mint twin tokens. A local GHS→GHS
+   * payment is a symmetric FIAT movement (+X in, −X out) → net reserve
+   * movement 0 → net twin movement 0. Twin token supply tracks reserve
+   * *top-ups* (treasury operations), not payment flows. See DECISIONS.md.
    */
   private compileLocalRail(
     input: PolicyEngineInput,
@@ -338,16 +357,11 @@ export class LiquidityPolicyEngine {
       reason: `LOCAL_RAIL: Credit reserve with sender's ${input.amount} ${input.fromCurrency}`,
     });
 
-    // 2. Mint twin tokens (1:1 with reserve credit)
-    treasuryActions.push({
-      type: 'mint_twin_tokens',
-      country: input.fromCountry,
-      currency: input.fromCurrency,
-      amount: input.amount,
-      reason: `LOCAL_RAIL: Mint ${input.amount} twin tokens for recipient`,
-    });
+    // (I2) NO twin token mint on LOCAL_RAIL — twin supply tracks reserve
+    // top-ups, not local payment flows. The merchant disbursement step
+    // (or wallet transfer) debits the reserve symmetrically.
 
-    // 3. Settlement: immediate, no escrow, no LP
+    // 2. Settlement: immediate, no escrow, no LP
     settlementActions.push({
       type: 'create_contract',
       amount: input.amount,
@@ -368,6 +382,11 @@ export class LiquidityPolicyEngine {
   /**
    * Both countries have fiat reserves. Credit reserve A, mint twin tokens B.
    * No stablecoins, no LPs (unless reserve B is insufficient at redemption).
+   *
+   * I1 DECISION: We do NOT debit destination reserve in-plan. The corridor
+   * obligation A→B is recorded and settled net on a rebalance cycle by the
+   * CorridorBalancer (W5). Per-country reserve drift is monitored with an
+   * alarm threshold (see reserve-drift-monitor.ts). See DECISIONS.md.
    */
   private compileReserveToReserve(
     input: PolicyEngineInput,
@@ -376,7 +395,7 @@ export class LiquidityPolicyEngine {
   ): void {
     const recipientAmount = input.amount * input.fxRate;
 
-    // 1. Credit sender's country reserve
+    // 1. Credit sender's country reserve (real FIAT deposit from sender)
     treasuryActions.push({
       type: 'credit_fiat_reserve',
       country: input.fromCountry,
@@ -385,7 +404,7 @@ export class LiquidityPolicyEngine {
       reason: `RESERVE_TO_RESERVE: Credit ${input.fromCountry} reserve`,
     });
 
-    // 2. Mint recipient's country twin tokens
+    // 2. Mint recipient's country twin tokens (1:1 backed by dest reserve)
     treasuryActions.push({
       type: 'mint_twin_tokens',
       country: input.toCountry,
@@ -394,19 +413,23 @@ export class LiquidityPolicyEngine {
       reason: `RESERVE_TO_RESERVE: Mint ${recipientAmount} ${input.toCurrency} twin tokens`,
     });
 
+    // (I1) NO in-plan debit of destination reserve. The corridor obligation
+    // A→B is recorded by the dispatcher (corridor.obligation.recorded event)
+    // and settled net by the CorridorBalancer on its rebalance cycle.
+
     // 3. Settlement: recipient gets twin tokens, can redeem later
     settlementActions.push({
       type: 'create_contract',
       amount: recipientAmount,
       currency: input.toCurrency,
-      reason: 'RESERVE_TO_RESERVE: Recipient receives twin tokens (redeemable later)',
+      reason: 'RESERVE_TO_RESERVE: Recipient receives twin tokens (redeemable later) — corridor obligation recorded for net settlement',
     });
 
     settlementActions.push({
       type: 'close_contract',
       amount: recipientAmount,
       currency: input.toCurrency,
-      reason: 'RESERVE_TO_RESERVE: Twin tokens credited, settlement complete',
+      reason: 'RESERVE_TO_RESERVE: Twin tokens credited, settlement complete (net settlement pending)',
     });
   }
 

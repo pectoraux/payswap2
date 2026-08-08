@@ -47,6 +47,12 @@ export interface BurnLimitConfig {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Default per-transaction mint limit (used as a fallback for unknown assets). */
+export const DEFAULT_PER_TX_MINT_LIMIT = 50_000;
+
+/** Default daily mint limit (used as a fallback for unknown assets). */
+export const DEFAULT_DAILY_MINT_LIMIT = 100_000;
+
 /** Default mint limits per asset code. */
 export const DEFAULT_MINT_LIMITS: Record<string, MintLimitConfig> = {
   TWINGHS: { dailyLimit: 100_000, perTxLimit: 50_000, cooldownMs: 0 },
@@ -302,23 +308,23 @@ export class BurnLimitEngine {
 
     if (amount > limit.perTxLimit) {
       eventEngine.emit('treasury.burn_blocked', {
-        assetCode, amount, reason: 'per_tx_limit_exceeded',
+        assetCode, amount, reason: 'per_tx_exceeded',
         perTxLimit: limit.perTxLimit,
       });
       return {
         allowed: false,
-        reason: `per_tx_limit_exceeded:${amount}>${limit.perTxLimit}`,
+        reason: 'per_tx_exceeded',
         remainingDaily,
       };
     }
     if (amount > remainingDaily) {
       eventEngine.emit('treasury.burn_blocked', {
-        assetCode, amount, reason: 'daily_limit_exceeded',
+        assetCode, amount, reason: 'daily_exceeded',
         dailyLimit: limit.dailyLimit, dailyUsed: limit.dailyUsed,
       });
       return {
         allowed: false,
-        reason: `daily_limit_exceeded:${amount}>${remainingDaily}`,
+        reason: 'daily_exceeded',
         remainingDaily,
       };
     }

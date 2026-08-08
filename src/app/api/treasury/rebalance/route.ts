@@ -80,29 +80,80 @@ export async function POST(req: NextRequest) {
       ? body.reason.trim().slice(0, 500)
       : null;
 
+  // W5: Actually invoke the corridor balancer instead of just logging.
+  // The balancer checks if the donor corridor has excess and the recipient
+  // has a shortfall, then moves liquidity between them.
+  let rebalanceResult: { rebalanced: boolean; amountMoved?: number; reason?: string } = {
+    rebalanced: false,
+    reason: 'balancer_not_invoked',
+  };
+
+  try {
+    // Dynamic import to avoid loading treasury-v2 on every request
+    const { corridorBalancer } = await import('@/protocol/treasury-v2/balancing');
+    const { reserveMonitor } = await import('@/protocol/treasury-v2');
+    // W5 FIX: corridorBalancer has no .rebalance() method — it has
+    // checkAndRebalance(corridor, liquidityNetwork, reserveMonitor). But the
+    // rebalance endpoint doesn't have a LiquidityNetwork handy. So we use
+    // the simpler approach: directly move reserves between two currencies
+    // via the reserveMonitor (the canonical reserve state owner).
+    // This is an operator-initiated rebalance — not the auto-rebalance loop.
+    const fromReserve = reserveMonitor.getReserve(fromCorridor);
+    const toReserve = reserveMonitor.getReserve(toCorridor);
+    if (!fromReserve || fromReserve.available < amount) {
+      rebalanceResult = {
+        rebalanced: false,
+        reason: `insufficient_available_on_donor: ${fromCorridor} has ${fromReserve?.available ?? 0}, need ${amount}`,
+      };
+    } else {
+      // Move `amount` from donor to recipient.
+      reserveMonitor.setReserve(fromCorridor, fromReserve.balance - amount, fromReserve.reserved);
+      if (toReserve) {
+        reserveMonitor.setReserve(toCorridor, toReserve.balance + amount, toReserve.reserved);
+      } else {
+        reserveMonitor.setReserve(toCorridor, amount, 0);
+      }
+      rebalanceResult = {
+        rebalanced: true,
+        amountMoved: amount,
+        reason: `moved ${amount} from ${fromCorridor} to ${toCorridor}`,
+      };
+    }
+  } catch (err) {
+    rebalanceResult = {
+      rebalanced: false,
+      reason: `balancer_error: ${err instanceof Error ? err.message : 'unknown'}`,
+    };
+  }
+
   const log = await db.auditLog.create({
     data: {
       userId: userId ?? null,
       action: 'TREASURY.REBALANCE',
       resourceType: 'corridor',
       resourceId: `${fromCorridor}→${toCorridor}`,
-      result: 'SUCCESS',
+      result: rebalanceResult.rebalanced ? 'SUCCESS' : 'SKIPPED',
       details: JSON.stringify({
         fromCorridor,
         toCorridor,
         amount,
         reason,
         actorEmail: actorEmail ?? null,
+        rebalanced: rebalanceResult.rebalanced,
+        amountMoved: rebalanceResult.amountMoved ?? 0,
+        skipReason: rebalanceResult.reason,
       }),
     },
-  });
+  }).catch(() => null); // best-effort audit log
 
   return NextResponse.json({
-    rebalanced: true,
+    rebalanced: rebalanceResult.rebalanced,
     fromCorridor,
     toCorridor,
     amount,
-    auditLogId: log.id,
-    createdAt: log.createdAt,
+    amountMoved: rebalanceResult.amountMoved ?? 0,
+    reason: rebalanceResult.reason,
+    auditLogId: log?.id ?? null,
+    createdAt: log?.createdAt ?? new Date().toISOString(),
   });
 }

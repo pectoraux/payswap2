@@ -73,6 +73,7 @@ function snapshotEngine(engine: unknown): string {
   if (engine === null || engine === undefined) return '';
   const anyEngine = engine as {
     snapshot?: () => unknown;
+    getTrialBalance?: () => unknown;
     trialBalance?: () => unknown;
     integrity?: () => unknown;
     read?: () => unknown;
@@ -80,6 +81,9 @@ function snapshotEngine(engine: unknown): string {
   try {
     if (typeof anyEngine.snapshot === 'function') {
       return JSON.stringify(anyEngine.snapshot());
+    }
+    if (typeof anyEngine.getTrialBalance === 'function') {
+      return JSON.stringify(anyEngine.getTrialBalance());
     }
     if (typeof anyEngine.trialBalance === 'function') {
       return JSON.stringify(anyEngine.trialBalance());
