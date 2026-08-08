@@ -94,6 +94,7 @@ class PaymentServiceClass {
 
     // ── 1. Find or create customer record (application concern) ──────────
     let customerId: string | null = null;
+    let customerCountry: string | null = null;
     if (params.customerEmail && params.customerName) {
       let customer = await db.customerRecord.findFirst({
         where: {
@@ -115,6 +116,7 @@ class PaymentServiceClass {
         });
       }
       customerId = customer.id;
+      customerCountry = customer.country;
     }
 
     // ── 2. Execute through the Execution Planner ───────────────────────────
@@ -124,7 +126,26 @@ class PaymentServiceClass {
     // Council (if needed) → Coordinator → Settlement → Dispatcher → Ledger.
     //
     // This is the ONLY entry point to the runtime. Nothing dispatches directly.
-    const crossBorder = params.currency !== 'USD' && params.currency !== params.currency; // simplified
+    //
+    // C-3 fix (regrade 2026-08-08): this used to be
+    // `params.currency !== 'USD' && params.currency !== params.currency` —
+    // the second clause is `x !== x`, always false, so crossBorder was
+    // ALWAYS false regardless of the actual transaction, and no payment
+    // ever reached the SAFE/STRATEGIC execution profile's policy/council/
+    // settlement review on that basis. Real signal: this payment flow is
+    // single-currency (sourceCurrency === destinationCurrency === params.
+    // currency below), so "cross-border" here means the merchant and the
+    // customer are in different countries — sourced from `Merchant.country`
+    // and `CustomerRecord.country`, not a currency proxy that can't fire.
+    const merchantRow = await db.merchant.findUnique({
+      where: { id: params.merchantId },
+      select: { country: true },
+    });
+    const crossBorder = !!(
+      merchantRow?.country &&
+      customerCountry &&
+      merchantRow.country !== customerCountry
+    );
     const plannerResult = await executionPlanner.execute({
       command: {
         type: 'payment.create',

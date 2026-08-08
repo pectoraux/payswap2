@@ -14,6 +14,7 @@
  * source of truth.
  */
 
+import { db } from '@/lib/db';
 import { eventBus, createEvent } from './event-bus';
 import { v4 as uuidv4 } from 'uuid';
 import { runtime } from '@/runtime';
@@ -51,6 +52,23 @@ class RefundServiceClass {
   async create(params: CreateRefundParams): Promise<RefundResult> {
     const ts = params.timestamp || new Date();
 
+    // C-3 fix (regrade 2026-08-08): crossBorder was hardcoded `false`
+    // here, so a refund could never reach the SAFE/STRATEGIC execution
+    // profile's policy/council/settlement review on that basis. A refund
+    // should inherit the cross-border status of the payment it reverses —
+    // look up the original payment's merchant + customer country.
+    let crossBorder = false;
+    const originalPayment = await db.payment.findUnique({
+      where: { id: params.paymentId },
+      select: {
+        merchant: { select: { country: true } },
+        customer: { select: { country: true } },
+      },
+    });
+    if (originalPayment?.merchant?.country && originalPayment?.customer?.country) {
+      crossBorder = originalPayment.merchant.country !== originalPayment.customer.country;
+    }
+
     // ── 1. Execute through the Execution Planner ───────────────────────────
     const plannerResult = await executionPlanner.execute({
       command: {
@@ -76,7 +94,7 @@ class RefundServiceClass {
       transactionType: 'refund',
       amount: params.amount,
       currency: 'USD',
-      crossBorder: false,
+      crossBorder,
       metadata: {
         actor: { id: params.actorId ?? 'system:refund-service', role: 'merchant' },
         environment: (params.environment === 'live' ? 'live' : 'sandbox') as Environment,

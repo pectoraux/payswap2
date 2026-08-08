@@ -10,6 +10,7 @@
  * row as a derived projection.
  */
 
+import { db } from '@/lib/db';
 import { eventBus, createEvent } from './event-bus';
 import { v4 as uuidv4 } from 'uuid';
 import { runtime } from '@/runtime';
@@ -76,6 +77,21 @@ class PayoutServiceClass {
       verificationLevel: 'institutional',
     });
 
+    // C-3 fix (regrade 2026-08-08): crossBorder was hardcoded `false`
+    // here, so a payout could never reach the SAFE/STRATEGIC execution
+    // profile's policy/council/settlement review on that basis regardless
+    // of the actual transaction. This payout flow doesn't carry an
+    // explicit destination country, but it does settle in a specific
+    // `params.currency` against the merchant's registered settlement
+    // currency (`Merchant.currency`) — a payout in a currency other than
+    // the merchant's home currency is a real cross-currency/cross-border
+    // signal, not a proxy that can't fire.
+    const merchantRow = await db.merchant.findUnique({
+      where: { id: params.merchantId },
+      select: { currency: true },
+    });
+    const crossBorder = !!(merchantRow?.currency && merchantRow.currency !== params.currency);
+
     // ── 1. Execute through the Execution Planner ───────────────────────────
     const plannerResult = await executionPlanner.execute({
       command: {
@@ -109,7 +125,7 @@ class PayoutServiceClass {
       transactionType: 'payout',
       amount: params.amount,
       currency: params.currency,
-      crossBorder: false,
+      crossBorder,
       metadata: {
         actor: { id: params.actorId ?? 'system:payout-service', role: 'merchant' },
         environment: (params.environment === 'live' ? 'live' : 'sandbox') as Environment,

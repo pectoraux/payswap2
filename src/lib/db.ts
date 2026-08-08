@@ -57,8 +57,17 @@ export const db = base.$extends({
     },
     payout: {
       sourceAmount: { needs: { sourceAmount: true }, compute(p: any) { return Number(p.sourceAmount) } },
-      fee: { needs: { fee: true }, compute(p: any) { return Number(p.fee) } },
-      netAmount: { needs: { netAmount: true }, compute(p: any) { return Number(p.netAmount) } },
+      // P2-2 followup (C-5, regrade 2026-08-08): fee + netAmount NO LONGER
+      // coerced — same migration already done for `payment.fee`/
+      // `netAmount` above. `src/services/payout-service.ts` now computes
+      // these with `Money.mulBps` + `Money.subtract` (exact BigInt); this
+      // coercion was silently truncating that exact value back to float
+      // on every read. Consumers receive a Prisma.Decimal and should
+      // rehydrate via `Money.fromDecimal`, or `Number(...)` for display
+      // formatting only (verified: all current UI consumers already wrap
+      // with `Number(payout.fee)` defensively).
+      // fee: { needs: { fee: true }, compute(p: any) { return Number(p.fee) } },
+      // netAmount: { needs: { netAmount: true }, compute(p: any) { return Number(p.netAmount) } },
       fxRate: { needs: { fxRate: true }, compute(p: any) { return Number(p.fxRate) } },
     },
     refund: {

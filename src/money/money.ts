@@ -209,13 +209,57 @@ export class Money {
     return results.map((m) => new Money(m, this.currency));
   }
 
+  /**
+   * Parse a decimal factor (FX rate, multiplier) into an exact BigInt
+   * scaled by `10^scale`, WITHOUT ever computing `factor * 10**scale` in
+   * floating point.
+   *
+   * C-5 fix (regrade 2026-08-08): the previous implementation did
+   * `BigInt(Math.round(f * 1_000_000))` — the multiply happens in IEEE-754
+   * float *before* rounding, and only preserves 6 decimal digits of the
+   * factor no matter how much precision the caller actually had. A JS
+   * `number` is stringified first here instead — `Number.prototype.
+   * toString()` always produces the shortest decimal string that
+   * round-trips back to the exact same double, so this captures the
+   * factor's full real precision — then that string is parsed digit by
+   * digit into an integer, with no float arithmetic at any step. Passing
+   * a `string` directly (e.g. an FX rate read straight from an API or a
+   * Decimal column, which may carry more precision than a double
+   * comfortably holds) is exact by construction, skipping the
+   * number round-trip entirely.
+   */
+  private static parseScaledFactor(factor: number | string, scale: number): bigint {
+    const str = typeof factor === 'number' ? factor.toString() : factor;
+    if (!/^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(str)) {
+      throw new Error(`Money: invalid decimal factor: ${factor}`);
+    }
+    // Scientific notation only shows up for very large/small magnitudes
+    // (toString() switches to exponential form) — vanishingly rare for a
+    // real FX rate or fee multiplier. Falls back to a float round-trip
+    // only in that edge case; every ordinary decimal factor is exact.
+    if (/e/i.test(str)) {
+      const f = Number(str);
+      if (!Number.isFinite(f)) throw new Error(`Money: factor is not finite: ${factor}`);
+      return BigInt(Math.round(f * 10 ** scale));
+    }
+    const neg = str.startsWith('-');
+    const unsigned = neg ? str.slice(1) : str;
+    const [wholePart, fracPart = ''] = unsigned.split('.');
+    const fracPadded = (fracPart + '0'.repeat(scale)).slice(0, scale);
+    // HALF_UP round the digit immediately after the kept precision, if
+    // the factor carried more decimal digits than `scale` keeps.
+    const roundDigit = fracPart.length > scale ? fracPart[scale] : '0';
+    let combined = BigInt((wholePart || '0') + fracPadded);
+    if (roundDigit >= '5') combined += BigInt(1);
+    return neg ? -combined : combined;
+  }
+
   multiply(factor: number | string, _mode: RoundingMode = 'HALF_UP'): Money {
-    const f = typeof factor === 'string' ? parseFloat(factor) : factor;
-    if (!Number.isFinite(f)) throw new Error(`Money.multiply: factor is not finite: ${factor}`);
-    const scale = BigInt(1000000);
-    const scaledFactor = BigInt(Math.round(f * 1_000_000));
+    const scale = 9; // 9 exact decimal digits of factor precision
+    const scaleBig = BigInt(10) ** BigInt(scale);
+    const scaledFactor = Money.parseScaledFactor(factor, scale);
     const product = this.minorUnits * scaledFactor;
-    return new Money(product / scale, this.currency);
+    return new Money(product / scaleBig, this.currency);
   }
 
   /**
@@ -238,12 +282,13 @@ export class Money {
     return new Money(rounded, this.currency);
   }
 
-  divide(divisor: number, _mode: RoundingMode = 'HALF_UP'): Money {
+  divide(divisor: number | string, _mode: RoundingMode = 'HALF_UP'): Money {
     if (divisor === 0) throw new Error('Money.divide: divisor is 0');
-    if (!Number.isFinite(divisor)) throw new Error(`Money.divide: divisor is not finite: ${divisor}`);
-    const scale = BigInt(1000000);
-    const scaledDivisor = BigInt(Math.round(divisor * 1_000_000));
-    const scaled = this.minorUnits * scale;
+    const scale = 9; // matches multiply() — exact decimal parsing, no float scale step
+    const scaleBig = BigInt(10) ** BigInt(scale);
+    const scaledDivisor = Money.parseScaledFactor(divisor, scale);
+    if (scaledDivisor === BigInt(0)) throw new Error('Money.divide: divisor is 0');
+    const scaled = this.minorUnits * scaleBig;
     return new Money(scaled / scaledDivisor, this.currency);
   }
 
