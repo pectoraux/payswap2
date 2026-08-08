@@ -6,13 +6,43 @@
  * Every monetary value in the platform becomes a Money instance. Internally
  * uses BigInt cents (or micro-units for crypto-scale) — never float. All
  * operations are exact.
+ *
+ * P2-2 (C-5): the BigInt `Money` class is the canonical money type. The
+ * `Math.round(x * 100) / 100` pattern in `payment-service.ts` /
+ * `payout-service.ts` / `invoice-service.ts` is being migrated to use
+ * `Money.fromMajor` + `Money.mulBps` + `Money.subtract`. The
+ * `Money.fromDecimal` / `toDecimal` helpers bridge Prisma `Decimal`
+ * columns (which now return as Decimal, post P2-2 Part B) and the Money
+ * type.
  */
+
+import type { Prisma } from '@prisma/client';
 
 export type Currency = 'USD' | 'GHS' | 'USDC' | 'EUR' | 'GBP' | 'NGN' | 'KES' | 'XOF';
 
 const DECIMAL_PLACES: Record<string, number> = {
   USD: 2, EUR: 2, GBP: 2, GHS: 2, NGN: 2, KES: 2, XOF: 0, USDC: 6,
 };
+
+/**
+ * Narrow a runtime currency code (typically `string` from API params) to
+ * the `Currency` union. Returns 'USD' for unsupported codes — this
+ * preserves the legacy 2-decimal rounding behavior (the Math.round(x*100)
+ * pattern treated every currency as 2-decimal) for currencies not yet on
+ * the Money type's allow-list.
+ *
+ * P2-2: used by payment-service / payout-service / invoice-service to
+ * convert `params.currency: string` into a Money-compatible Currency.
+ */
+export function asCurrency(code: string): Currency {
+  switch (code) {
+    case 'USD': case 'GHS': case 'USDC': case 'EUR':
+    case 'GBP': case 'NGN': case 'KES': case 'XOF':
+      return code;
+    default:
+      return 'USD';
+  }
+}
 
 export type RoundingMode = 'HALF_UP' | 'DOWN' | 'UP' | 'HALF_EVEN';
 
@@ -59,6 +89,25 @@ export class Money {
 
   static fromJSON(json: { minorUnits: string; currency: Currency }): Money {
     return new Money(BigInt(json.minorUnits), json.currency);
+  }
+
+  /**
+   * Construct a Money from a Prisma `Decimal` value (the type returned by
+   * Prisma client for `Decimal` columns when no `$extends` coercion is
+   * applied). P2-2 Part B removes the global Decimal→number coercion for
+   * `payment.fee` + `payment.netAmount`; consumers should rehydrate those
+   * columns into Money via this method on read.
+   *
+   * Accepts `Prisma.Decimal`, `string`, or `number` — the legacy `number`
+   * branch keeps backwards compat with call sites that haven't been
+   * migrated yet.
+   */
+  static fromDecimal(value: Prisma.Decimal | string | number, currency: Currency): Money {
+    if (typeof value === 'number') return Money.fromMajor(value, currency);
+    if (typeof value === 'string') return Money.fromString(value, currency);
+    // Prisma.Decimal / decimal.js — `.toString()` yields the canonical
+    // numeric string (no scientific notation for reasonable magnitudes).
+    return Money.fromString(value.toString(), currency);
   }
 
   // ─── Currency-specific static factories ────────────────────────────────
@@ -214,6 +263,19 @@ export class Money {
 
   toJSON(): { minorUnits: string; currency: Currency; major: string } {
     return { minorUnits: this.minorUnits.toString(), currency: this.currency, major: this.toMajorString() };
+  }
+
+  /**
+   * Convert to a Prisma `Decimal` for writes to a `Decimal` column. P2-2:
+   * the canonical persistence representation for a Money value is its
+   * `toMajorString()` (e.g. "10.50") wrapped in `new Prisma.Decimal(...)`.
+   *
+   * Call sites that previously passed `fee: someNumber` to a Prisma write
+   * should now pass `fee: money.toDecimal()` once the producer has been
+   * migrated.
+   */
+  toDecimal(): Prisma.Decimal {
+    return new Prisma.Decimal(this.toMajorString());
   }
 
   private assertSameCurrency(other: Money): void {

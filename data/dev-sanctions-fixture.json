@@ -1,0 +1,20 @@
+{
+  "_comment": "DEV fixture for sanctions screening. Used by src/trust/sanctions-list-loader.ts when no real sanctions feed (Chainalysis KYT / TRM Labs / Refinitiv World-Check One / Dow Jones R&C) is configured via PAYSWAP_SANCTIONS_LIST_FILE. The matcher contract is identical for both the sample list and a real feed: each entry has { list, name, entry, dob?, country? }. In production, set PAYSWAP_SANCTIONS_LIST_FILE to a path served by your compliance ops pipeline (refreshed daily from the real feed).",
+  "_warning": "THIS IS A 10-NAME SAMPLE LIST — NOT A REAL SANCTIONS FEED. Do not ship to production as-is. Set PAYSWAP_SANCTIONS_LIST_FILE to a real feed file or wire src/trust/sanctions-screener.ts to a managed provider API.",
+  "entries": [
+    { "list": "ofac", "name": "KIM JONG UN", "entry": "SDN: Democratic People's Republic of Korea — Supreme Leader", "country": "North Korea" },
+    { "list": "ofac", "name": "ALI KHAMENEI", "entry": "SDN: Iran — Supreme Leader", "country": "Iran" },
+    { "list": "ofac", "name": "BASAR AL-ASSAD", "entry": "SDN: Syria — President", "country": "Syria" },
+    { "list": "ofac", "name": "NICOLAS MADURO", "entry": "SDN: Venezuela — President", "country": "Venezuela" },
+    { "list": "ofac", "name": "AYMAN AL-ZAWAHIRI", "entry": "SDN: Al-Qaeda leader", "country": "Unknown" },
+    { "list": "ofac", "name": "OSAMA BIN LADEN", "entry": "SDN: Designated terrorist entity (historical)", "country": "Unknown" },
+    { "list": "ofac", "name": "VLADIMIR PUTIN", "entry": "SDN: Russia — President (OFAC EO 14024)", "country": "Russia" },
+    { "list": "eu", "name": "SERGEI LAVROV", "entry": "EU restrictive measures: Russia — Foreign Minister", "country": "Russia" },
+    { "list": "eu", "name": "MIKHAIL MISHUSTIN", "entry": "EU restrictive measures: Russia — Prime Minister", "country": "Russia" },
+    { "list": "un", "name": "OMAR AL-BASHIR", "entry": "UN Consolidated List: Sudan — former President", "country": "Sudan" },
+    { "list": "uk_hmt", "name": "RAMZAN KADYROV", "entry": "UK HMT OFSI: Russia — Chechen leader", "country": "Russia" },
+    { "list": "ofac", "name": "TERRORIST FINANCING NETWORK ALPHA", "entry": "SDN: Designated Terrorist Entity", "country": "Unknown" },
+    { "list": "eu", "name": "DANIELA DIAMOND", "entry": "EU Consolidated: Diamond smuggling network", "country": "Central African Republic" },
+    { "list": "custom", "name": "INTERNAL WATCHLIST ENTRY 001", "entry": "PaySwap internal: previously blocked", "country": "Unknown" }
+  ]
+}

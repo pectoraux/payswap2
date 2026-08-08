@@ -1,10 +1,26 @@
 /**
- * SAR Manager — Suspicious Activity Reports. (M-TRUST-40.)
+ * SAR Manager — CANONICAL Suspicious Activity Report stack. (M-TRUST-40, P3-4 / H-8 fix.)
+ *
+ * ╔════════════════════════════════════════════════════════════════════════╗
+ * ║  CANONICAL COMPLIANCE STACK — this module is the single source of     ║
+ * ║  truth for SAR lifecycle management in PaySwap. The legacy             ║
+ * ║  in-memory stack at `src/protocol/compliance/sar.ts` is now a thin    ║
+ * ║  wrapper that delegates persistence to THIS module.                   ║
+ * ║                                                                       ║
+ * ║  DO NOT extend the legacy stack directly. New SAR-related code        ║
+ * ║  should import from `@/trust/sar-manager` (here) or `@/trust`         ║
+ * ║  (the index).                                                         ║
+ * ╚════════════════════════════════════════════════════════════════════════╝
  *
  * Manages the lifecycle of SARs:
  *   draft → filed → acknowledged → closed
  *
  * SARs are filed with regulators when suspicious activity is confirmed.
+ *
+ * Persistence: SARs are written to the `SAR` Prisma table, so they
+ * survive a process restart. The legacy `src/protocol/compliance/sar.ts`
+ * wrapper kept SARs in an in-memory `Map` — that process-local state is
+ * GONE for any code path that reaches the canonical stack.
  */
 
 import type { SARRecord, SARStatus } from './types';

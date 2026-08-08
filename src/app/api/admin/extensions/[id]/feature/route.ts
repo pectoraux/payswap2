@@ -7,6 +7,7 @@ import {
 } from '@/lib/api-auth';
 import { db } from '@/lib/db';
 import { toggleFeatured } from '@/lib/extension-featured';
+import { writeAudit } from '@/lib/audit-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,6 +54,16 @@ export async function POST(
   } else {
     featured = await toggleFeatured(id);
   }
+
+  // P3-5 (H-9 fix): audit-log the admin state change.
+  await writeAudit({
+    userId: (adminSession.user as any)?.id ?? null,
+    action: 'EXTENSION_FEATURE_TOGGLE',
+    resourceType: 'Extension',
+    resourceId: id,
+    result: 'SUCCESS',
+    details: { featured, explicit: typeof body.featured === 'boolean' },
+  });
 
   return NextResponse.json({ ok: true, extensionId: id, featured });
 }

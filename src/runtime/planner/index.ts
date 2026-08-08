@@ -27,6 +27,8 @@ import type { RuntimeCommand } from '@/runtime/dispatcher/types';
 import type { DispatchResult } from '@/runtime/dispatcher/dispatcher';
 import { runtime } from '@/runtime';
 import { liquidityPolicyEngine, type LiquidityExecutionPlan } from '@/runtime/liquidity';
+import type { PolicyContext } from '@/runtime/policy';
+import type { SettlementRequest, SettlementNetwork } from '@/runtime/settlement/adapters';
 
 // H-1 fix: import the persisted event store to flush after every dispatch.
 // This ensures events are written to the DB before the API returns,
@@ -236,7 +238,11 @@ class ExecutionPlanner {
           data: stepResult.data,
         });
 
-        if (stage === 'dispatcher' && stepResult.data?.dispatchResult) {
+        // The coordinator stage may also produce a dispatchResult (it
+        // executes the command atomically with retry + invariants). When
+        // it does, the dispatcher stage becomes a no-op and we capture
+        // the result here too.
+        if ((stage === 'dispatcher' || stage === 'coordinator') && stepResult.data?.dispatchResult) {
           dispatchResult = stepResult.data.dispatchResult as DispatchResult;
           if (!dispatchResult.success) {
             trace.finalStatus = 'failed';
@@ -364,26 +370,170 @@ class ExecutionPlanner {
         }
       }
 
-      case 'policy':
+      case 'policy': {
+        // P2-3 (C-3 fix): Wire the REAL DefaultPolicyEngine.evaluate().
+        // The engine has real rules registered via registerRealPolicyRules()
+        // in src/runtime/index.ts — sanctions screen + per-transaction
+        // amount cap. A DENY decision fails the pipeline (a payout that
+        // should fail policy — e.g., a sanctioned actor — is now blocked).
         try {
-          return { result: 'success', detail: 'Policy evaluated — passed', data: { policyPassed: true } };
+          const actor = input.command.metadata.actor;
+          const policyCtx: PolicyContext = {
+            intentKind: input.command.type,
+            actor: { id: actor.id, role: actor.role, orgId: undefined },
+            environment: input.command.metadata.environment,
+            desired: {
+              amount: input.amount,
+              currency: input.currency,
+              commandType: input.command.type,
+              ...(input.command.payload as Record<string, unknown> ?? {}),
+            },
+          };
+          const decision = await runtime.policyEngine.evaluate(policyCtx);
+          if (decision.action === 'DENY') {
+            return {
+              result: 'failed',
+              detail: `Policy DENIED by rule ${decision.ruleId ?? '<none>'}: ${decision.reason}`,
+              data: { policyPassed: false, decision },
+            };
+          }
+          if (decision.action === 'REQUIRE_APPROVAL') {
+            return {
+              result: 'skipped',
+              detail: `Policy requires approval (rule ${decision.ruleId ?? '<none>'}): ${decision.reason}`,
+              data: { policyPassed: false, decision, requiresApproval: true },
+            };
+          }
+          return {
+            result: 'success',
+            detail: `Policy ALLOWED by rule ${decision.ruleId ?? 'default'}: ${decision.reason}`,
+            data: { policyPassed: true, decision },
+          };
         } catch (err) {
-          return { result: 'skipped', detail: `Policy skipped: ${err instanceof Error ? err.message : 'error'}` };
+          return { result: 'failed', detail: `Policy evaluation threw: ${err instanceof Error ? err.message : 'error'}` };
         }
+      }
 
-      case 'council':
+      case 'council': {
+        // P2-3 (C-3 fix): Wire the REAL EconomicCouncil.convene().
+        // The council is configured in src/runtime/index.ts with real inputs
+        // (directorate.getDirectorRecommendations + control plane
+        // validateConstitution). For profiles that don't invoke the council
+        // (FAST/EMERGENCY), skip — that's legitimate, not a stub.
         if (!config.invokeCouncil) return { result: 'skipped', detail: 'Council skipped (profile)' };
-        return { result: 'success', detail: 'Council debated strategy', data: { councilInvoked: true } };
+        try {
+          const decisions = runtime.council.convene();
+          const rejected = decisions.filter((d) => d.status === 'rejected');
+          if (rejected.length > 0) {
+            return {
+              result: 'failed',
+              detail: `Council rejected ${rejected.length} proposal(s): ${rejected.map((d) => d.proposal.action).join(', ')}`,
+              data: { councilInvoked: true, decisionsCount: decisions.length, rejectedCount: rejected.length },
+            };
+          }
+          return {
+            result: 'success',
+            detail: `Council convened: ${decisions.length} decision(s)`,
+            data: { councilInvoked: true, decisionsCount: decisions.length },
+          };
+        } catch (err) {
+          return { result: 'failed', detail: `Council convene threw: ${err instanceof Error ? err.message : 'error'}` };
+        }
+      }
 
-      case 'coordinator':
+      case 'coordinator': {
+        // P2-3 (C-3 fix): Wire the REAL TransactionCoordinator.execute().
+        // The coordinator is the heavier-weight alternative to the
+        // dispatcher — it runs the handler, verifies invariants, and
+        // commits events atomically with retry + idempotency. When
+        // invokeCoordinator is true (SAFE/SIMULATION/STRATEGIC profiles),
+        // the coordinator IS the dispatch — the subsequent dispatcher
+        // stage becomes a no-op (recognizes priorDispatchResult is set).
+        // For FAST/EMERGENCY profiles, the dispatcher stage handles the
+        // dispatch.
         if (!config.invokeCoordinator) return { result: 'skipped', detail: 'Coordinator skipped (profile)' };
-        return { result: 'success', detail: 'Coordinator initiated saga', data: { coordinatorInvoked: true } };
+        try {
+          const txResult = await runtime.coordinator.execute(input.command);
+          if (!txResult.success) {
+            return {
+              result: 'failed',
+              detail: `Coordinator transaction failed: ${txResult.message}`,
+              data: { coordinatorInvoked: true, transactionId: txResult.transactionId, error: txResult.error },
+            };
+          }
+          // Bridge to a DispatchResult-shaped object so the dispatcher
+          // stage recognizes the dispatch already happened.
+          const bridgedDispatchResult: DispatchResult = {
+            success: true,
+            commandType: txResult.commandType,
+            entityId: txResult.entityId,
+            events: txResult.events as unknown as DispatchResult['events'],
+            message: txResult.message,
+            metrics: txResult.metrics as unknown as DispatchResult['metrics'],
+            dispatchedAt: Date.now(),
+          };
+          return {
+            result: 'success',
+            detail: `Coordinator committed tx ${txResult.transactionId} (${txResult.events.length} events)`,
+            data: { coordinatorInvoked: true, transactionId: txResult.transactionId, dispatchResult: bridgedDispatchResult },
+          };
+        } catch (err) {
+          return { result: 'failed', detail: `Coordinator execute threw: ${err instanceof Error ? err.message : 'error'}` };
+        }
+      }
 
-      case 'settlement':
+      case 'settlement': {
+        // P2-3 (C-3 fix): Wire the REAL settlement adapter. Build a
+        // SettlementRequest from the command payload and call the
+        // configured adapter (Stellar is the default; Ethereum/Polygon are
+        // registered but unavailable until configured). If no adapter is
+        // available for the requested network, the stage fails (rather
+        // than silently claiming success).
         if (!config.invokeSettlement) return { result: 'skipped', detail: 'Settlement skipped (profile)' };
-        return { result: 'success', detail: 'Settlement orchestrator engaged', data: { settlementInvoked: true } };
+        try {
+          const payload = (input.command.payload as Record<string, unknown>) ?? {};
+          const network = (payload.network as SettlementNetwork) ?? 'stellar';
+          const adapter = runtime.settlements.get(network);
+          if (!adapter) {
+            return { result: 'failed', detail: `No settlement adapter registered for network '${network}'` };
+          }
+          if (!(await adapter.isAvailable())) {
+            return { result: 'skipped', detail: `Settlement adapter '${network}' not available (configured but offline)` };
+          }
+          const request: SettlementRequest = {
+            network,
+            asset: (payload.asset as string) ?? input.currency,
+            source: (payload.source as string) ?? `payswap:${input.command.metadata.actor.id}`,
+            destination: (payload.destination as string) ?? (payload.destinationAddress as string) ?? '',
+            amount: input.amount,
+            memo: input.command.metadata.correlationId,
+          };
+          const settleResult = await adapter.settle(request);
+          return {
+            result: settleResult.success ? 'success' : 'failed',
+            detail: settleResult.success
+              ? `Settled on ${settleResult.network} (tx=${settleResult.txHash}, est ${settleResult.estimatedConfirmationMs}ms)`
+              : `Settlement failed on ${settleResult.network}: ${settleResult.error ?? 'unknown'}`,
+            data: { settlementInvoked: true, settleResult },
+          };
+        } catch (err) {
+          return { result: 'failed', detail: `Settlement adapter threw: ${err instanceof Error ? err.message : 'error'}` };
+        }
+      }
 
       case 'dispatcher': {
+        // P2-3 (C-3 fix): If the coordinator stage already executed this
+        // command (profiles with invokeCoordinator=true), the dispatch is
+        // already committed — skip the redundant dispatcher call. This is
+        // a real pre-flight, not a stub: priorDispatchResult being set
+        // means a real TransactionCoordinator.execute() already happened.
+        if (priorDispatchResult) {
+          return {
+            result: 'success',
+            detail: `Dispatch already committed by coordinator (tx=${priorDispatchResult.entityId ?? 'n/a'}, ${priorDispatchResult.events.length} events)`,
+            data: { dispatchResult: priorDispatchResult, eventsProduced: priorDispatchResult.events.length, source: 'coordinator' },
+          };
+        }
         const dispatchResult = await runtime.dispatcher.dispatch(input.command);
         return {
           result: dispatchResult.success ? 'success' : 'failed',

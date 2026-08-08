@@ -18,8 +18,6 @@ import {
   Repeat,
   FileBarChart,
   Boxes,
-  Layers,
-  Network,
   Sparkles,
   Wallet,
   UserCircle,
@@ -207,7 +205,6 @@ export const adminNav: NavGroup[] = [
     label: 'System',
     items: [
       { label: 'Runtime', href: '/admin/runtime', icon: <Globe className="h-4 w-4" /> },
-      { label: 'Platform', href: '/admin/platform', icon: <Activity className="h-4 w-4" /> },
       { label: 'Live Console', href: '/admin/console', icon: <Terminal className="h-4 w-4" /> },
       { label: 'Network', href: '/admin/network', icon: <Globe className="h-4 w-4" /> },
       { label: 'Digital Twin', href: '/admin/digital-twin', icon: <Box className="h-4 w-4" /> },
@@ -226,10 +223,6 @@ export const adminNav: NavGroup[] = [
   {
     label: 'Economic',
     items: [
-      { label: 'Computation Platform', href: '/admin/platform', icon: <Network className="h-4 w-4" /> },
-      { label: 'Economic Engine', href: '/admin/resolve', icon: <Cpu className="h-4 w-4" /> },
-      { label: 'Economic OS', href: '/admin/economic-os', icon: <Boxes className="h-4 w-4" /> },
-      { label: 'Composition Engine', href: '/admin/economic-engine', icon: <Layers className="h-4 w-4" /> },
       { label: 'Liquidity Market', href: '/admin/liquidity-market', icon: <LineChart className="h-4 w-4" /> },
       { label: 'Compiler Explorer', href: '/admin/compiler-explorer', icon: <GitBranch className="h-4 w-4" /> },
     ],

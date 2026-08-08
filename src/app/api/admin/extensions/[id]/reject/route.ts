@@ -6,6 +6,7 @@ import {
   forbidden,
 } from '@/lib/api-auth';
 import { db } from '@/lib/db';
+import { writeAudit } from '@/lib/audit-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,6 +66,20 @@ export async function POST(
       reviewedAt: new Date(),
       reviewedBy: reviewerId ?? null,
       reviewNotes: notes ?? extension.reviewNotes,
+    },
+  });
+
+  // P3-5 (H-9 fix): audit-log the admin state change.
+  await writeAudit({
+    userId: reviewerId ?? null,
+    action: 'EXTENSION_REJECT',
+    resourceType: 'Extension',
+    resourceId: id,
+    result: 'SUCCESS',
+    details: {
+      fromStatus: extension.status,
+      toStatus: updated.status,
+      notes: notes ?? null,
     },
   });
 

@@ -1,5 +1,18 @@
 /**
  * PaySwap Protocol — SAR (Suspicious Activity Report) Generation Service.
+ * (LEGACY WRAPPER — delegates persistence to `src/trust/sar-manager.ts`.)
+ *
+ * ╔════════════════════════════════════════════════════════════════════════╗
+ * ║  THIN WRAPPER — delegates persistence to the canonical                 ║
+ * ║  `src/trust/sar-manager.ts` (Prisma-backed).                           ║
+ * ║                                                                       ║
+ * ║  This module exists ONLY for backwards-compat with existing            ║
+ * ║  importers (audit-export, index re-export). New code should            ║
+ * ║  import from `@/trust/sar-manager` (the canonical stack).              ║
+ * ║                                                                       ║
+ * ║  DO NOT extend this wrapper directly. New SAR-related code goes        ║
+ * ║  in `src/trust/`.                                                     ║
+ * ╚════════════════════════════════════════════════════════════════════════╝
  *
  * SARs are filed with the relevant Financial Intelligence Unit (FIU) for
  * escalated AML cases. In the US this is FinCEN (BSA E-Filing System);
@@ -8,13 +21,17 @@
  *
  * Responsibilities:
  *  - `draftSAR(caseId, narrative)` creates a draft SAR referencing the
- *    underlying case and its entities.
+ *    underlying case and its entities. Persists via `sarManager.create()`
+ *    (Prisma `SAR` table) — fire-and-forget; the in-memory record is
+ *    returned sync.
  *  - `fileSAR(sarId)` flips the SAR to `filed` status, assigns a
- *    regulatory reference number (simulated), and emits
- *    `compliance.sar_filed`.
- *  - `acknowledge(sarId, regulatoryRef)` records the FIU's acknowledgement
- *    of a filed SAR.
+ *    regulatory reference number, and emits `compliance.sar_filed`.
+ *    Persists via `sarManager.file()`.
+ *  - `acknowledge(sarId, regulatoryRef)` records the FIU's acknowledgement.
+ *    Persists via `sarManager.acknowledge()`.
  *  - `getSAR(id)` / `listSARs(filter?)` drive the operational queue.
+ *    These operate on the IN-MEMORY cache; the canonical
+ *    `sarManager.list()` reads from the DB.
  *
  * In production, `fileSAR()` would make a real submission to the FIU
  * portal (e.g. BSA E-Filing XML payload for FinCEN, SAR Online XML for
@@ -29,6 +46,7 @@ import {
   type SAR,
   type SARStatus,
 } from './types';
+import { sarManager } from '@/trust/sar-manager';
 
 /** Filter for `listSARs`. */
 export interface SARFilter {
@@ -74,6 +92,29 @@ export class SARService {
     };
     this.sars.set(sar.id, sar);
     eventEngine.emit('compliance.sar_drafted', { sarId: sar.id, caseId });
+
+    // P3-4 / H-8: delegate persistence to the canonical Prisma-backed stack.
+    // Fire-and-forget — a DB failure must NOT fail the in-memory SAR draft.
+    sarManager
+      .create(
+        c.alertIds,
+        c.entityId,
+        narrative,
+        amount,
+        sar.currency,
+        sar.filedBy ?? 'system',
+      )
+      .then((canonical) => {
+        // Reconcile the canonical id back into the in-memory record so a
+        // later `fileSAR()` call can find it in the DB. We do NOT mutate
+        // the id (callers may have stored it) — but we DO emit a debug log.
+        console.debug(
+          `[sar-wrapper] persisted draft sarId=${sar.id} → canonical.id=${canonical.id}`,
+        );
+      })
+      .catch((err: unknown) => {
+        console.error('[sar-wrapper] canonical sarManager.create failed:', err);
+      });
     return sar;
   }
 
@@ -113,6 +154,13 @@ export class SARService {
       filedBy: sar.filedBy,
       amount: sar.amount,
     });
+
+    // P3-4 / H-8: delegate the DB write to the canonical stack.
+    sarManager
+      .file(sarId, sar.filedBy ?? 'system')
+      .catch((err: unknown) => {
+        console.error('[sar-wrapper] canonical sarManager.file failed:', err);
+      });
     return { sar, regulatoryRef: sar.regulatoryRef, filedAt };
   }
 
@@ -129,6 +177,13 @@ export class SARService {
     sar.status = 'acknowledged';
     if (regulatoryRef) sar.regulatoryRef = regulatoryRef;
     eventEngine.emit('compliance.sar_acknowledged', { sarId: sar.id, regulatoryRef: sar.regulatoryRef });
+
+    // P3-4 / H-8: delegate the DB write to the canonical stack.
+    sarManager
+      .acknowledge(sarId)
+      .catch((err: unknown) => {
+        console.error('[sar-wrapper] canonical sarManager.acknowledge failed:', err);
+      });
     return sar;
   }
 

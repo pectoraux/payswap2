@@ -54,6 +54,7 @@ const noDirectPrismaReadRule = {
 const WRITE_METHODS = ["create", "update", "delete", "upsert", "createMany", "updateMany", "deleteMany", "createManyAndReturn", "updateManyAndReturn", "deleteManyAndReturn"];
 const WRITE_ALLOWED_PREFIXES = [
   "src/runtime/", "src/lib/db", "src/lib/auth", "src/lib/idempotency",
+  "src/lib/audit-log",
   "src/app/api/auth",
   "src/services/", "scripts/", "tests/", "certification/",
 ];
@@ -85,6 +86,93 @@ const noDirectPrismaWriteRule = {
   },
 };
 
+/**
+ * P2-2 (C-5): payswap-money/no-number-money-fields
+ *
+ * Warns when an identifier whose name matches the money-ish regex is
+ * explicitly typed `: number`. Monetary values should be `Money` (BigInt
+ * minor units) or, at the persistence boundary, `Prisma.Decimal` — never
+ * `number` (IEEE-754 doubles lose precision on most decimal values).
+ *
+ * This is a WARNING (not error) — there are ~1601 number-typed money
+ * fields in the codebase and they can't all be migrated in one PR. The
+ * rule's value is PREVENTIVE: new code that types a money field as
+ * `number` will be flagged at lint time, blocking silent regressions
+ * while the存量 migration proceeds field-by-field.
+ *
+ * Matched declarations:
+ *   - interface/type properties: `{ fee: number }`, `interface X { fee: number }`
+ *   - object type annotations:   `function f(x: { fee: number })`
+ *   - variable declarators:      `const fee: number = ...`
+ *   - function parameters:       `(fee: number) => ...`, `function f(fee: number)`
+ *   - class properties:          `class C { fee: number = 0 }`
+ *
+ * The regex covers the audit's money-ish identifier list (line 284 of
+ * AUDIT-VALIDATION-AND-ROADMAP.md).
+ */
+const MONEY_FIELD_REGEX = /^(amount|balance|fee|debit|credit|reserve|total|available|locked|escrow|supply|capacity|exposure|collateral|netAmount|grossAmount|sourceAmount|pendingBalance|lockedBalance)$/;
+
+function isNumberTypeAnnotation(typeAnnotation) {
+  if (!typeAnnotation) return false;
+  // typeAnnotation may be wrapped in TSTypeAnnotation { typeAnnotation: ... }
+  const inner = typeAnnotation.type === "TSTypeAnnotation" ? typeAnnotation.typeAnnotation : typeAnnotation;
+  return inner?.type === "TSNumberKeyword";
+}
+
+const noNumberMoneyFieldsRule = {
+  meta: {
+    type: "suggestion",
+    docs: { description: "P2-2 (C-5): warn when a money-ish identifier is typed `number` instead of `Money` or `Prisma.Decimal`." },
+    schema: [],
+    messages: {
+      noNumberMoneyField: "P2-2 (C-5): `{{name}}` is a money-ish identifier but is typed `number`. Use `Money` (BigInt minor units) or `Prisma.Decimal` instead. IEEE-754 doubles lose precision on decimal values.",
+    },
+  },
+  create(context) {
+    return {
+      // interface/type properties + object type annotations:
+      //   { fee: number } | interface X { fee: number }
+      TSPropertySignature(node) {
+        if (node.key?.type === "Identifier" && MONEY_FIELD_REGEX.test(node.key.name) && isNumberTypeAnnotation(node.typeAnnotation)) {
+          context.report({ node, messageId: "noNumberMoneyField", data: { name: node.key.name } });
+        }
+      },
+      // class properties: class C { fee: number = 0 }
+      PropertyDefinition(node) {
+        if (node.key?.type === "Identifier" && MONEY_FIELD_REGEX.test(node.key.name) && isNumberTypeAnnotation(node.typeAnnotation)) {
+          context.report({ node, messageId: "noNumberMoneyField", data: { name: node.key.name } });
+        }
+      },
+      // variable declarators: const fee: number = ...
+      VariableDeclarator(node) {
+        if (node.id?.type === "Identifier" && MONEY_FIELD_REGEX.test(node.id.name) && isNumberTypeAnnotation(node.id.typeAnnotation)) {
+          context.report({ node, messageId: "noNumberMoneyField", data: { name: node.id.name } });
+        }
+      },
+      // function parameters: (fee: number) => ... | function f(fee: number)
+      // The param is wrapped: Identifier { typeAnnotation: TSTypeAnnotation }
+      Identifier(node) {
+        // Only flag Identifiers that carry a type annotation directly
+        // (i.e., function params + destructured-pattern type annotations).
+        // This avoids matching arbitrary Identifier usages.
+        if (node.parent?.type === "ArrowFunctionExpression" || node.parent?.type === "FunctionExpression" || node.parent?.type === "FunctionDeclaration") {
+          // The Identifier is the function name, not a param — skip.
+          return;
+        }
+        // Param Identifiers live inside FormalParamete > Identifier with
+        // a typeAnnotation. Match only when the parent is a parameter
+        // slot that doesn't have its own key (i.e., not a Property).
+        if (node.parent?.type === "AssignmentPattern" || node.parent?.type === "RestElement") {
+          if (MONEY_FIELD_REGEX.test(node.name) && isNumberTypeAnnotation(node.typeAnnotation)) {
+            context.report({ node, messageId: "noNumberMoneyField", data: { name: node.name } });
+          }
+          return;
+        }
+      },
+    };
+  },
+};
+
 const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
   plugins: {
     "payswap-read-models": {
@@ -93,12 +181,22 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
         "no-direct-prisma-write": noDirectPrismaWriteRule,
       },
     },
+    "payswap-money": {
+      rules: {
+        "no-number-money-fields": noNumberMoneyFieldsRule,
+      },
+    },
   },
   rules: {
     // M-RT-17/18/19: enforce read-model façade consumption.
     "payswap-read-models/no-direct-prisma-domain-table": "warn",
     // M-RT-21: enforce RuntimeDispatcher for all writes (warn — incremental migration).
     "payswap-read-models/no-direct-prisma-write": "warn",
+    // P2-2 (C-5): warn when a money-ish identifier is typed `number`.
+    // WARNING (not error) — ~1601 occurrences in the codebase; this rule
+    // is preventive (catches new regressions) while the存量 migration
+    // proceeds field-by-field.
+    "payswap-money/no-number-money-fields": "warn",
     // TypeScript rules
     "@typescript-eslint/no-explicit-any": "off",
     "@typescript-eslint/no-unused-vars": "off",

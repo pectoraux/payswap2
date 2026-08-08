@@ -18,10 +18,10 @@ import { LiveClock, VirtualClock, type RuntimeClock } from './clock';
 import { InMemoryEventStore, PostgresEventStore, type EventStore } from './events';
 import { IntentEngine } from './intent';
 import { Pipeline } from './pipeline';
-import { DefaultPolicyEngine, type PolicyEngine } from './policy';
+import { DefaultPolicyEngine, registerRealPolicyRules, type PolicyEngine } from './policy';
 import { ProjectionRunner } from './read-models';
 // Amendment 1 engines:
-import { InMemoryReserveMarket, type ReserveMarket } from './engines/reserve-market';
+// P5-2: deleted v1 InMemoryReserveMarket — replaced by ReserveMarketEngine (v2) below.
 import { ReserveLedgerService } from './engines/reserve-ledger';
 import { ReserveMarketEngine } from './engines/reserve-market-v2';
 import { LiquidityMarketplaceService } from './engines/liquidity-marketplace';
@@ -36,7 +36,7 @@ import { APIGateway } from './engines/api-gateway';
 import { SchedulingEngine } from './engines/scheduling';
 import { InMemoryLiquidityStrategyMarketplace, type LiquidityStrategyMarketplace } from './engines/liquidity-market';
 import { NoOpLiquidityIntelligenceEngine, type LiquidityIntelligenceEngine } from './engines/liquidity-intelligence';
-import { NoOpOpportunityDiscoveryEngine, type OpportunityDiscoveryEngine as OldOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
+// P5-2: deleted v1 NoOpOpportunityDiscoveryEngine — replaced by OpportunityDiscoveryEngine (v2).
 import { InMemoryRecommendationStore, type RecommendationStore } from './recommendations';
 import { InMemoryLiquidityGraph, type LiquidityGraphQuery } from './graphs/liquidity-graph';
 // Amendment 2 engines:
@@ -59,7 +59,7 @@ import { NoOpLPGrowthEngine, type LPGrowthEngine } from './engines/lp-growth';
 import { NoOpTreasuryGrowthEngine, type TreasuryGrowthEngine } from './engines/treasury-growth';
 import { NoOpEconomicScoreEngine, type EconomicScoreEngine } from './engines/economic-score';
 import { NoOpCounterfactualEngine, type CounterfactualEngine } from './engines/counterfactual';
-import { InMemoryRecommendationLifecycle, type RecommendationLifecycle } from './engines/recommendation-lifecycle';
+// P5-2: deleted v1 InMemoryRecommendationLifecycle — replaced by RecommendationLifecycleService (v2).
 // v1.4 True Final Freeze — Financial Compiler + Knowledge Graph:
 import { NoOpFinancialCompiler, type FinancialCompiler, RealFinancialCompiler, type RealCompilerContext } from './compiler';
 import { NoOpFinancialKnowledgeGraph, type FinancialKnowledgeGraph } from './graphs/knowledge-graph';
@@ -120,7 +120,13 @@ export * from './pipeline';
 export * from './inspector';
 export * from './read-models';
 // Amendment 1 public surface:
-export * from './engines/reserve-market';
+// P5-2: deleted `export * from './engines/reserve-market'` (v1 NoOp) — the
+// v1 types are preserved in `./engines/legacy-engine-types` (re-exported
+// below) and the v2 implementation is in `./engines/reserve-market-v2`.
+export type {
+  ReserveMarket,
+  ReserveMarketState,
+} from './engines/legacy-engine-types';
 export * from './engines/reserve-ledger';
 export * from './engines/reserve-market-v2';
 export * from './engines/liquidity-marketplace';
@@ -159,9 +165,18 @@ export * from './engines/scheduling';
 export * from './read-models/v2';
 export * from './engines/liquidity-market';
 export * from './engines/liquidity-intelligence';
-// v1 opportunity-discovery (legacy NoOp — replaced by v2):
-export { NoOpOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
-export type { OpportunityDiscoveryEngine as OldOpportunityDiscoveryEngine } from './engines/opportunity-discovery';
+// v1 opportunity-discovery (legacy NoOp — replaced by v2 in P5-2):
+// The v1 NoOpOpportunityDiscoveryEngine class is deleted; the v1 types are
+// re-exported from legacy-engine-types for callers that still reference them.
+export type {
+  OpportunityDiscoveryEngine as OldOpportunityDiscoveryEngine,
+  Recommendation,
+  RecommendationKind,
+  RecommendationAudience,
+  RecommendationStatus,
+  RecommendationImpact,
+  ImpactMeasurement,
+} from './engines/legacy-engine-types';
 export * from './recommendations';
 export * from './graphs/liquidity-graph';
 // Amendment 2 public surface:
@@ -177,7 +192,15 @@ export * from './engines/lp-growth';
 export * from './engines/treasury-growth';
 export * from './engines/economic-score';
 export * from './engines/counterfactual';
-export * from './engines/recommendation-lifecycle';
+// P5-2: deleted `export * from './engines/recommendation-lifecycle'` (v1
+// InMemory) — replaced by v2 in `./engines/recommendation-lifecycle-v2`.
+// The v1 types are re-exported from legacy-engine-types for callers that
+// still reference them.
+export type {
+  RecommendationLifecycle,
+  RecommendationLifecycleStage,
+  RecommendationLifecycleEvent,
+} from './engines/legacy-engine-types';
 // v1.4 True Final Freeze public surface:
 export * from './compiler';
 export * from './graphs/knowledge-graph';
@@ -285,10 +308,12 @@ export interface Runtime {
   policyEngine: PolicyEngine;
   projectionRunner: ProjectionRunner;
   // Amendment 1 engines (interface-only in M-RT-1; wired in later milestones):
-  reserveMarketState: ReserveMarket;  // A1 shadow-price publisher (legacy interface)
+  // P5-2: deleted the legacy v1 fields `reserveMarketState`, `opportunityDiscovery`
+  // (v1 NoOp), and `recommendationLifecycle` (v1 InMemory) — they were never
+  // read outside index.ts and the v2 instances (`reserveMarket`,
+  // `opportunityDiscoveryV2`, `recLifecycle`) are the real implementations.
   liquidityStrategyMarketplace: LiquidityStrategyMarketplace;
   liquidityIntelligence: LiquidityIntelligenceEngine;
-  opportunityDiscovery: OldOpportunityDiscoveryEngine;
   recommendationStore: RecommendationStore;
   liquidityGraph: LiquidityGraphQuery;
   // Amendment 2 engines (interface-only in M-RT-1; wired in later milestones):
@@ -304,7 +329,6 @@ export interface Runtime {
   treasuryGrowth: TreasuryGrowthEngine;
   economicScore: EconomicScoreEngine;
   counterfactual: CounterfactualEngine;
-  recommendationLifecycle: RecommendationLifecycle;
   // v1.4 True Final Freeze — Financial Compiler + Knowledge Graph (interface-only in M-RT-1):
   compiler: FinancialCompiler;
   knowledgeGraph: FinancialKnowledgeGraph;
@@ -425,18 +449,27 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const clock: RuntimeClock = opts.virtualClock
     ? new VirtualClock(opts.virtualClock)
     : new LiveClock();
-  // ── EventStore selection ──
-  // Use PostgresEventStore ONLY when DATABASE_URL is a real PostgreSQL URL
-  // (starts with 'postgresql://' or 'postgres://'). If the URL is a SQLite
-  // file path (file:...) or missing, use InMemoryEventStore — this enables
-  // demo/sandbox mode without a working database.
+  // ── EventStore selection (P3-2: ONE canonical store) ──
   //
-  // This ensures demo data and real data both flow through the SAME pipeline
-  // (RuntimeDispatcher → InvariantEngine → EventStore → Projections), just
-  // with different storage backends. Demo data in InMemoryEventStore can
-  // NEVER infect production Postgres data, and vice versa.
+  // PostgresEventStore is the canonical writer — sync per-append Postgres
+  // write, DB-backed OCC via @@unique([streamId, version]) (P3-1).
+  //
+  // InMemoryEventStore is a DEV/TEST fallback only. In production without
+  // a Postgres DATABASE_URL, we fail loud — money-path events MUST be
+  // durable. The InMemoryEventStore constructor also throws if it ever
+  // sees NODE_ENV=production + no DB URL, as belt-and-suspenders.
   const dbUrl = process.env.DATABASE_URL ?? '';
   const isPostgresUrl = dbUrl.startsWith('postgresql://') || dbUrl.startsWith('postgres://');
+  const isProd = process.env.NODE_ENV === 'production';
+
+  if (!isPostgresUrl && isProd) {
+    throw new Error(
+      '[P3-2] Production runtime requires a Postgres DATABASE_URL ' +
+        '(postgresql:// or postgres://). Refusing to start with InMemoryEventStore — ' +
+        'money-path events would not survive a process restart.',
+    );
+  }
+
   const eventStore: EventStore = opts.eventStore
     ?? (isPostgresUrl
       ? new PostgresEventStore()
@@ -450,6 +483,11 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   }
   const intentEngine = new IntentEngine(clock);
   const policyEngine = new DefaultPolicyEngine();
+  // P2-3 (C-3 fix): register REAL policy rules on the engine so the
+  // planner's `case 'policy'` stage evaluates actual rules (sanctions
+  // screen + per-transaction amount cap) instead of the unconditional
+  // `default.allow` skeleton. Idempotent — safe across hot reloads.
+  registerRealPolicyRules(policyEngine);
   const pipeline = new Pipeline(clock, intentEngine, eventStore, policyEngine);
   const projectionRunner = new ProjectionRunner();
   projectionRunner.start(eventStore);
@@ -464,10 +502,14 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   // NoOpLiquidityIntelligenceEngine, NoOpFinancialCompiler, NoOpFinancialKnowledgeGraph)
   // can be deleted once callers are migrated to v2/eco-intelligence/RealFinancialCompiler.
   // Tracked by HARDEN-1 audit (priority fix #5).
-  const reserveMarketState = new InMemoryReserveMarket();
+  // P5-2: deleted v1 InMemoryReserveMarket + NoOpOpportunityDiscoveryEngine +
+  // InMemoryRecommendationLifecycle — the v2 ReserveMarketEngine +
+  // OpportunityDiscoveryEngine + RecommendationLifecycleService instances
+  // (constructed further below) are the real implementations. The Runtime
+  // interface no longer exposes the legacy `reserveMarketState` /
+  // `opportunityDiscovery` (v1) / `recommendationLifecycle` (v1) fields.
   const liquidityStrategyMarketplace = new InMemoryLiquidityStrategyMarketplace();
   const liquidityIntelligence = new NoOpLiquidityIntelligenceEngine();
-  const opportunityDiscovery = new NoOpOpportunityDiscoveryEngine();
   const recommendationStore = new InMemoryRecommendationStore();
   const liquidityGraph = new InMemoryLiquidityGraph();
   // Amendment 2 engines — interface-only (NoOp) implementations for M-RT-1.
@@ -564,7 +606,6 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
   const treasuryGrowth = new NoOpTreasuryGrowthEngine();
   const economicScore = new NoOpEconomicScoreEngine();
   const counterfactual = new NoOpCounterfactualEngine();
-  const recommendationLifecycle = new InMemoryRecommendationLifecycle();
   // v1.4 True Final Freeze — Financial Compiler + Knowledge Graph (NoOp for M-RT-1).
   const compiler = new NoOpFinancialCompiler();
   const knowledgeGraph = new NoOpFinancialKnowledgeGraph();
@@ -840,10 +881,8 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     pipeline,
     policyEngine,
     projectionRunner,
-    reserveMarketState,
     liquidityStrategyMarketplace,
     liquidityIntelligence,
-    opportunityDiscovery,
     recommendationStore,
     liquidityGraph,
     economicHealth,
@@ -857,7 +896,6 @@ export function createRuntime(opts: CreateRuntimeOptions = {}): Runtime {
     treasuryGrowth,
     economicScore,
     counterfactual,
-    recommendationLifecycle,
     compiler,
     knowledgeGraph,
     capabilityCompiler,

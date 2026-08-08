@@ -6,6 +6,12 @@
  * DB persistence. This makes protocol state survive process restarts.
  *
  * Also starts the checkpoint scheduler for periodic ledger snapshots.
+ *
+ * P2-1 (C-4 fix): also rehydrates the protocol `LedgerEngine` from the
+ * `LedgerEntryRecord` Postgres table. The in-memory `journals` array is a
+ * read cache; the DB is the source of truth. Without this call, every
+ * server restart would erase the in-memory ledger and the trial-balance /
+ * A=L+E assertions would lose history.
  */
 export async function register() {
   // Only run on the server (not during build)
@@ -28,5 +34,21 @@ export async function register() {
     console.log('[persistence] Event store initialized, checkpoint scheduler started');
   } catch (e) {
     console.error('[persistence] Failed to initialize:', e);
+  }
+
+  // P2-1 (C-4 fix): rehydrate the protocol ledger engine from Postgres.
+  // Best-effort — if the DB is unreachable, the engine starts empty (the
+  // money-movement routes will still work; they post new entries to the
+  // in-memory cache and persist them as they go).
+  try {
+    const { ledgerEngine } = await import('@/protocol/ledger');
+    const { loaded, legs } = await ledgerEngine.rehydrateFromDB();
+    if (loaded > 0) {
+      console.log(`[ledger] Rehydrated ${loaded} journal entries (${legs} legs) from DB`);
+    } else {
+      console.log('[ledger] Rehydrate complete (no prior entries found)');
+    }
+  } catch (e) {
+    console.error('[ledger] Failed to rehydrate from DB:', e);
   }
 }

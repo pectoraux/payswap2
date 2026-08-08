@@ -5,6 +5,9 @@ import { db } from '@/lib/db';
 import { getEnvironment } from '@/lib/environment';
 import { runtime } from '@/runtime';
 import type { Environment } from '@/runtime';
+import { guardLiveMoney, constitutionBlockBody } from '@/lib/constitution-guard';
+import { ledgerEngine } from '@/protocol/ledger';
+import { debit, credit } from '@/protocol/ledger/entry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -190,6 +193,23 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // P2-4 (C-7 fix): Run the CRITICAL subset of the Constitution BEFORE the
+  // reserve adjustment. Treasury operators are exempt from KYC (they're
+  // system accounts) but sanctions + per-transaction amount cap still
+  // apply. Runs only 8 of 45 rules (< 1ms).
+  const verdict = guardLiveMoney({
+    actor: {
+      id: userId ?? 'treasury',
+      role: 'TREASURY',
+    },
+    amount,
+    currency,
+    transactionType: 'reserve_adjustment',
+  });
+  if (!verdict.passed) {
+    return NextResponse.json(constitutionBlockBody(verdict), { status: 403 });
+  }
+
   // --- P1-3 FIX: Single writer — Prisma $transaction is authoritative. ---
   // H-10 FIX: Use the real environment, not hardcoded 'sandbox'.
   const txType = action === 'add' ? 'CREDIT' : 'DEBIT';
@@ -269,6 +289,41 @@ export async function POST(req: NextRequest) {
     });
   } catch {
     // best-effort — the wallet adjustment is already committed.
+  }
+
+  // ── P2-1 (C-4 fix): post a balanced journal entry to the protocol ledger.
+  // For 'add':  DR reserve:fiat:<ccy> (asset ↑) / CR equity:treasury (equity ↑)
+  //             → A↑ == E↑, balance sheet balances.
+  // For 'remove': DR equity:treasury  (equity ↓) / CR reserve:fiat:<ccy> (asset ↓)
+  //             → A↓ == E↓, balance sheet balances.
+  // `reserve:fiat:<ccy>` is not in the static chart of accounts; accountType()
+  // resolves unknown `reserve:*` prefixes to 'asset' (the default), which is
+  // correct for treasury reserves (cash the protocol holds).
+  // Best-effort — the wallet adjustment is already committed; the ledger
+  // posting is the accounting record.
+  try {
+    const legDescription = `Treasury reserve ${action} ${amount} ${currency}: ${reason}`;
+    if (action === 'add') {
+      await ledgerEngine.postAndPersist({
+        txId: result.transaction.id,
+        description: legDescription,
+        legs: [
+          debit(`reserve:fiat:${currency}`, amount, currency, legDescription),
+          credit(`equity:treasury`, amount, currency, legDescription),
+        ],
+      });
+    } else {
+      await ledgerEngine.postAndPersist({
+        txId: result.transaction.id,
+        description: legDescription,
+        legs: [
+          debit(`equity:treasury`, amount, currency, legDescription),
+          credit(`reserve:fiat:${currency}`, amount, currency, legDescription),
+        ],
+      });
+    }
+  } catch (ledgerErr) {
+    console.error('[treasury/reserves/adjust] Ledger post failed (adjustment succeeded):', ledgerErr);
   }
 
   return NextResponse.json({

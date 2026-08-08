@@ -10,6 +10,8 @@ import { getEnvironment } from '@/lib/environment';
 import { refundService } from '@/services';
 import { getIdempotencyKey, withIdempotency } from '@/lib/idempotency';
 import { validateBody, createRefundSchema } from '@/lib/validation';
+import { guardLiveMoney, constitutionBlockBody } from '@/lib/constitution-guard';
+import { writeAudit } from '@/lib/audit-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -96,12 +98,51 @@ export async function POST(req: NextRequest) {
     amount = parsed;
   }
 
+  // P2-4 (C-7 fix): Run the CRITICAL subset of the Constitution BEFORE
+  // creating the refund. Sanctions + KYC apply (a refund is money-OUT
+  // from the merchant's settlement wallet). Runs only 8 of 45 rules.
+  const verdict = guardLiveMoney({
+    actor: {
+      id: userId ?? 'unknown',
+      role: 'MERCHANT',
+    },
+    amount,
+    currency: payment.currency,
+    counterparty: payment.customerId ? { id: payment.customerId } : undefined,
+    transactionType: 'refund',
+  });
+  if (!verdict.passed) {
+    return NextResponse.json(constitutionBlockBody(verdict), { status: 403 });
+  }
+
   // H-2 fix: Use the client-supplied Idempotency-Key for dedup.
   // If no header was sent, `key` is null — process as unique (backwards
   // compat) and skip the wrapper.
   const idempotencyKey = getIdempotencyKey(req);
 
   try {
+    // P3-5 (H-9 fix): Audit-log every successful refund creation.
+    // Best-effort: a failure here MUST NOT fail the refund. The refund
+    // is already committed by refundService.create (events dispatched +
+    // ledger posted) — the audit log is a forensic record, not a guard.
+    const writeRefundAudit = (refund: { id: string }) =>
+      writeAudit({
+        userId: userId ?? null,
+        action: 'REFUND_CREATE',
+        resourceType: 'Refund',
+        resourceId: refund.id,
+        result: 'SUCCESS',
+        details: {
+          amount,
+          currency: payment.currency,
+          paymentId,
+          merchantId,
+          type,
+          reason: reason ?? null,
+          environment: env,
+        },
+      });
+
     if (idempotencyKey) {
       const result = await withIdempotency(
         idempotencyKey,
@@ -116,6 +157,9 @@ export async function POST(req: NextRequest) {
             environment: env,
             actorId: userId,
           });
+          // The audit log is written INSIDE the wrapper so a cache hit
+          // (retry with same key) does NOT produce a duplicate entry.
+          await writeRefundAudit(refund);
           return { status: 201, body: { refund, idempotencyKey } };
         },
       );
@@ -135,6 +179,7 @@ export async function POST(req: NextRequest) {
       environment: env,
       actorId: userId,
     });
+    await writeRefundAudit(refund);
     return NextResponse.json(
       { refund, idempotencyKey: null, cached: false },
       { status: 201 },

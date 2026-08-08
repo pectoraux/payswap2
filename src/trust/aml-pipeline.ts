@@ -1,9 +1,26 @@
 /**
- * AML Pipeline — rule-based transaction monitoring. (M-TRUST-40.)
+ * AML Pipeline — CANONICAL AML transaction monitoring stack. (M-TRUST-40, P3-4 / H-8 fix.)
+ *
+ * ╔════════════════════════════════════════════════════════════════════════╗
+ * ║  CANONICAL COMPLIANCE STACK — this module is the single source of     ║
+ * ║  truth for AML alerting in PaySwap. The legacy in-memory stack at     ║
+ * ║  `src/protocol/compliance/aml.ts` is now a thin wrapper that          ║
+ * ║  delegates persistence to THIS module.                               ║
+ * ║                                                                       ║
+ * ║  DO NOT extend the legacy stack directly. New AML-related code        ║
+ * ║  should import from `@/trust/aml-pipeline` (here) or `@/trust`        ║
+ * ║  (the index).                                                         ║
+ * ╚════════════════════════════════════════════════════════════════════════╝
  *
  * Evaluates every transaction against a set of AML rules. When a rule
  * matches, an AML alert is generated. Rules can: flag, block, review,
  * or report (auto-file SAR).
+ *
+ * Persistence: alerts are written to the `AMLAlert` Prisma table
+ * (`persistAlert()`), so they survive a process restart. The legacy
+ * `src/protocol/compliance/aml.ts` wrapper kept alerts in an in-memory
+ * `Map` — that process-local state is GONE for any code path that
+ * reaches the canonical stack.
  *
  * The pipeline is extensible — plugins can register custom rules via
  * the Capability SDK.

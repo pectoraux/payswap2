@@ -23,8 +23,7 @@
  *   execute(proof) → ExecutionResult
  *   verify(proof) → boolean
  *
- * This module is the foundational layer underneath src/economic-platform/,
- * src/economic-engine/, src/economic-os/, src/economic/, src/runtime/.
+ * This module is the foundational layer underneath src/runtime/.
  * Does NOT modify the Prisma schema.
  */
 

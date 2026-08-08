@@ -8,6 +8,33 @@ const base = globalForPrisma.prisma ?? new PrismaClient({
   log: process.env.NODE_ENV === 'production' ? ['error', 'warn'] : ['query'],
 })
 
+// ────────────────────────────────────────────────────────────────────────────
+// TECHNICAL DEBT — C-5 / P2-2: Decimal → number coercion.
+//
+// This `$extends` block globally coerces every monetary `Decimal` column to
+// JS `number` on read. IEEE-754 doubles CANNOT exactly represent most
+// decimal values (e.g. 0.1 + 0.2 = 0.30000000000000004), so this coercion
+// silently loses precision on every read. The audit (C-5) flags this as a
+// correctness defect; the fix (P2-2) is to migrate every consumer to the
+// BigInt `Money` type (`src/money/money.ts`) which stores minor units as
+// BigInt (exact).
+//
+// We CANNOT remove the whole block in one commit — 100+ call sites assume
+// `payment.amount` / `wallet.balance` / `payout.fee` etc. are `number`.
+// P2-2 removes the coercion field-by-field as each consumer is migrated.
+//
+// MIGRATED (P2-2): `payment.fee` + `payment.netAmount` — removed below.
+//   Consumers of these two fields now receive a Prisma.Decimal and must
+//   rehydrate via `Money.fromDecimal(row.fee, currency)`. The producer
+//   side (`paymentService.create` / `PaymentCommandHandler`) now computes
+//   these values with `Money.mulBps` + `Money.subtract` (exact BigInt),
+//   so the persisted value is exact; the read side preserves that
+//   precision instead of collapsing it to float.
+//
+// TODO(P2-2-followup): remove the rest of this block once the remaining
+// 1601 number-typed money fields are migrated to Money. Tracked by the
+// `payswap-money/no-number-money-fields` ESLint rule (added P2-2 Part D).
+// ────────────────────────────────────────────────────────────────────────────
 export const db = base.$extends({
   result: {
     wallet: {
@@ -20,8 +47,12 @@ export const db = base.$extends({
     },
     payment: {
       amount: { needs: { amount: true }, compute(p: any) { return Number(p.amount) } },
-      fee: { needs: { fee: true }, compute(p: any) { return Number(p.fee) } },
-      netAmount: { needs: { netAmount: true }, compute(p: any) { return Number(p.netAmount) } },
+      // P2-2 (C-5): fee + netAmount NO LONGER coerced — consumers receive
+      // Prisma.Decimal and should rehydrate via Money.fromDecimal. The
+      // producer (paymentService + PaymentCommandHandler) now writes
+      // exact BigInt-derived values; the read side preserves them.
+      // fee: { needs: { fee: true }, compute(p: any) { return Number(p.fee) } },
+      // netAmount: { needs: { netAmount: true }, compute(p: any) { return Number(p.netAmount) } },
       fxRate: { needs: { fxRate: true }, compute(p: any) { return Number(p.fxRate) } },
     },
     payout: {

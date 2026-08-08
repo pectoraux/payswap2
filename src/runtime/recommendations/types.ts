@@ -7,7 +7,7 @@
  * own recommendations.
  */
 
-import type { Recommendation, RecommendationAudience, RecommendationStatus } from '../engines/opportunity-discovery/types';
+import type { Recommendation, RecommendationAudience, RecommendationStatus } from '../engines/legacy-engine-types';
 
 /** A queryable store of Recommendations. */
 export interface RecommendationStore {

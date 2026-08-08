@@ -7,6 +7,7 @@ import {
 } from '@/lib/api-auth';
 import { db } from '@/lib/db';
 import { setFeatured } from '@/lib/extension-featured';
+import { writeAudit } from '@/lib/audit-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,12 +36,34 @@ export async function POST(
     );
   }
 
+  // Capture metadata BEFORE the cascade delete (we need name/slug/developerId
+  // for the audit log — once the row is gone they're unrecoverable).
+  const snapshot = {
+    name: extension.name,
+    slug: extension.slug,
+    developerId: extension.developerId,
+    version: extension.version,
+    status: extension.status,
+  };
+
   // Cascade cleanup (Prisma onDelete: Cascade on installs + reviews handles
   // this automatically, but be defensive in case the relation changes).
   await db.extensionInstall.deleteMany({ where: { extensionId: id } });
   await db.extensionReview.deleteMany({ where: { extensionId: id } });
   await db.extension.delete({ where: { id } });
   await setFeatured(id, false);
+
+  // P3-5 (H-9 fix): audit-log the admin hard-delete. The row is gone, but
+  // the audit entry preserves who deleted what + when (the snapshot fields
+  // are what a forensic investigator would need).
+  await writeAudit({
+    userId: (adminSession.user as any)?.id ?? null,
+    action: 'EXTENSION_DELETE',
+    resourceType: 'Extension',
+    resourceId: id,
+    result: 'SUCCESS',
+    details: { snapshot },
+  });
 
   return NextResponse.json({ ok: true, removed: true });
 }

@@ -689,8 +689,19 @@ model EventRecord {
   ts        BigInt    // epoch-ms — high-resolution timestamp
   frame     Int      @default(0)
   seq       Int      @default(0)
+  // ── P3-1 (H-1 fix): DB-backed optimistic concurrency ──
+  // streamId + version form a per-stream monotonic version sequence.
+  // The unique constraint enforces OCC at the DB level — two concurrent
+  // appends racing for the same (streamId, version) produce exactly one
+  // winner; the loser gets a unique-violation error and must retry.
+  // Default 'default' / 0 are placeholders for pre-existing rows and are
+  // backfilled to (streamId='default', version=row_number()) on migration.
+  streamId  String   @default("default")
+  version   Int      @default(0)
   createdAt DateTime @default(now())
 
+  @@unique([streamId, version])
+  @@index([streamId])
   @@index([type])
   @@index([ts])
   @@index([seq])

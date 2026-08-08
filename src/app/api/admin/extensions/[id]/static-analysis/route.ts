@@ -6,6 +6,7 @@ import {
   forbidden,
 } from '@/lib/api-auth';
 import { db } from '@/lib/db';
+import { writeAudit } from '@/lib/audit-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,6 +49,16 @@ export async function POST(
   const updated = await db.extension.update({
     where: { id },
     data: { status: 'static_analysis' },
+  });
+
+  // P3-5 (H-9 fix): audit-log the admin state change.
+  await writeAudit({
+    userId: (adminSession.user as any)?.id ?? null,
+    action: 'EXTENSION_STATIC_ANALYSIS',
+    resourceType: 'Extension',
+    resourceId: id,
+    result: 'SUCCESS',
+    details: { fromStatus: extension.status, toStatus: updated.status },
   });
 
   return NextResponse.json({ ok: true, extension: updated });

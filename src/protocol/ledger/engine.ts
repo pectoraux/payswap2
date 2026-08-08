@@ -17,7 +17,7 @@
  */
 import { uid, nowTs, round } from '@/kernel/support';
 import { eventEngine } from '@/kernel/event';
-import { accountType } from './accounts';
+import { accountType, getAccount } from './accounts';
 import {
   createJournalEntry,
   validateBalanced,
@@ -26,6 +26,37 @@ import {
   type CreateJournalEntryParams,
   type BalanceCheckResult,
 } from './entry';
+
+/**
+ * P2-1 (C-4 fix): the ledger engine now persists every posted journal entry
+ * to the `LedgerEntryRecord` Postgres table. The in-memory `journals` array
+ * remains as a read cache; the DB is the source of truth. On startup the
+ * singleton calls `rehydrateFromDB()` to reload the cache (see
+ * `src/instrumentation.ts`).
+ *
+ * The Prisma client import is lazy — instantiating the client does not open
+ * a DB connection. The connection only opens on the first query, so importing
+ * this module in tests (which never call `persist()` or `rehydrateFromDB()`)
+ * does not require a reachable database.
+ */
+import { db } from '@/lib/db';
+
+/**
+ * Options for `LedgerEngine.persist()` and `postAndPersist()`.
+ *
+ * - `tx`: optional Prisma transaction client. If provided, the ledger write
+ *   participates in the caller's transaction. If omitted, the default `db`
+ *   client is used (the ledger write runs in its own implicit transaction).
+ * - `runId`: partition key for the `LedgerEntryRecord` table. The live
+ *   ledger uses `'live'`; simulation runs use their own run id.
+ */
+export interface PersistOptions {
+  tx?: any;
+  runId?: string;
+}
+
+/** Default runId for the live (production) ledger. */
+const LIVE_RUN_ID = 'live';
 
 /** Filter for `getJournal()`. */
 export interface JournalFilter {
@@ -126,6 +157,12 @@ export class LedgerEngine {
   private journals: JournalEntry[] = [];
   private entries: LedgerEntry[] = [];
   private nextSeq = 0;
+  /**
+   * Guard flag: once `rehydrateFromDB()` has loaded the cache from Postgres,
+   * subsequent calls become no-ops (until `reset()` clears it). Prevents
+   * double-loading if `register()` runs twice in dev (Next.js HMR).
+   */
+  private rehydrated = false;
 
   /** Post a balanced journal entry. Validates balance, appends, emits `ledger.posted`. */
   post(journal: JournalEntry): JournalEntry {
@@ -162,6 +199,151 @@ export class LedgerEngine {
     );
 
     return journal;
+  }
+
+  /**
+   * P2-1 (C-4 fix): persist a posted journal entry to the `LedgerEntryRecord`
+   * Postgres table. Each leg becomes one row. `balanceAfter` is computed
+   * from the in-memory cache (which `post()` just updated) per account.
+   *
+   * Best-effort: callers should wrap in try/catch — a failure here does NOT
+   * unwind the in-memory cache (the cache is the read path; the DB is the
+   * durable truth). On the money path this is called AFTER the Prisma
+   * balance-update transaction commits, so a ledger-write failure cannot
+   * un-move the money.
+   *
+   * @param journal  The journal entry to persist (must already be posted).
+   * @param opts.tx  Optional Prisma transaction client. If provided, the
+   *                 ledger rows are written within the caller's transaction.
+   *                 If omitted, the default `db` client is used.
+   * @param opts.runId  Partition key for `LedgerEntryRecord`. Defaults to
+   *                 `'live'` for the production ledger.
+   */
+  async persist(journal: JournalEntry, opts?: PersistOptions): Promise<void> {
+    const client = opts?.tx ?? db;
+    const runId = opts?.runId ?? LIVE_RUN_ID;
+
+    // Compute the post-balance for each leg's account from the in-memory
+    // cache (which `post()` already mutated). If multiple legs of the same
+    // journal touch the same account, they share the same balanceAfter
+    // (the final balance after the whole journal is applied).
+    const balanceByAccount = new Map<string, number>();
+    for (const leg of journal.entries) {
+      if (!balanceByAccount.has(leg.accountCode)) {
+        const bal = this.getAccountBalance(leg.accountCode);
+        balanceByAccount.set(leg.accountCode, bal.balance);
+      }
+    }
+
+    const rows = journal.entries.map((leg) => {
+      const def = getAccount(leg.accountCode);
+      return {
+        runId,
+        txId: journal.txId,
+        accountId: leg.accountCode,
+        accountLabel: def?.label ?? null,
+        accountType: def?.type ?? accountType(leg.accountCode),
+        currency: leg.currency,
+        debit: leg.debit,
+        credit: leg.credit,
+        balanceAfter: balanceByAccount.get(leg.accountCode) ?? 0,
+        memo: leg.memo ?? journal.description,
+        frame: leg.frame ?? journal.frame ?? 0,
+      };
+    });
+
+    await client.ledgerEntryRecord.createMany({ data: rows });
+  }
+
+  /**
+   * Convenience: build a journal entry from raw legs, post it to the
+   * in-memory cache (sync), then persist it to Postgres (async, best-effort).
+   *
+   * If `persist()` throws, the error is logged but NOT re-thrown — the
+   * in-memory cache is already updated, and the caller's money movement
+   * (which happened before this call) is unaffected. Returns the posted
+   * journal entry regardless of whether the DB write succeeded.
+   */
+  async postAndPersist(
+    params: Omit<CreateJournalEntryParams, 'startSeq'>,
+    opts?: PersistOptions,
+  ): Promise<JournalEntry> {
+    const journal = createJournalEntry({ ...params, startSeq: this.nextSeq });
+    this.post(journal);
+    try {
+      await this.persist(journal, opts);
+    } catch (err) {
+      console.error(
+        `[LedgerEngine] persist() failed for journal ${journal.id} (txId=${journal.txId}) — in-memory cache updated, DB write failed:`,
+        err,
+      );
+    }
+    return journal;
+  }
+
+  /**
+   * P2-1 (C-4 fix): rehydrate the in-memory cache from the
+   * `LedgerEntryRecord` Postgres table. Called once on server startup
+   * (see `src/instrumentation.ts`). After this runs, the in-memory
+   * `journals` + `entries` arrays mirror the DB, and `nextSeq` continues
+   * past the highest persisted leg.
+   *
+   * Idempotent: a second call is a no-op (guarded by `rehydrated` flag,
+   * cleared by `reset()`).
+   *
+   * @param opts.runId  If provided, only rows with this runId are loaded.
+   *                    Defaults to the live run (`'live'`).
+   */
+  async rehydrateFromDB(opts?: PersistOptions): Promise<{ loaded: number; legs: number }> {
+    if (this.rehydrated) return { loaded: 0, legs: 0 };
+    this.rehydrated = true;
+
+    const client = opts?.tx ?? db;
+    const runId = opts?.runId ?? LIVE_RUN_ID;
+
+    const records = await client.ledgerEntryRecord.findMany({
+      where: { runId },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+
+    // Group records by txId to reconstruct journal entries. Each txId maps
+    // to one JournalEntry; its legs are the LedgerEntryRecord rows.
+    const journalsByTxId = new Map<string, JournalEntry>();
+    for (const r of records) {
+      const txId = r.txId ?? `orphan:${r.id}`;
+      let j = journalsByTxId.get(txId);
+      if (!j) {
+        j = {
+          id: `recovered:${txId}`,
+          ts: r.createdAt.getTime(),
+          txId,
+          description: r.memo ?? '(rehydrated from DB)',
+          entries: [],
+          balanced: true,
+          frame: r.frame ?? undefined,
+        };
+        journalsByTxId.set(txId, j);
+      }
+      j.entries.push({
+        id: r.id,
+        ts: r.createdAt.getTime(),
+        ledgerSeq: this.nextSeq++,
+        txId,
+        accountCode: r.accountId ?? 'unknown',
+        debit: Number(r.debit),
+        credit: Number(r.credit),
+        currency: r.currency ?? 'USD',
+        memo: r.memo ?? '',
+        frame: r.frame ?? undefined,
+      });
+    }
+
+    for (const j of journalsByTxId.values()) {
+      this.journals.push(j);
+      this.entries.push(...j.entries);
+    }
+
+    return { loaded: journalsByTxId.size, legs: records.length };
   }
 
   /** Convenience: build and post a journal entry from raw legs in one call. */
@@ -427,11 +609,29 @@ export class LedgerEngine {
     this.journals = [];
     this.entries = [];
     this.nextSeq = 0;
+    this.rehydrated = false;
   }
 
   /** Current next-sequence counter (useful for snapshots). */
   currentSeq(): number {
     return this.nextSeq;
+  }
+
+  /**
+   * Alias for `getTrialBalance()` — the canonical accounting equation check
+   * (sum of debits must equal sum of credits, per currency). Used by the
+   * post-transaction assertion in money routes (P2-1 Part C).
+   */
+  trialBalance(asOfTs?: number): TrialBalance {
+    return this.getTrialBalance(asOfTs);
+  }
+
+  /**
+   * Alias for `getBalanceSheet()` — the canonical A = L + E check. Used by
+   * the post-transaction assertion in the transfer route (P2-1 Part C).
+   */
+  balanceSheet(asOfTs?: number): BalanceSheet {
+    return this.getBalanceSheet(asOfTs);
   }
 }
 

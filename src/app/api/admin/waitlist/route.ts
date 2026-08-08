@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { randomBytes, randomUUID } from 'crypto';
 import bcrypt from 'bcryptjs';
+import { writeAudit } from '@/lib/audit-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -143,6 +144,22 @@ export async function PATCH(req: NextRequest) {
         reviewedAt: new Date(),
       },
     });
+
+    // P3-5 (H-9 fix): audit-log the waitlist rejection.
+    await writeAudit({
+      userId: reviewerId,
+      action: 'WAITLIST_REJECT',
+      resourceType: 'WaitlistEntry',
+      resourceId: id,
+      result: 'SUCCESS',
+      details: {
+        email: entry.email,
+        accountType: entry.accountType,
+        fromStatus: entry.status,
+        toStatus: 'REJECTED',
+      },
+    });
+
     return NextResponse.json({ entry: updated });
   }
 
@@ -196,6 +213,27 @@ export async function PATCH(req: NextRequest) {
       status: 'APPROVED',
       reviewedBy: reviewerId,
       reviewedAt: new Date(),
+    },
+  });
+
+  // P3-5 (H-9 fix): audit-log the waitlist approval. This is a money-adjacent
+  // admin action — the admin is creating a real user account that can later
+  // transact. The audit entry preserves who approved which email + which
+  // role was assigned (NOT the temp password — that's a secret).
+  await writeAudit({
+    userId: reviewerId,
+    action: 'WAITLIST_APPROVE',
+    resourceType: 'WaitlistEntry',
+    resourceId: id,
+    result: 'SUCCESS',
+    details: {
+      email: entry.email,
+      accountType: entry.accountType,
+      fromStatus: entry.status,
+      toStatus: 'APPROVED',
+      createdUserId: userId,
+      alreadyExisted,
+      role: accountTypeToRole(entry.accountType),
     },
   });
 

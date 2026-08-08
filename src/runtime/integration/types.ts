@@ -9,7 +9,7 @@
  * explanation) so later milestones can build against them.
  */
 
-import type { Recommendation, RecommendationKind, RecommendationAudience } from '../engines/opportunity-discovery/types';
+import type { Recommendation, RecommendationKind, RecommendationAudience } from '../engines/legacy-engine-types';
 import type { Counterfactual } from '../engines/counterfactual/types';
 import type { LPCapability } from '../graphs/capability/types';
 import type { GraphProjection } from '../graphs/knowledge-graph/types';

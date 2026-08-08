@@ -13,7 +13,7 @@
  * Recommendation confidence is adaptive. Runtime Memory has three tiers.
  */
 
-import type { RecommendationKind, ImpactMeasurement } from '../engines/opportunity-discovery/types';
+import type { RecommendationKind, ImpactMeasurement } from '../engines/legacy-engine-types';
 import type { ExecutionPlan } from '../compiler/types';
 import type { GraphTransformationRecommendation } from '../integration/types';
 

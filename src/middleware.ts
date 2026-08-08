@@ -26,6 +26,11 @@ import { requireNextAuthSecret } from '@/lib/secrets';
  *                          route.ts: "no auth required").
  *   - `/api/waitlist`      Public waitlist signup — applicants join
  *                          BEFORE they have a User account.
+ *   - `/api/metrics/prometheus`  Prometheus scrape endpoint (P4-2).
+ *                          Returns aggregate numeric metrics only
+ *                          (counters/histograms/gauges) — no PII. Kept
+ *                          public so monitoring scrapers can hit it
+ *                          without a Bearer token.
  */
 const PUBLIC_ROUTES = [
   '/api/auth/*',
@@ -35,6 +40,12 @@ const PUBLIC_ROUTES = [
   '/api/parcel/health',
   '/api/public',
   '/api/waitlist',
+  // P4-2: Prometheus scrape endpoint. Returns aggregate numeric metrics
+  // only (counters/histograms/gauges) — no PII, no business data. Kept
+  // public so monitoring scrapers (Prometheus, VictoriaMetrics, Grafana
+  // Agent) can hit it without a Bearer token. The JSON /api/metrics
+  // endpoint remains auth-gated (it includes SLO names + node version).
+  '/api/metrics/prometheus',
 ] as const;
 
 /**

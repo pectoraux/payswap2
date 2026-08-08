@@ -5,6 +5,9 @@ import { getEnvironment } from '@/lib/environment';
 import { runtime as runtimeKernel } from '@/runtime';
 import type { Environment } from '@/runtime';
 import { getIdempotencyKey, withIdempotency } from '@/lib/idempotency';
+import { guardLiveMoney, constitutionBlockBody } from '@/lib/constitution-guard';
+import { ledgerEngine } from '@/protocol/ledger';
+import { debit, credit } from '@/protocol/ledger/entry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,6 +68,19 @@ export async function POST(req: NextRequest) {
     typeof body?.reference === 'string' && body.reference.trim().length > 0
       ? body.reference.trim().slice(0, 200)
       : null;
+
+  // P2-4 (C-7 fix): Run the CRITICAL subset of the Constitution BEFORE the
+  // deposit executes. A deposit is money-IN — sanctions + KYC still apply
+  // (a sanctioned actor can't deposit either). Runs only 8 of 45 rules.
+  const verdict = guardLiveMoney({
+    actor: { id: ctx.userId, role: 'CUSTOMER' },
+    amount,
+    currency,
+    transactionType: 'wallet_deposit',
+  });
+  if (!verdict.passed) {
+    return NextResponse.json(constitutionBlockBody(verdict), { status: 403 });
+  }
 
   // H-2 fix: Use the client-supplied Idempotency-Key for dedup.
   // If no header was sent, `key` is null — process as unique (backwards
@@ -151,6 +167,25 @@ export async function POST(req: NextRequest) {
         },
       });
     } catch { /* ignore */ }
+
+    // ── P2-1 (C-4 fix): post a balanced journal entry to the protocol ledger.
+    // DR cash:bank:<currency> (asset increases — money entered the protocol)
+    // CR user:wallet:<id>     (liability increases — we owe the user the deposit)
+    // Both legs are in the same currency, so the per-currency trial balance
+    // stays balanced. The balance sheet grows symmetrically: A↑ == L↑.
+    // Best-effort — if the ledger write fails, the deposit still succeeded.
+    try {
+      await ledgerEngine.postAndPersist({
+        txId: txn.txHash,
+        description: `Deposit ${amount} ${currency} via ${source}`,
+        legs: [
+          debit(`cash:bank:${currency}`, amount, currency, `Deposit via ${source}`),
+          credit(`user:wallet:${wallet.id}`, amount, currency, `Deposit from ${source}`),
+        ],
+      });
+    } catch (ledgerErr) {
+      console.error('[wallet/deposit] Ledger post failed (deposit succeeded):', ledgerErr);
+    }
 
     return {
       status: 200,

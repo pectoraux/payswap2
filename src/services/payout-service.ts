@@ -16,6 +16,8 @@ import { runtime } from '@/runtime';
 import { executionPlanner } from '@/runtime/planner';
 import type { Environment } from '@/runtime';
 import type { DispatchResult } from '@/runtime';
+// P2-2 (C-5): BigInt Money for fee/net arithmetic — see payment-service.ts.
+import { Money, asCurrency } from '@/money';
 
 export interface CreatePayoutParams {
   merchantId: string;
@@ -53,8 +55,17 @@ export interface PayoutResult {
 class PayoutServiceClass {
   async create(params: CreatePayoutParams): Promise<PayoutResult> {
     const ts = params.timestamp || new Date();
-    const fee = Math.round(params.amount * 0.005 * 100) / 100;
-    const net = Math.round((params.amount - fee) * 100) / 100;
+    // P2-2 (C-5): BigInt Money replaces Math.round(amount * 0.005 * 100)/100.
+    // The 0.5% flat fee is 50 bps; mulBps does the integer division on
+    // BigInt minor units (exact). Result is converted back to `number` at
+    // the return boundary for backwards compatibility with the API
+    // contract (PayoutResult.fee / netAmount are typed `number`).
+    const currency = asCurrency(params.currency);
+    const gross = Money.fromMajor(params.amount, currency);
+    const feeMoney = Money.mulBps(gross, 50); // 0.5% = 50 bps
+    const netMoney = gross.subtract(feeMoney);
+    const fee = feeMoney.toNumber();
+    const net = netMoney.toNumber();
     const destination = JSON.stringify({
       bankAccount: `GH${Math.floor(Math.random() * 1e12)}`,
       accountName: 'Merchant',

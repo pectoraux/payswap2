@@ -128,7 +128,7 @@ export const paymentReadModel = {
     if (views.length > 0) return views;
     // Cold-start fallback to Prisma before backfill has run.
     const payments = await db.payment.findMany({ where: { merchantId }, orderBy: { createdAt: 'desc' }, take: opts?.take ?? 20, skip: opts?.skip ?? 0 });
-    return payments.map(p => ({ id: p.id, reference: p.reference ?? p.id.slice(0, 12), amount: p.amount, currency: p.currency, status: p.status, method: p.method ?? '—', corridor: p.corridor ?? '—', fee: p.fee, netAmount: p.netAmount, createdAt: p.createdAt, settledAt: p.settledAt, customerName: null, customerEmail: null, description: p.description }));
+    return payments.map(p => ({ id: p.id, reference: p.reference ?? p.id.slice(0, 12), amount: p.amount, currency: p.currency, status: p.status, method: p.method ?? '—', corridor: p.corridor ?? '—', fee: Number(p.fee), netAmount: Number(p.netAmount), createdAt: p.createdAt, settledAt: p.settledAt, customerName: null, customerEmail: null, description: p.description }));
   },
   async count(merchantId: string): Promise<number> {
     const projected = await runtime.payments.count(merchantId);

@@ -482,29 +482,18 @@ export const DEFAULT_VELOCITY_THRESHOLDS: VelocityThresholdTable = {
 };
 
 /**
- * Sample sanctions entries used by `sanctions.ts` for simulated screening.
- * In production this list is replaced by a managed feed (OFAC SDN, EU
- * Consolidated List, UN Consolidated List, UK HMT OFSI). The matcher
- * contract — `(list, name, dob?) => SanctionsHit[]` — is identical.
+ * Sample sanctions entries — REMOVED in P3-4 (H-8 fix).
+ *
+ * The 10-name hardcoded sample list used to live here. It has been moved
+ * to `data/dev-sanctions-fixture.json` (a file, not source code) and is
+ * loaded by `src/trust/sanctions-list-loader.ts`. Override the path with
+ * the `PAYSWAP_SANCTIONS_LIST_FILE` env var to wire a real feed
+ * (Chainalysis KYT / TRM Labs / Refinitiv World-Check One / Dow Jones
+ * R&C) — no code change required.
+ *
+ * If you previously imported `SAMPLE_SANCTIONS_ENTRIES` from this module,
+ * switch to `loadSanctionsList()` from `@/trust/sanctions-list-loader`.
  */
-export const SAMPLE_SANCTIONS_ENTRIES: {
-  list: SanctionsList;
-  name: string;
-  entry: string;
-  dob?: string;
-  country?: string;
-}[] = [
-  { list: 'ofac', name: 'KIM JONG UN', entry: 'SDN: Democratic People\'s Republic of Korea — Supreme Leader', country: 'North Korea' },
-  { list: 'ofac', name: 'ALI KHAMENEI', entry: 'SDN: Iran — Supreme Leader', country: 'Iran' },
-  { list: 'ofac', name: 'BASAR AL-ASSAD', entry: 'SDN: Syria — President', country: 'Syria' },
-  { list: 'ofac', name: 'NICOLAS MADURO', entry: 'SDN: Venezuela — President', country: 'Venezuela' },
-  { list: 'eu', name: 'SERGEI LAVROV', entry: 'EU restrictive measures: Russia — Foreign Minister', country: 'Russia' },
-  { list: 'un', name: 'OMAR AL-BASHIR', entry: 'UN Consolidated List: Sudan', country: 'Sudan' },
-  { list: 'uk_hmt', name: 'RAMZAN KADYROV', entry: 'UK HMT OFSI: Russia — Chechen leader', country: 'Russia' },
-  { list: 'ofac', name: 'TERRORIST FINANCING NETWORK ALPHA', entry: 'SDN: Designated Terrorist Entity', country: 'Unknown' },
-  { list: 'eu', name: 'DANIELA DIAMOND', entry: 'EU Consolidated: Diamond smuggling network', country: 'Central African Republic' },
-  { list: 'custom', name: 'INTERNAL WATCHLIST ENTRY 001', entry: 'PaySwap internal: previously blocked', country: 'Unknown' },
-];
 
 /**
  * Sample PEP entries used by `pep.ts` for simulated screening. In

@@ -31,6 +31,10 @@ import { executionPlanner } from '@/runtime/planner';
 import { runtime } from '@/runtime';
 import type { Environment } from '@/runtime';
 import type { DispatchResult } from '@/runtime';
+// P2-2 (C-5): BigInt Money for fee/net arithmetic. The Math.round(x*100)
+// pattern accumulates IEEE-754 drift across thousands of payments; Money
+// uses integer minor units (BigInt) so fee + net == gross exactly.
+import { Money, asCurrency } from '@/money';
 
 export interface CreatePaymentParams {
   merchantId: string;
@@ -68,8 +72,22 @@ class PaymentServiceClass {
     const ts = params.timestamp ?? new Date();
     const success = params.success ?? Math.random() < 0.95;
     const lpFeeBps = params.lpFeeBps ?? 80;
-    const fee = Math.round(params.amount * (lpFeeBps / 10000) * 100) / 100;
-    const netAmount = success ? Math.round((params.amount - fee) * 100) / 100 : 0;
+    // P2-2 (C-5): BigInt Money arithmetic replaces the float Math.round
+    // pattern. fee = gross * bps / 10_000 (integer division on BigInt
+    // minor units); net = gross - fee (exact). The Money objects are the
+    // source of truth inside this function; we convert to `number` at the
+    // return boundary (PaymentResult.fee / netAmount) for backwards
+    // compatibility with the API contract, and to `Decimal` via
+    // `money.toDecimal()` at the Prisma write boundary (handled by the
+    // PaymentProjection). For currencies not on Money's allow-list
+    // (UGX/TZS/RWF/...) we fall back to 'USD' semantics — same 2-decimal
+    // behavior as the legacy Math.round(x*100)/100 code.
+    const currency = asCurrency(params.currency);
+    const gross = Money.fromMajor(params.amount, currency);
+    const feeMoney = Money.mulBps(gross, lpFeeBps);
+    const netMoney = success ? gross.subtract(feeMoney) : Money.zero(currency);
+    const fee = feeMoney.toNumber();
+    const netAmount = netMoney.toNumber();
     const reference = params.description?.startsWith('SIM-')
       ? `SIM-${uuidv4().slice(0, 8)}`
       : `PAY-${uuidv4().slice(0, 8)}`;

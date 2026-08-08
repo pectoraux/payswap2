@@ -5,6 +5,9 @@ import { getEnvironment } from '@/lib/environment';
 import { runtime as runtimeKernel } from '@/runtime';
 import type { Environment } from '@/runtime';
 import { getIdempotencyKey, withIdempotency } from '@/lib/idempotency';
+import { guardLiveMoney, constitutionBlockBody } from '@/lib/constitution-guard';
+import { ledgerEngine } from '@/protocol/ledger';
+import { debit, credit } from '@/protocol/ledger/entry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -101,6 +104,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // P2-4 (C-7 fix): Run the CRITICAL subset of the Constitution BEFORE
+  // the withdrawal executes. Sanctions + KYC apply on money-OUT too.
+  // Runs only 8 of 45 rules (< 1ms).
+  const verdict = guardLiveMoney({
+    actor: { id: ctx.userId, role: 'CUSTOMER' },
+    amount,
+    currency,
+    transactionType: 'wallet_withdraw',
+  });
+  if (!verdict.passed) {
+    return NextResponse.json(constitutionBlockBody(verdict), { status: 403 });
+  }
+
   // The side-effect (dispatch + wallet update + transaction + audit log)
   // is wrapped in withIdempotency so a retry with the same key returns the
   // cached response without debiting the wallet twice.
@@ -180,6 +196,25 @@ export async function POST(req: NextRequest) {
         },
       });
     } catch { /* ignore */ }
+
+    // ── P2-1 (C-4 fix): post a balanced journal entry to the protocol ledger.
+    // DR user:wallet:<id>     (liability decreases — we no longer owe the user)
+    // CR cash:bank:<currency> (asset decreases — money left the protocol)
+    // Mirror of the deposit entry. Balance sheet shrinks symmetrically:
+    // A↓ == L↓.
+    // Best-effort — if the ledger write fails, the withdrawal still succeeded.
+    try {
+      await ledgerEngine.postAndPersist({
+        txId: txn.txHash,
+        description: `Withdraw ${amount} ${currency} to ${destination}`,
+        legs: [
+          debit(`user:wallet:${wallet.id}`, amount, currency, `Withdrawal to ${destination}`),
+          credit(`cash:bank:${currency}`, amount, currency, `Withdrawal to ${destination}`),
+        ],
+      });
+    } catch (ledgerErr) {
+      console.error('[wallet/withdraw] Ledger post failed (withdrawal succeeded):', ledgerErr);
+    }
 
     return {
       status: 200,

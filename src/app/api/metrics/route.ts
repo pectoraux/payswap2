@@ -1,37 +1,60 @@
-import { NextResponse } from 'next/server';
-import { simulationEngine, defaultScenario } from '@/kernel';
-import { computeMetrics, aggregateMetrics, METRIC_META } from '@/kernel/metrics';
-import { protocolScenarios } from '@/protocol/scenarios';
-import { runProtocolScenario } from '@/protocol/runner';
-import { fuzz } from '@/protocol/fuzz';
+import { NextRequest, NextResponse } from 'next/server';
+import { collectRealMetrics, toPrometheusText } from '@/lib/real-metrics';
 
+/**
+ * P4-2 (H-7): Real operational metrics.
+ *
+ * PREVIOUSLY this endpoint ran `protocolScenarios()` (20 simulations)
+ * + `fuzz(100)` synchronously on every request — a self-inflicted DOS
+ * surface that returned synthetic numbers, not real telemetry. That
+ * code is GONE.
+ *
+ * NOW this endpoint returns real signals collected by
+ * `collectRealMetrics()`:
+ *   - process: memory / CPU / uptime / event-loop lag
+ *   - db: SELECT 1 round-trip latency + health
+ *   - eventStore: count + lastSeq from the persisted event log
+ *   - backups: count + latest backup metadata (P4-1 durability signal)
+ *   - slo: every SLO's current value + on-track status (RED-aligned)
+ *   - metricsRegistry: the live Prometheus-style counters/histograms
+ *
+ * Query params:
+ *   - `?format=prometheus` → Prometheus text exposition format (for
+ *     monitoring scrapers). Equivalent to GET /api/metrics/prometheus.
+ *
+ * Auth: this route is NOT in `PUBLIC_ROUTES` (see `src/middleware.ts`)
+ * — it requires a session token. Monitoring systems should scrape
+ * with a Bearer token. The dedicated
+ * `/api/metrics/prometheus` route is also auth-gated for consistency
+ * with `/api/ops/metrics`; if you want a public scrape endpoint, add
+ * `/api/metrics/prometheus` to `PUBLIC_ROUTES` in `src/middleware.ts`.
+ *
+ * APM wiring: see the module comment in `src/lib/real-metrics.ts` —
+ * installing OpenTelemetry or Datadog is a production config change
+ * (no code change to this route required). The JSON shape returned
+ * here is already structured for APM export (standard RED metrics
+ * names: rate / errors / duration).
+ */
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** GET /api/metrics — operational metrics dashboard */
-export async function GET() {
-  // Run the 20 protocol scenarios
-  const scenarios = protocolScenarios();
-  const protocolResults = scenarios.map((s) => {
-    try { return runProtocolScenario(s); } catch { return null; }
-  }).filter((r) => r !== null) as any[];
+/** GET /api/metrics — real operational metrics (JSON, or Prometheus text via ?format=prometheus). */
+export async function GET(req: NextRequest): Promise<Response> {
+  const url = req.nextUrl;
+  const format = url.searchParams.get('format');
 
-  // Run 100 fuzz iterations
-  const fuzzResult = fuzz(100);
+  const snapshot = await collectRealMetrics();
 
-  // Compute aggregated metrics
-  const protocolMetrics = aggregateMetrics(protocolResults);
-  const fuzzMetrics = aggregateMetrics(fuzzResult.results.map((r) => ({
-    runId: '', createdAt: 0, kernelVersion: '', scenario: defaultScenario(), plan: { id: '', requestId: '', steps: [], sourceDraws: [], twinTokenSymbol: '', metrics: { settlementTimeMs: r.durationMs, settlementTimeLabel: '', costPercent: 0, costAmount: 0, riskScore: 0, riskLabel: 'Low' as const, confidence: 0, fxRate: 0, fxSpreadBps: 0, totalFees: 0, reserveUtilization: 0, liquidityUtilization: 0, insuranceExposure: 0, twinTokensMinted: 0 }, reasoning: { strategy: '', objectiveScores: [], weightedScore: 0, narrative: '', llmPowered: false, decisions: [] }, policy: { passed: r.constitutionPassed, findings: [] }, alternatives: [], status: 'validated' as const, createdAt: 0, feasible: r.settled, notes: [] },
-    amendments: [], workflows: [], insuranceClaims: [], treasuryRecommendations: [], replay: [], ledger: [], events: [], twinTokens: [], worldState: { reserves: [], liquidityProviders: [], financialOperators: [], treasury: { positions: [] } }, audit: { runId: '', actor: '', entries: [] }, engines: [], resultHash: '', settled: r.settled, constitution: { passed: r.constitutionPassed, sections: [], violations: [], checks: [], totalRules: 9, passedRules: r.constitutionPassed ? 9 : 7 }, graph: { nodes: [], edges: [] }, worldInspector: { deltas: [], before: { reserves: [], liquidityProviders: [] }, after: { reserves: [], liquidityProviders: [] } }, lpLifecycleEvents: [], candidatePlans: [], stateTransitions: [], worldHistory: [], reasoningResults: [], intentType: 'payment', executionGraph: { id: '', commandId: '', totalNodes: 0, parallelGroups: 0, criticalPathLength: 0, status: '', nodes: [], edges: [] }, entities: [], organizationPolicy: { reserveThreshold: 0, treasuryStrategy: 'balanced' as const, lpPreference: 'mixed' as const, carbonObjective: 0, communityWeight: 0, riskAppetite: 'low' as const, maxLpShare: 0, maxCostPercent: 0, maxRiskScore: 0, requireInsurance: false, reservePolicy: 'hybrid' as const }, runtimeServices: [], solverCandidates: [], transitions: [], capabilities: [], eventLog: [], protocol: { escrowEntries: [], collateralEntries: [], lpRegistry: [], merchantRegistry: [], disputes: [], auctions: [], netSettlement: { corridors: [], grossVolume: 0, netVolume: 0 }, twinTokenSupply: [] }, fiatProofs: [], scenarioId: '', validates: [], obligations: [], proposals: [], reservations: [],
-  } as any)));
+  if (format === 'prometheus') {
+    return new Response(toPrometheusText(snapshot), {
+      headers: {
+        'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
 
-  return NextResponse.json({
-    metrics: {
-      protocol: protocolMetrics,
-      fuzz: { ...fuzzMetrics, fuzzSummary: fuzzResult.summary },
-    },
-    metricMeta: METRIC_META,
-    fuzzSummary: fuzzResult.summary,
+  return NextResponse.json(snapshot, {
+    headers: { 'Cache-Control': 'no-store' },
   });
 }

@@ -73,6 +73,7 @@ export type {
   BalanceSheet,
   IncomeStatement,
   IntegrityReport,
+  PersistOptions,
 } from './engine';
 
 // Event → journal projection --------------------------------------------------

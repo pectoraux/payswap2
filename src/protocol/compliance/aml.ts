@@ -1,5 +1,19 @@
 /**
  * PaySwap Protocol — AML (Anti-Money-Laundering) Monitoring Service.
+ * (LEGACY WRAPPER — delegates persistence to `src/trust/aml-pipeline.ts`.)
+ *
+ * ╔════════════════════════════════════════════════════════════════════════╗
+ * ║  THIN WRAPPER — delegates persistence to the canonical                 ║
+ * ║  `src/trust/aml-pipeline.ts` (Prisma-backed).                          ║
+ * ║                                                                       ║
+ * ║  This module exists ONLY for backwards-compat with existing            ║
+ * ║  importers (risk-scoring, sar, audit-export, compliance/status,        ║
+ * ║  certification/run). New code should import from                       ║
+ * ║  `@/trust/aml-pipeline` (the canonical stack).                        ║
+ * ║                                                                       ║
+ * ║  DO NOT extend this wrapper directly. New AML-related code goes        ║
+ * ║  in `src/trust/`.                                                     ║
+ * ╚════════════════════════════════════════════════════════════════════════╝
  *
  * Responsibilities:
  *  - `monitorTransaction(tx)` runs every transaction through four checks:
@@ -11,12 +25,16 @@
  *         via `HIGH_RISK_CORRIDORS`.
  *      4. Unusual-pattern detection — round amounts, late-night tx,
  *         rapid in-and-out (fan-out).
- *  - Each detected issue creates an `AMLAlert` and emits
- *    `compliance.aml_alert`.
+ *  - Each detected issue creates an `AMLAlert` in-process AND persists
+ *    it to the `AMLAlert` Prisma table via `amlPipeline.persistAlert()`
+ *    (canonical stack). The DB write is fire-and-forget — a DB failure
+ *    does NOT fail the in-memory alert.
  *  - `scoreEntity(entityId)` returns an aggregate 0–100 risk score
  *    derived from open alerts (consumed by `risk-scoring.ts`).
  *  - `getAlerts(filter?)` / `getAlert(id)` / `updateAlertStatus(id, status)`
- *    drive analyst workflows and case-management integration.
+ *    drive analyst workflows and case-management integration. These
+ *    operate on the IN-MEMORY alert cache; the canonical
+ *    `amlPipeline.listAlerts()` reads from the DB.
  *
  * This service is rule-based. A production deployment would also pipe
  * transactions to a behavioural ML model (Chainalysis KYT, TRM Labs,
@@ -38,6 +56,7 @@ import {
   type ComplianceTx,
   type EntityType,
 } from './types';
+import { amlPipeline } from '@/trust/aml-pipeline';
 
 /** Structuring detection parameters. */
 const STRUCTURING_THRESHOLD_PCT = 0.85; // tx ≥ 85% of reporting threshold
@@ -121,6 +140,13 @@ export class AMLService {
         details: a.details,
         txIds: a.txIds,
       });
+      // P3-4 / H-8: delegate persistence to the canonical Prisma-backed stack.
+      // Fire-and-forget — a DB failure must NOT fail the in-memory alert.
+      amlPipeline
+        .persistAlert(this.toCanonicalRecord(a, entityType))
+        .catch((err: unknown) => {
+          console.error('[aml-wrapper] canonical persistAlert failed:', err);
+        });
     }
 
     const highestSeverity = alerts.reduce<AMLAlertSeverity | null>((acc, a) => {
@@ -157,6 +183,12 @@ export class AMLService {
     alert.status = status;
     alert.updatedAt = nowTs();
     if (assignedTo) alert.assignedTo = assignedTo;
+    // P3-4 / H-8: delegate status update to the canonical stack (DB write).
+    amlPipeline
+      .updateStatus(id, status)
+      .catch((err: unknown) => {
+        console.error('[aml-wrapper] canonical updateStatus failed:', err);
+      });
     return alert;
   }
 
@@ -328,6 +360,63 @@ export class AMLService {
       status: 'open',
       updatedAt: ts,
     };
+  }
+
+  /**
+   * Convert a legacy `AMLAlert` (protocol/compliance shape) to a canonical
+   * `AMLAlertRecord` (src/trust shape) for Prisma persistence. The two
+   * types disagree on `entityType` enum values + a few field names — this
+   * helper bridges.
+   */
+  private toCanonicalRecord(
+    alert: AMLAlert,
+    entityType: EntityType,
+  ): import('@/trust/types').AMLAlertRecord {
+    // Map protocol EntityType → trust EntityType (different unions).
+    const trustEntityType = mapEntityTypeToTrust(entityType);
+    return {
+      id: alert.id,
+      ruleId: alert.alertType,
+      ruleName: alert.alertType,
+      entityId: alert.entityId,
+      entityType: trustEntityType,
+      severity: alert.severity,
+      action: 'review' as const,
+      status: alert.status,
+      description: alert.details,
+      evidence: [
+        {
+          alertType: alert.alertType,
+          score: alert.score,
+          txIds: alert.txIds,
+          createdAt: alert.createdAt,
+        },
+      ],
+      transactionId: alert.txIds[0],
+      riskScore: alert.score,
+      assignedTo: alert.assignedTo,
+      createdAt: alert.createdAt,
+    };
+  }
+}
+
+/**
+ * Map a protocol/compliance `EntityType` to the trust `EntityType`.
+ * The two unions are different (protocol has `individual`+`business`,
+ * trust has `user`+`merchant`). Used by `AMLService.toCanonicalRecord()`.
+ */
+function mapEntityTypeToTrust(et: EntityType): import('@/trust/types').EntityType {
+  switch (et) {
+    case 'individual':
+      return 'user';
+    case 'business':
+      return 'merchant';
+    case 'merchant':
+      return 'merchant';
+    case 'lp':
+      return 'lp';
+    case 'treasury':
+      return 'merchant'; // closest match — treasury is a system actor
   }
 }
 

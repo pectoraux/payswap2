@@ -1,5 +1,16 @@
 /**
- * Sanctions Screener — fuzzy name matching against watchlists. (M-TRUST-40.)
+ * Sanctions Screener — CANONICAL sanctions screening service. (M-TRUST-40, P3-4 / H-8 fix.)
+ *
+ * ╔════════════════════════════════════════════════════════════════════════╗
+ * ║  CANONICAL COMPLIANCE STACK — this module is the single source of     ║
+ * ║  truth for sanctions screening in PaySwap. The legacy in-memory      ║
+ * ║  stack at `src/protocol/compliance/sanctions.ts` is now a thin       ║
+ * ║  wrapper that delegates matching to THIS module.                     ║
+ * ║                                                                       ║
+ * ║  DO NOT extend the legacy stack directly. New sanctions-related      ║
+ * ║  code should import from `@/trust/sanctions-screener` (here) or      ║
+ * ║  `@/trust` (the index).                                              ║
+ * ╚════════════════════════════════════════════════════════════════════════╝
  *
  * Screens entity names against multiple sanctions lists:
  *   - OFAC (US Treasury Office of Foreign Assets Control)
@@ -10,61 +21,33 @@
  *
  * Uses Levenshtein distance for fuzzy matching. Match score is the
  * similarity percentage (0-100, higher = more similar).
+ *
+ * ── Sanctions feed ───────────────────────────────────────────────────────
+ * The list is loaded from `data/dev-sanctions-fixture.json` by default
+ * (a 14-name DEV sample). In production, set `PAYSWAP_SANCTIONS_LIST_FILE`
+ * to a JSON file refreshed daily from a real feed (Chainalysis KYT, TRM
+ * Labs, Refinitiv World-Check One, Dow Jones R&C). See
+ * `src/trust/sanctions-list-loader.ts` for the loader contract.
+ *
+ * ── Persistence ──────────────────────────────────────────────────────────
+ * Screenings are persisted to the `ComplianceReview` Prisma table
+ * (type='SANCTIONS') so they survive a process restart. Use `listScreenings()`
+ * to read from the in-memory cache (fast) or query the DB directly for the
+ * full history.
  */
 
 import type { SanctionsScreening, SanctionsList } from './types';
 import { uid } from '@/runtime/types';
+import {
+  loadSanctionsList,
+  type SanctionsListId,
+} from './sanctions-list-loader';
+import { db } from '@/lib/db';
 
-// ─── Mock sanctions lists (in production, fetched from regulators) ──────────
+// ─── Internal watchlist (PaySwap's own additions, runtime-mutable) ──────────
 
-const OFAC_ENTRIES = [
-  'AL-ZAWAHIRI, Ayman',
-  'BIN LADEN, Osama',
-  'GADDAFI, Muammar',
-  'ASSAD, Bashar',
-  'KIM JONG UN',
-  'NASRALLAH, Hassan',
-  'SOLEIMANI, Qasem',
-  'MUGABE, Robert',
-  'BASHIR, Omar',
-  'PUTIN, Vladimir',
-  'LAVROV, Sergey',
-  'SECHIN, Igor',
-];
-
-const UN_ENTRIES = [
-  'AL-BASHIR, Omar',
-  'GADDAFI, Saif',
-  'ASSAD, Maher',
-  'KIM JONG NAM',
-  'NASRALLAH, Hassan',
-  'SADR, Muqtada',
-];
-
-const EU_ENTRIES = [
-  'PUTIN, Vladimir',
-  'LAVROV, Sergey',
-  'MISHUSTIN, Mikhail',
-  'SOLOVYOV, Vladimir',
-  'MARGOLOV, Vladimir',
-];
-
-const HMT_ENTRIES = [
-  'ASSAD, Bashar',
-  'MAHER, Assad',
-  'GADDAFI, Khamis',
-  'MUBARAK, Hosni',
-];
-
+/** PaySwap's internal watchlist — runtime-mutable via `addToWatchlist()`. */
 const INTERNAL_WATCHLIST: string[] = [];
-
-const LISTS: Record<SanctionsList, string[]> = {
-  OFAC: OFAC_ENTRIES,
-  UN: UN_ENTRIES,
-  EU: EU_ENTRIES,
-  HMT: HMT_ENTRIES,
-  internal_watchlist: INTERNAL_WATCHLIST,
-};
 
 // ─── Levenshtein distance ────────────────────────────────────────────────────
 
@@ -102,23 +85,109 @@ function similarity(a: string, b: string): number {
   return Math.round((1 - dist / maxLen) * 100);
 }
 
+// ─── Sync matcher (shared with the protocol/compliance wrapper) ────────────
+
+/**
+ * Result of a single name-match attempt against one list entry.
+ * Exported so the legacy `src/protocol/compliance/sanctions.ts` wrapper
+ * can call into the SAME matcher (no duplicated Levenshtein/Jaccard logic).
+ */
+export interface SanctionsNameMatch {
+  list: SanctionsList;
+  name: string;
+  entry: string;
+  /** 0-100 similarity score (higher = more similar). */
+  score: number;
+  country?: string;
+}
+
+/**
+ * Sync fuzzy-match a name against every entry in every loaded sanctions
+ * list. Returns ALL entries (above or below threshold), sorted by score
+ * descending. The caller is responsible for applying its own threshold.
+ *
+ * This is the single matcher used by:
+ *   - `SanctionsScreener.screen()` (canonical, async, persists to DB)
+ *   - `src/protocol/compliance/sanctions.ts` `screenEntity()` (legacy wrapper, sync)
+ *
+ * Keeping one matcher means a payout blocked at the constitution guard
+ * and a payout blocked at the policy stage see the SAME answer.
+ *
+ * @param name     The entity name to screen.
+ * @param minScore Optional lower-bound score (0-100) to filter the result.
+ *                 Default 0 (return all entries, sorted by score desc).
+ */
+export function matchSanctionsName(name: string, minScore = 0): SanctionsNameMatch[] {
+  const query = (name ?? '').toUpperCase().trim();
+  const out: SanctionsNameMatch[] = [];
+
+  // 1. Loader entries (file-backed — the canonical source).
+  for (const e of loadSanctionsList()) {
+    const score = similarity(query, e.name.toUpperCase().trim());
+    if (score >= minScore) {
+      out.push({
+        list: mapListIdToTrust(e.list),
+        name: e.name,
+        entry: e.entry,
+        score,
+        country: e.country,
+      });
+    }
+  }
+
+  // 2. Runtime-mutable internal watchlist (`addToWatchlist()`).
+  for (const candidate of INTERNAL_WATCHLIST) {
+    const score = similarity(query, candidate.toUpperCase().trim());
+    if (score >= minScore) {
+      out.push({
+        list: 'internal_watchlist' as SanctionsList,
+        name: candidate,
+        entry: candidate,
+        score,
+      });
+    }
+  }
+
+  // Deduplicate by `${list}:${name}` (keep the highest score).
+  const seen = new Map<string, SanctionsNameMatch>();
+  for (const m of out) {
+    const key = `${m.list}:${m.name}`;
+    const prev = seen.get(key);
+    if (!prev || m.score > prev.score) seen.set(key, m);
+  }
+  return [...seen.values()].sort((a, b) => b.score - a.score);
+}
+
+/** Map a loader `SanctionsListId` (lowercase) to the trust `SanctionsList` (uppercase). */
+function mapListIdToTrust(id: SanctionsListId): SanctionsList {
+  switch (id) {
+    case 'ofac':
+      return 'OFAC';
+    case 'eu':
+      return 'EU';
+    case 'un':
+      return 'UN';
+    case 'uk_hmt':
+      return 'HMT';
+    case 'custom':
+      return 'internal_watchlist';
+  }
+}
+
 export class SanctionsScreener {
   private screenings: Map<string, SanctionsScreening> = new Map();
 
   /**
    * Screen a name against all sanctions lists.
+   *
+   * Async because it persists the screening record to the `ComplianceReview`
+   * Prisma table (type='SANCTIONS') so it survives a process restart.
+   * Best-effort persistence: a DB write failure does NOT fail the screen —
+   * the in-memory record is still returned.
    */
   async screen(name: string, entityId: string): Promise<SanctionsScreening> {
-    let bestMatch: { name: string; list: SanctionsList; score: number } | null = null;
-
-    for (const [listName, entries] of Object.entries(LISTS)) {
-      for (const entry of entries) {
-        const score = similarity(name, entry);
-        if (!bestMatch || score > bestMatch.score) {
-          bestMatch = { name: entry, list: listName as SanctionsList, score };
-        }
-      }
-    }
+    const matches = matchSanctionsName(name);
+    const bestMatch = matches[0] ?? null;
 
     const screening: SanctionsScreening = {
       id: uid('san'),
@@ -132,6 +201,30 @@ export class SanctionsScreener {
     };
 
     this.screenings.set(screening.id, screening);
+
+    // Best-effort persist to DB (P3-4 / H-8: survive restart).
+    try {
+      await db.complianceReview.create({
+        data: {
+          id: screening.id,
+          entityType: 'CUSTOMER',
+          entityId,
+          type: 'SANCTIONS',
+          status: screening.status.toUpperCase(),
+          data: JSON.stringify({
+            entityName: name,
+            matchedName: screening.matchedName,
+            matchedList: screening.matchedList,
+            matchScore: screening.matchScore,
+            screenedAt: screening.screenedAt,
+          }),
+        },
+      });
+    } catch (err) {
+      // Don't fail the screen — log + continue.
+      console.error('[SanctionsScreener] DB persist failed (returning in-memory result):', err);
+    }
+
     return screening;
   }
 
@@ -190,6 +283,22 @@ export class SanctionsScreener {
     screening.resolvedAt = Date.now();
     screening.resolvedBy = resolvedBy;
     screening.notes = notes;
+
+    // Best-effort persist the resolution to DB.
+    db.complianceReview
+      .update({
+        where: { id: screeningId },
+        data: {
+          status: status.toUpperCase(),
+          reviewerId: resolvedBy,
+          reviewedAt: new Date(),
+          notes,
+        },
+      })
+      .catch((err: unknown) => {
+        console.error('[SanctionsScreener] DB resolve-update failed:', err);
+      });
+
     return screening;
   }
 

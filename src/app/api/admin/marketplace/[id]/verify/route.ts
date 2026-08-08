@@ -12,6 +12,7 @@ import {
   pluginVerifier,
 } from '@/marketplace';
 import type { PluginManifest } from '@/sdk/types';
+import { writeAudit } from '@/lib/audit-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -84,6 +85,26 @@ export async function POST(
     await db.extension.update({
       where: { id },
       data: { config: serializeMarketplaceMeta(meta) },
+    });
+
+    // P3-5 (H-9 fix): audit-log the admin verification run. The verifier
+    // returns a structured result; persisting the summary in the audit log
+    // gives ops a paper trail of who ran which version past the verifier.
+    await writeAudit({
+      userId: (session.user as any)?.id ?? null,
+      action: 'MARKETPLACE_PLUGIN_VERIFY',
+      resourceType: 'Extension',
+      resourceId: id,
+      result: 'SUCCESS',
+      details: {
+        pluginName: extension.name,
+        pluginVersion: extension.version,
+        status: result.status,
+        score: result.score,
+        findingsCount: result.findings?.length ?? 0,
+        errorCount: result.findings?.filter((f) => f.severity === 'error').length ?? 0,
+        warningCount: result.findings?.filter((f) => f.severity === 'warning').length ?? 0,
+      },
     });
 
     return NextResponse.json({ ok: true, verification: result });

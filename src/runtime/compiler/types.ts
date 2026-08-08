@@ -20,7 +20,7 @@ import type { TypedIntent } from '../intent/types';
 import type { Environment } from '../types';
 import type { EvidenceCitation } from '../types';
 import type { RuntimeClock } from '../clock';
-import type { ReserveMarket, ReserveMarketState } from '../engines/reserve-market';
+import type { ReserveMarket, ReserveMarketState } from '../engines/legacy-engine-types';
 import type { LiquidityStrategyMarketplace } from '../engines/liquidity-market';
 import type { EconomicScoreEngine } from '../engines/economic-score';
 import type { LPCapability } from '../graphs/capability/types';

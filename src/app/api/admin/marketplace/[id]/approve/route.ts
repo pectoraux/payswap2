@@ -6,6 +6,7 @@ import {
   forbidden,
 } from '@/lib/api-auth';
 import { db } from '@/lib/db';
+import { writeAudit } from '@/lib/audit-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,6 +67,22 @@ export async function POST(
       data.publishedAt = new Date();
     }
     const updated = await db.extension.update({ where: { id }, data });
+
+    // P3-5 (H-9 fix): audit-log the admin state change.
+    await writeAudit({
+      userId: adminId,
+      action: 'MARKETPLACE_PLUGIN_APPROVE',
+      resourceType: 'Extension',
+      resourceId: id,
+      result: 'SUCCESS',
+      details: {
+        fromStatus: row.status,
+        toStatus: updated.status,
+        publish,
+        notes: typeof body.notes === 'string' ? body.notes : null,
+      },
+    });
+
     return NextResponse.json({ ok: true, plugin: updated });
   } catch (err) {
     console.error('[api/admin/marketplace/[id]/approve POST] error:', err);

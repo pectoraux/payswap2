@@ -1,1 +1,1 @@
-export { Money, money, type Currency, type RoundingMode } from './money';
+export { Money, money, asCurrency, type Currency, type RoundingMode } from './money';

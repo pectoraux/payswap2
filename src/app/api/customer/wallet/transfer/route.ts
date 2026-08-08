@@ -5,6 +5,9 @@ import { getEnvironment } from '@/lib/environment';
 import { runtime as runtimeKernel } from '@/runtime';
 import type { Environment } from '@/runtime';
 import { getIdempotencyKey, withIdempotency } from '@/lib/idempotency';
+import { guardLiveMoney, constitutionBlockBody } from '@/lib/constitution-guard';
+import { ledgerEngine } from '@/protocol/ledger';
+import { debit, credit } from '@/protocol/ledger/entry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -111,6 +114,22 @@ export async function POST(req: NextRequest) {
   }
   if (Number(senderWalletCheck.balance) < amount) {
     return NextResponse.json({ ok: false, error: 'INSUFFICIENT_FUNDS' }, { status: 400 });
+  }
+
+  // P2-4 (C-7 fix): Run the CRITICAL subset of the Constitution BEFORE the
+  // transaction executes. If a block-severity rule fails (e.g., actor on a
+  // sanctions list, KYC not verified, corridor not authorized), return 403.
+  // This is the live-path equivalent of the simulator's
+  // evaluateConstitution() call — runs only 8 of 45 rules (< 1ms).
+  const verdict = guardLiveMoney({
+    actor: { id: ctx.userId, role: 'CUSTOMER' },
+    amount,
+    currency,
+    counterparty: { id: recipientId, name: recipientLabel ?? undefined },
+    transactionType: 'wallet_transfer',
+  });
+  if (!verdict.passed) {
+    return NextResponse.json(constitutionBlockBody(verdict), { status: 403 });
   }
 
   // H-2 fix: Use the client-supplied Idempotency-Key for dedup.
@@ -275,6 +294,47 @@ export async function POST(req: NextRequest) {
       });
     } catch {
       // ignore — audit log is best-effort
+    }
+
+    // ── P2-1 (C-4 fix): post a balanced journal entry to the protocol ledger.
+    // The Prisma $transaction above is the source of truth for wallet
+    // balances; the ledger is the source of truth for accounting. The two
+    // are now kept in sync: every money movement produces a corresponding
+    // double-entry posting. Best-effort — if the ledger write fails, the
+    // transfer still succeeded (logged but not blocking).
+    try {
+      await ledgerEngine.postAndPersist({
+        txId: result.senderTxn.txHash,
+        description: `Transfer ${amount} ${currency} to ${recipientLabel}`,
+        legs: [
+          debit(`user:wallet:${result.senderWallet.id}`, amount, currency, `Transfer to ${recipientLabel}`),
+          credit(`user:wallet:${result.recipientWallet.id}`, amount, currency, `Transfer from ${senderLabel}`),
+        ],
+      });
+
+      // ── Part C: A = L + E assertion (monitoring signal, not a gate).
+      // After posting, the trial balance MUST balance (sum debits == sum
+      // credits, per currency). Both legs are liabilities so the balance
+      // sheet is unaffected (A unchanged, L net-zero change). If this
+      // assertion ever fires, it means a code path posted an unbalanced
+      // entry — a critical bug that needs investigation, but not a reason
+      // to unwind a successful transfer.
+      const tb = ledgerEngine.trialBalance();
+      if (!tb.balanced) {
+        console.error(
+          `[CRITICAL] ledger trial balance NOT balanced after transfer ${result.senderTxn.txHash}: ` +
+          `debits=${tb.totalDebits} credits=${tb.totalCredits} delta=${tb.totalDebits - tb.totalCredits}`,
+        );
+      }
+      const bs = ledgerEngine.balanceSheet();
+      if (!bs.balanced) {
+        console.error(
+          `[CRITICAL] ledger balance sheet A≠L+E after transfer ${result.senderTxn.txHash}: ` +
+          `A=${bs.totalAssets} L=${bs.totalLiabilities} E=${bs.totalEquity} delta=${bs.delta}`,
+        );
+      }
+    } catch (ledgerErr) {
+      console.error('[wallet/transfer] Ledger post failed (transfer succeeded):', ledgerErr);
     }
 
     return {

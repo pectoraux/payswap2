@@ -6,6 +6,7 @@ import {
   forbidden,
 } from '@/lib/api-auth';
 import { pluginCatalog } from '@/marketplace';
+import { writeAudit } from '@/lib/audit-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,6 +38,17 @@ export async function POST(
 
   try {
     const result = await pluginCatalog.setFeatured(id, featured);
+
+    // P3-5 (H-9 fix): audit-log the admin state change.
+    await writeAudit({
+      userId: (session.user as any)?.id ?? null,
+      action: 'MARKETPLACE_PLUGIN_FEATURE',
+      resourceType: 'Extension',
+      resourceId: id,
+      result: 'SUCCESS',
+      details: { featured: result, requested: featured },
+    });
+
     return NextResponse.json({ ok: true, featured: result });
   } catch (err) {
     console.error('[api/admin/marketplace/[id]/feature POST] error:', err);
